@@ -1,0 +1,390 @@
+import React, { useEffect, useRef } from 'react';
+import {
+  Chart,
+  BarController,
+  BarElement,
+  LineController,
+  LineElement,
+  PointElement,
+  CategoryScale,
+  LinearScale,
+  Tooltip,
+  Legend,
+  Filler,
+} from 'chart.js';
+import { Play } from 'lucide-react';
+import { useAppStore } from '../../store/useAppStore';
+import { formatDuration } from '../../utils/units';
+import { getT } from '../../i18n/translations';
+
+Chart.register(
+  BarController,
+  BarElement,
+  LineController,
+  LineElement,
+  PointElement,
+  CategoryScale,
+  LinearScale,
+  Tooltip,
+  Legend,
+  Filler
+);
+
+export const AnalyticsModule: React.FC = () => {
+  const project = useAppStore((s) => s.project);
+  const simSnapshot = useAppStore((s) => s.simSnapshot);
+  const runFullShiftSimulation = useAppStore((s) => s.runFullShiftSimulation);
+  const simWorkerBusy = useAppStore((s) => s.simWorkerBusy);
+  const theme = useAppStore((s) => s.theme);
+  const language = useAppStore((s) => s.language);
+
+  const t = getT(language);
+  const isAr = language === 'ar';
+  const result = simSnapshot.result || project.lastSimulationResult;
+
+  const hourlyCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stageCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const utilCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const wipCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    if (!result) return;
+    const textColor = theme === 'dark' ? '#CBD5E1' : '#334155';
+    const gridColor = theme === 'dark' ? 'rgba(148,163,184,0.12)' : 'rgba(15,23,42,0.08)';
+
+    const charts: Chart[] = [];
+
+    if (hourlyCanvasRef.current) {
+      charts.push(
+        new Chart(hourlyCanvasRef.current, {
+          type: 'bar',
+          data: {
+            labels: result.hourlySeries.map((h) => h.label),
+            datasets: [
+              {
+                label: isAr ? 'الإنتاج التراكمي الفعلي (سليم)' : 'Actual Cumulative (Good)',
+                data: result.hourlySeries.map((h) => h.actualCumulative),
+                backgroundColor: '#DC2626',
+              },
+              {
+                label: isAr ? 'الإنتاج التراكمي المخطط' : 'Planned Cumulative',
+                data: result.hourlySeries.map((h) => h.plannedCumulative),
+                backgroundColor: theme === 'dark' ? '#475569' : '#94A3B8',
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: textColor, boxWidth: 12 } } },
+            scales: {
+              x: { ticks: { color: textColor }, grid: { color: gridColor } },
+              y: { ticks: { color: textColor }, grid: { color: gridColor } },
+            },
+          },
+        })
+      );
+    }
+
+    if (stageCanvasRef.current) {
+      charts.push(
+        new Chart(stageCanvasRef.current, {
+          type: 'bar',
+          data: {
+            labels: result.stageAnalytics.map((s) => s.stageName),
+            datasets: [
+              {
+                label: isAr ? 'متوسط زمن الدورة (ث)' : 'Measured Avg Cycle Time (s)',
+                data: result.stageAnalytics.map((s) => Number(s.avgCycleTimeSec.toFixed(1))),
+                backgroundColor: result.stageAnalytics.map((s) =>
+                  s.isBottleneck ? '#DC2626' : '#1E293B'
+                ),
+              },
+              {
+                label: isAr ? 'متوسط زمن الانتظار (ث)' : 'Measured Avg Wait (s)',
+                data: result.stageAnalytics.map((s) => Number(s.avgWaitTimeSec.toFixed(1))),
+                backgroundColor: '#D97706',
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: textColor, boxWidth: 12 } } },
+            scales: {
+              x: { ticks: { color: textColor }, grid: { color: gridColor } },
+              y: { ticks: { color: textColor }, grid: { color: gridColor } },
+            },
+          },
+        })
+      );
+    }
+
+    if (utilCanvasRef.current) {
+      charts.push(
+        new Chart(utilCanvasRef.current, {
+          type: 'bar',
+          data: {
+            labels: result.stageAnalytics.map((s) => s.stageName),
+            datasets: [
+              {
+                label: isAr ? 'تشغيل %' : 'Running %',
+                data: result.stageAnalytics.map((s) => Number(s.utilizationPct.toFixed(1))),
+                backgroundColor: '#16A34A',
+              },
+              {
+                label: isAr ? 'حجب / انتظار %' : 'Blocked %',
+                data: result.stageAnalytics.map((s) => Number(s.blockedPct.toFixed(1))),
+                backgroundColor: '#D97706',
+              },
+              {
+                label: isAr ? 'خمول / بدون تغذية %' : 'Starved / Idle %',
+                data: result.stageAnalytics.map((s) => Number(s.starvedPct.toFixed(1))),
+                backgroundColor: '#64748B',
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: textColor, boxWidth: 12 } } },
+            scales: {
+              x: { stacked: true, ticks: { color: textColor }, grid: { color: gridColor } },
+              y: { stacked: true, max: 100, ticks: { color: textColor }, grid: { color: gridColor } },
+            },
+          },
+        })
+      );
+    }
+
+    if (wipCanvasRef.current) {
+      charts.push(
+        new Chart(wipCanvasRef.current, {
+          type: 'line',
+          data: {
+            labels: result.wipSeries.map((w) => formatDuration(w.timeSec)),
+            datasets: [
+              {
+                label: isAr ? 'المنتجات تحت التشغيل (WIP)' : 'WIP (Active Units)',
+                data: result.wipSeries.map((w) => w.wip),
+                borderColor: '#DC2626',
+                backgroundColor: 'rgba(220, 38, 38, 0.12)',
+                fill: true,
+                tension: 0.2,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: textColor, boxWidth: 12 } } },
+            scales: {
+              x: { ticks: { color: textColor, maxTicksLimit: 8 }, grid: { color: gridColor } },
+              y: { ticks: { color: textColor }, grid: { color: gridColor } },
+            },
+          },
+        })
+      );
+    }
+
+    return () => {
+      charts.forEach((c) => c.destroy());
+    };
+  }, [result, theme, isAr]);
+
+  if (!result) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
+        <h3 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
+          {t.analytics.noResultsTitle}
+        </h3>
+        <p className="max-w-md text-xs text-neutral-600 dark:text-neutral-400">
+          {t.analytics.noResultsDesc}
+        </p>
+        <button
+          onClick={() => runFullShiftSimulation()}
+          disabled={simWorkerBusy}
+          className="flex items-center gap-2 rounded bg-red-600 px-4 py-2 text-xs font-medium text-white hover:bg-red-700"
+        >
+          <Play className="w-4 h-4" />
+          <span>{simWorkerBusy ? t.actions.computing : t.analytics.runShiftBtn}</span>
+        </button>
+      </div>
+    );
+  }
+
+  const k = result.kpis;
+
+  return (
+    <div className="h-full overflow-y-auto bg-neutral-50 dark:bg-neutral-950 p-6">
+      <div className="mx-auto max-w-6xl flex flex-col gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 pb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+              {t.analytics.title}
+            </h2>
+            <p className="text-xs text-neutral-500 font-mono-tabular">
+              {t.analytics.subtitlePrefix} {result.totalEventsExecuted.toLocaleString()}{' '}
+              {t.analytics.subtitleMid} {formatDuration(result.simTimeSec)} {t.analytics.subtitleSuffix}
+            </p>
+          </div>
+          <button
+            onClick={() => runFullShiftSimulation()}
+            disabled={simWorkerBusy}
+            className="flex items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+          >
+            <Play className="w-3.5 h-3.5" />
+            <span>{simWorkerBusy ? t.actions.computing : t.analytics.rerunBtn}</span>
+          </button>
+        </div>
+
+        {/* Structured KPI Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            {
+              label: t.analytics.cards.goodUnits,
+              val: `${k.goodUnits}`,
+              sub: isAr
+                ? `الهالك: ${k.defectiveUnits} · الإجمالي: ${k.actualProduction}`
+                : `Scrap: ${k.defectiveUnits} · Total: ${k.actualProduction}`,
+            },
+            {
+              label: t.analytics.cards.planned,
+              val: `${k.totalPlannedProduction}`,
+              sub: `${t.labels.attainment}: ${k.productionAttainmentPct.toFixed(1)}%`,
+            },
+            {
+              label: t.analytics.cards.throughput,
+              val: `${k.hourlyOutput.toFixed(1)} ${isAr ? 'وحدة/س' : 'u/hr'}`,
+              sub: isAr
+                ? `الدورة: ${k.avgCycleTimeSec.toFixed(1)}ث · التاكت: ${k.theoreticalTaktTimeSec.toFixed(1)}ث`
+                : `Avg Cycle: ${k.avgCycleTimeSec.toFixed(1)}s · Takt (Est): ${k.theoreticalTaktTimeSec.toFixed(1)}s`,
+            },
+            {
+              label: t.analytics.cards.bottleneck,
+              val: k.bottleneckStageName || 'N/A',
+              sub: isAr
+                ? `كفاءة الخط: ${k.lineEfficiencyPct.toFixed(1)}% · متوسط WIP: ${k.avgWip.toFixed(1)}`
+                : `Line Eff: ${k.lineEfficiencyPct.toFixed(1)}% · Avg WIP: ${k.avgWip.toFixed(1)}`,
+            },
+            {
+              label: t.analytics.cards.leadTime,
+              val: formatDuration(k.avgLeadTimeSec),
+              sub: isAr
+                ? `تشغيل: ${k.avgProcessingTimeSec.toFixed(0)}ث · انتظار: ${k.avgWaitingTimeSec.toFixed(0)}ث`
+                : `Proc: ${k.avgProcessingTimeSec.toFixed(0)}s · Wait: ${k.avgWaitingTimeSec.toFixed(0)}s`,
+            },
+            {
+              label: t.analytics.cards.transportTime,
+              val: `${k.avgTransportTimeSec.toFixed(1)}s`,
+              sub: isAr ? 'زمن النقل المحسوب من طول/سرعة السير' : 'Conveyor transit derived from L/v',
+            },
+            {
+              label: t.analytics.cards.workerUtil,
+              val: `${k.workerUtilizationPct.toFixed(1)}%`,
+              sub: isAr ? `${project.workers.length} عامل نشط` : `${project.workers.length} operators active`,
+            },
+            {
+              label: t.analytics.cards.machineUtil,
+              val: `${k.machineUtilizationPct.toFixed(1)}%`,
+              sub: isAr
+                ? `حجب: ${formatDuration(k.totalBlockedTimeSec)} · أعطال: ${formatDuration(k.totalDowntimeSec)}`
+                : `Blocked: ${formatDuration(k.totalBlockedTimeSec)} · Down: ${formatDuration(k.totalDowntimeSec)}`,
+            },
+          ].map((item, idx) => (
+            <div
+              key={idx}
+              className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3.5"
+            >
+              <div className="text-[11px] font-medium text-neutral-500">{item.label}</div>
+              <div className="mt-1 text-lg font-semibold font-mono-tabular text-neutral-900 dark:text-neutral-100 truncate">
+                {item.val}
+              </div>
+              <div className="mt-1 text-[11px] font-mono-tabular text-neutral-500 truncate">{item.sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Charts 2x2 Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
+            <h3 className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 mb-3">
+              {t.analytics.charts.plannedVsActual}
+            </h3>
+            <div className="h-56">
+              <canvas ref={hourlyCanvasRef} />
+            </div>
+          </div>
+          <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
+            <h3 className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 mb-3">
+              {t.analytics.charts.stageCycleWait}
+            </h3>
+            <div className="h-56">
+              <canvas ref={stageCanvasRef} />
+            </div>
+          </div>
+          <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
+            <h3 className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 mb-3">
+              {t.analytics.charts.resourceUtil}
+            </h3>
+            <div className="h-56">
+              <canvas ref={utilCanvasRef} />
+            </div>
+          </div>
+          <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
+            <h3 className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 mb-3">
+              {t.analytics.charts.wipShift}
+            </h3>
+            <div className="h-56">
+              <canvas ref={wipCanvasRef} />
+            </div>
+          </div>
+        </div>
+
+        {/* Stage Breakdown Table */}
+        <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-x-auto">
+          <table className="w-full text-start text-xs font-mono-tabular">
+            <thead className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-[11px] text-neutral-500">
+              <tr>
+                <th className="px-4 py-2.5 font-medium text-start">{t.analytics.table.stage}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.entered}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.completed}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.scrap}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgCycle}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgWait}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.maxQueue}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.util}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.blocked}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.stageAnalytics.map((sa) => (
+                <tr
+                  key={sa.stageId}
+                  className="border-b border-neutral-100 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+                >
+                  <td className="px-4 py-2 font-sans font-medium text-neutral-900 dark:text-neutral-100">
+                    {sa.stageName}
+                    {sa.isBottleneck && (
+                      <span className="ms-2 text-[10px] font-semibold text-red-600">
+                        {t.labels.bottleneck}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-end">{sa.enteredCount}</td>
+                  <td className="px-3 py-2 text-end">{sa.completedCount}</td>
+                  <td className="px-3 py-2 text-end">{sa.scrapCount}</td>
+                  <td className="px-3 py-2 text-end">{sa.avgCycleTimeSec.toFixed(1)}</td>
+                  <td className="px-3 py-2 text-end">{sa.avgWaitTimeSec.toFixed(1)}</td>
+                  <td className="px-3 py-2 text-end">{sa.maxQueueLength}</td>
+                  <td className="px-3 py-2 text-end">{sa.utilizationPct.toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end">{sa.blockedPct.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};

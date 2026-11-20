@@ -1,11 +1,34 @@
-<div align="center">
+# MK LineSim — MK Tech
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Industrial Layout Design, Digital Factory Modeling & Real-Time Discrete-Event Production Simulation Platform.
 
-  <h1>Built with AI Studio</h2>
+## Features
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+- **Synchronized 2D SVG & 3D Three.js Workspaces**: Shared physical coordinate system in meters (`m`, `cm`, `mm`).
+- **Discrete Event Simulation (DES) Engine**: Deterministic min-heap priority queue running in a Web Worker, enforcing finite buffers, conveyor spacing/speed, worker travel times, shift breaks, and optional machine breakdowns.
+- **Factory & Automatic Line Layout Generator**: Supports Straight, U-Shaped, L-Shaped, Parallel, and Loop production lines with constraint checking.
+- **Offline-First Persistence**: IndexedDB project and custom equipment storage + versioned JSON import/export.
+- **Analytics, What-If Scenarios & Reports**: Chart.js dashboards, side-by-side scenario testing, PDF engineering reports, 3D PNG snapshots, and CSV event traces.
+- **Bilingual UI**: Full English (LTR) and Arabic (RTL) interface with Light & Dark themes.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Local Development
 
-</div>
+```bash
+npm install
+npm run dev
+```
+
+## Production Build
+
+```bash
+npm run build
+```
+
+## Deploying to GitHub Pages
+
+1. Push this repository to GitHub with `main` as the default branch.
+2. In your GitHub repository go to **Settings → Pages → Build and deployment** and set **Source** to **GitHub Actions**.
+3. The included `.github/workflows/deploy.yml` workflow builds `dist/` and publishes the app automatically on every push to `main`.
+
+---
+© 2026 **MK Tech**. All rights reserved.

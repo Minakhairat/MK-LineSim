@@ -1,0 +1,547 @@
+export type MeasurementUnit = 'm' | 'cm' | 'mm';
+export type AppLanguage = 'en' | 'ar';
+export type AppTheme = 'light' | 'dark';
+
+export type WorkspaceModuleId =
+  | 'projects'
+  | 'factory'
+  | 'layout'
+  | 'equipment'
+  | 'products'
+  | 'processes'
+  | 'workforce'
+  | 'simulation'
+  | 'analytics'
+  | 'scenarios'
+  | 'reports';
+
+export type ViewportMode = '2d' | '3d' | 'split' | 'flowchart' | 'simulation';
+export type CameraPreset = 'perspective' | 'top' | 'front' | 'side';
+export type VisualVariant = 'realistic' | 'engineering';
+
+export interface Vec3 {
+  x: number; // meters along factory length (0..length)
+  y: number; // meters elevation (0 = floor)
+  z: number; // meters along factory width (0..width)
+}
+
+export interface Dimensions3D {
+  length: number; // meters (X local axis)
+  width: number;  // meters (Z local axis)
+  height: number; // meters (Y vertical axis)
+}
+
+export type ZoneType =
+  | 'receiving'
+  | 'dispatch'
+  | 'raw_storage'
+  | 'finished_storage'
+  | 'maintenance'
+  | 'employee'
+  | 'safety'
+  | 'pedestrian_aisle'
+  | 'forklift_aisle';
+
+export interface FactoryZone {
+  id: string;
+  name: string;
+  type: ZoneType;
+  position: Vec3; // center X, Y=0, Z
+  dimensions: { length: number; width: number };
+  rotationDeg: number;
+  color: string;
+  locked: boolean;
+  visible: boolean;
+}
+
+export interface StructuralColumn {
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+  width: number;
+  depth: number;
+}
+
+export type WallSide = 'north' | 'south' | 'east' | 'west';
+export type OpeningType = 'door' | 'window' | 'main_entrance' | 'loading_bay';
+
+export interface WallOpening {
+  id: string;
+  label: string;
+  type: OpeningType;
+  wall: WallSide;
+  offsetM: number; // distance from wall start
+  widthM: number;
+  heightM: number;
+  sillHeightM: number;
+}
+
+export interface FactorySpec {
+  name: string;
+  lengthM: number;
+  widthM: number;
+  heightM: number;
+  unit: MeasurementUnit;
+  gridSizeM: number;
+  snapToGrid: boolean;
+  columns: StructuralColumn[];
+  openings: WallOpening[];
+  zones: FactoryZone[];
+}
+
+export type ProductionLineType =
+  | 'straight'
+  | 'u_shaped'
+  | 'l_shaped'
+  | 'parallel'
+  | 'loop'
+  | 'custom';
+
+export interface ProductionLine {
+  id: string;
+  name: string;
+  type: ProductionLineType;
+  totalLengthM: number;
+  totalWidthM: number;
+  conveyorHeightM: number;
+  conveyorSpeedMps: number;
+  direction: 'forward' | 'reverse';
+  targetCapacityPerShift: number;
+  workstationCount: number;
+  workerCount: number;
+  inputPoint: Vec3;
+  outputPoint: Vec3;
+  productId: string;
+}
+
+export type EquipmentCategory =
+  | 'conveyor_belt'
+  | 'roller_conveyor'
+  | 'pallet_conveyor'
+  | 'incline_conveyor'
+  | 'assembly_table'
+  | 'workstation'
+  | 'injection_molding'
+  | 'hydraulic_press'
+  | 'cutting_machine'
+  | 'laser_cutter'
+  | 'cnc_machine'
+  | 'welding_machine'
+  | 'painting_equipment'
+  | 'testing_machine'
+  | 'checkweigher'
+  | 'filling_machine'
+  | 'labeling_machine'
+  | 'packaging_machine'
+  | 'stretch_wrapper_turntable'
+  | 'stretch_wrapper_arm'
+  | 'shrink_tunnel'
+  | 'carton_sealer'
+  | 'strapping_machine'
+  | 'palletizer_robot'
+  | 'material_handling'
+  | 'storage_rack'
+  | 'pallet_wood_euro'
+  | 'pallet_wood_std'
+  | 'pallet_wood_heavy'
+  | 'pallet_plastic_euro'
+  | 'pallet_plastic_heavy'
+  | 'pallet_plastic_compact'
+  | 'forklift'
+  | 'pallet_jack'
+  | 'agv_cart'
+  | 'buffer';
+
+export type LayoutObjectKind =
+  | 'conveyor'
+  | 'workstation'
+  | 'machine'
+  | 'buffer'
+  | 'storage'
+  | 'vehicle';
+
+export interface GeometricProps {
+  position: Vec3; // center X, floor Y, center Z
+  dimensions: Dimensions3D;
+  rotationDeg: number; // rotation around vertical Y axis in degrees
+  clearanceM: number;  // maintenance & safety clearance around object
+}
+
+export interface OperationalProps {
+  processingTimeSec: number;
+  setupTimeSec: number;
+  loadingTimeSec: number;
+  unloadingTimeSec: number;
+  capacity: number; // concurrent units or buffer capacity
+  availability: number; // 0..1
+  requiredOperators: number;
+  speedMps?: number; // for conveyors
+  productSpacingM?: number; // for conveyors
+  direction?: 1 | -1; // +1 forward local X, -1 reverse
+  mtbfSec?: number; // mean time between failures (optional)
+  mttrSec?: number; // mean time to repair
+  operatingSchedule?: string;
+}
+
+export interface RenderingProps {
+  color: string;
+  visible: boolean;
+  locked: boolean;
+  layer: 'equipment' | 'conveyors' | 'buffers' | 'storage' | 'vehicles';
+}
+
+export interface LayoutObject {
+  id: string;
+  name: string;
+  kind: LayoutObjectKind;
+  category: EquipmentCategory;
+  templateId: string;
+  productionLineId?: string;
+  stageId?: string;
+  connectedToIds: string[]; // downstream connections
+  geometry: GeometricProps;
+  operations: OperationalProps;
+  rendering: RenderingProps;
+}
+
+export interface EquipmentTemplate {
+  id: string;
+  name: string;
+  category: EquipmentCategory;
+  kind: LayoutObjectKind;
+  isCustom: boolean;
+  description: string;
+  defaultDimensions: Dimensions3D;
+  defaultClearanceM: number;
+  defaultOperations: OperationalProps;
+  defaultColor: string;
+}
+
+export type ProductModelShape =
+  | 'air_cooler'
+  | 'box'
+  | 'carton_box'
+  | 'cylinder'
+  | 'drum'
+  | 'chassis'
+  | 'appliance'
+  | 'pallet'
+  | 'pallet_wood'
+  | 'pallet_plastic'
+  | 'wrapped_pallet'
+  | 'shrink_pack'
+  | 'crate'
+  | 'spool_roll';
+
+export interface ProductDefinition {
+  id: string;
+  code: string;
+  name: string;
+  category: string;
+  dimensions: Dimensions3D;
+  weightKg: number;
+  color: string;
+  targetQuantity: number;
+  routeStageIds: string[];
+  modelShape: ProductModelShape;
+  routingMode?: 'auto' | 'manual';
+  entryStageIds?: string[];
+}
+
+export interface ProductionStage {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  processingTimeSec: number;
+  setupTimeSec: number;
+  loadingTimeSec: number;
+  unloadingTimeSec: number;
+  requiredWorkers: number;
+  requiredMachines: number;
+  inputQty: number;
+  outputQty: number;
+  scrapRate: number; // 0..1
+  reworkProbability: number; // 0..1
+  bufferCapacity: number;
+  predecessorIds: string[];
+  successorIds: string[];
+  assignedObjectIds: string[]; // stations/machines executing this stage
+  conveyorObjectId?: string;   // optional conveyor carrying units out of this stage
+  flowPos?: { x: number; y: number };
+}
+
+export interface ProductionRoute {
+  id: string;
+  name: string;
+  productId: string;
+  stageIds: string[];
+}
+
+export interface WorkerDefinition {
+  id: string;
+  label: string;
+  name: string;
+  position: Vec3;
+  assignedStageIds: string[];
+  assignedStationId?: string;
+  skillCategory: string;
+  skillLevel: number; // 1..5
+  efficiencyFactor: number; // 0.5..1.5
+  walkingSpeedMps: number;
+  shiftId: string;
+  color: string;
+}
+
+export interface ShiftBreak {
+  id: string;
+  name: string;
+  startSec: number; // offset from simulation start
+  durationSec: number;
+}
+
+export interface ShiftDefinition {
+  id: string;
+  name: string;
+  startSec: number;
+  durationSec: number;
+  breaks: ShiftBreak[];
+}
+
+export interface SimulationConfig {
+  durationSec: number; // e.g., 28800 for 8-hour shift
+  arrivalIntervalSec: number; // inter-arrival time of raw material / orders
+  maxPlannedUnits: number; // 0 = unlimited up to shift duration / product target
+  speedMultiplier: number; // 1x..200x
+  enableBreakdowns: boolean;
+  randomSeed: number;
+  shifts: ShiftDefinition[];
+}
+
+// ============================================================================
+// DISCRETE EVENT SIMULATION RUNTIME & RESULTS
+// ============================================================================
+
+export type SimEventType =
+  | 'ProductCreated'
+  | 'ProductArrived'
+  | 'ProcessingStarted'
+  | 'ProcessingCompleted'
+  | 'WorkerAssigned'
+  | 'WorkerReleased'
+  | 'MachineStarted'
+  | 'MachineStopped'
+  | 'ProductTransferred'
+  | 'BufferFull'
+  | 'BufferReleased'
+  | 'ShiftStarted'
+  | 'ShiftEnded'
+  | 'BreakdownStarted'
+  | 'RepairCompleted'
+  | 'ProductScrapped'
+  | 'ProductCompleted';
+
+export interface SimEvent {
+  seq: number;
+  timestamp: number; // seconds
+  type: SimEventType;
+  entityId?: string; // product instance id
+  stageId?: string;
+  objectId?: string; // machine / workstation / conveyor / buffer
+  workerId?: string;
+  details: string;
+}
+
+export type MachineRuntimeStatus = 'running' | 'idle' | 'blocked' | 'starved' | 'down';
+export type WorkerRuntimeStatus = 'idle' | 'walking' | 'busy' | 'break';
+
+export interface ProductEntityState {
+  id: string;
+  productId: string;
+  serialNumber: number;
+  createdAt: number;
+  completedAt?: number;
+  scrapped: boolean;
+  reworkCount: number;
+  currentStageId?: string;
+  currentObjectId?: string;
+  locationKind: 'source' | 'buffer' | 'station' | 'conveyor' | 'completed' | 'scrapped';
+  conveyorProgress?: number; // 0..1 along conveyor length
+  worldPosition: Vec3;
+  waitingTimeSec: number;
+  processingTimeSec: number;
+  transportTimeSec: number;
+}
+
+export interface ObjectRuntimeState {
+  objectId: string;
+  status: MachineRuntimeStatus;
+  busyUnitIds: string[];
+  queueUnitIds: string[];
+  processedCount: number;
+  scrapCount: number;
+  runningTimeSec: number;
+  idleTimeSec: number;
+  blockedTimeSec: number;
+  starvedTimeSec: number;
+  downTimeSec: number;
+  lastStateChangeTime: number;
+}
+
+export interface WorkerRuntimeState {
+  workerId: string;
+  status: WorkerRuntimeStatus;
+  currentStationId?: string;
+  targetStationId?: string;
+  position: Vec3;
+  startPosition: Vec3;
+  targetPosition: Vec3;
+  moveStartTime: number;
+  moveEndTime: number;
+  busyTimeSec: number;
+  walkingTimeSec: number;
+  idleTimeSec: number;
+  tasksCompleted: number;
+  lastStateChangeTime: number;
+}
+
+export interface StageAnalytics {
+  stageId: string;
+  stageName: string;
+  enteredCount: number;
+  completedCount: number;
+  scrapCount: number;
+  reworkCount: number;
+  avgCycleTimeSec: number;
+  avgWaitTimeSec: number;
+  avgQueueLength: number;
+  maxQueueLength: number;
+  utilizationPct: number;
+  blockedPct: number;
+  starvedPct: number;
+  downPct: number;
+  isBottleneck: boolean;
+}
+
+export interface HourlyProductionPoint {
+  hourIndex: number; // 1..N
+  label: string;
+  plannedCumulative: number;
+  actualCumulative: number;
+  hourlyGood: number;
+  hourlyScrap: number;
+  avgWip: number;
+}
+
+export interface WipTimePoint {
+  timeSec: number;
+  wip: number;
+  completed: number;
+  throughputPerHour: number;
+}
+
+export interface SimulationKPIs {
+  totalPlannedProduction: number;
+  actualProduction: number;
+  goodUnits: number;
+  defectiveUnits: number;
+  productionAttainmentPct: number;
+  hourlyOutput: number;
+  unitsPerShift: number;
+
+  avgCycleTimeSec: number;
+  theoreticalTaktTimeSec: number;
+  avgLeadTimeSec: number;
+  avgWaitingTimeSec: number;
+  avgProcessingTimeSec: number;
+  avgTransportTimeSec: number;
+  totalDowntimeSec: number;
+
+  lineEfficiencyPct: number;
+  workerUtilizationPct: number;
+  machineUtilizationPct: number;
+  bottleneckStageId?: string;
+  bottleneckStageName?: string;
+
+  avgWip: number;
+  currentWip: number;
+  avgQueueLength: number;
+  throughputPerHour: number;
+  avgBufferOccupancyPct: number;
+  totalStarvedTimeSec: number;
+  totalBlockedTimeSec: number;
+}
+
+export interface SimulationResult {
+  completedAtWallTime: string;
+  simTimeSec: number;
+  kpis: SimulationKPIs;
+  stageAnalytics: StageAnalytics[];
+  hourlySeries: HourlyProductionPoint[];
+  wipSeries: WipTimePoint[];
+  recentEvents: SimEvent[];
+  totalEventsExecuted: number;
+}
+
+export interface SimulationSnapshot {
+  status: 'idle' | 'running' | 'paused' | 'completed';
+  clockSec: number;
+  shiftActive: boolean;
+  onBreak: boolean;
+  objects: Record<string, ObjectRuntimeState>;
+  workers: Record<string, WorkerRuntimeState>;
+  products: ProductEntityState[];
+  recentEvents: SimEvent[];
+  totalEventsExecuted: number;
+  result?: SimulationResult;
+}
+
+export interface ScenarioRecord {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  isBaseline: boolean;
+  overrides: {
+    workerCount: number;
+    processingTimeScale: number; // 1.0 = 100%
+    conveyorSpeedMps: number;
+    bufferCapacity: number;
+    shiftDurationSec: number;
+    enableBreakdowns: boolean;
+    targetProduction: number;
+  };
+  result?: SimulationResult;
+}
+
+export interface ValidationIssue {
+  id: string;
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  messageAr?: string;
+  targetId?: string;
+  targetType?: 'factory' | 'object' | 'stage' | 'worker' | 'product' | 'shift';
+}
+
+export interface ProjectData {
+  schemaVersion: string;
+  id: string;
+  name: string;
+  factoryName: string;
+  industryType: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+  factory: FactorySpec;
+  productionLines: ProductionLine[];
+  layoutObjects: LayoutObject[];
+  products: ProductDefinition[];
+  stages: ProductionStage[];
+  routes: ProductionRoute[];
+  workers: WorkerDefinition[];
+  simulationConfig: SimulationConfig;
+  lastSimulationResult?: SimulationResult;
+  scenarios: ScenarioRecord[];
+}

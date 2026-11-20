@@ -1,0 +1,520 @@
+import React, { useEffect, useRef } from 'react';
+import {
+  Activity,
+  BarChart3,
+  Box,
+  ClipboardCopy,
+  ClipboardPaste,
+  Columns2,
+  Cpu,
+  Download,
+  Factory,
+  FileText,
+  FolderKanban,
+  GitBranch,
+  HelpCircle,
+  Layers,
+  Menu,
+  Moon,
+  Package,
+  Phone,
+  PlayCircle,
+  Redo2,
+  Save,
+  ShieldCheck,
+  Sun,
+  Undo2,
+  Upload,
+  Users,
+  Workflow,
+  Wrench,
+} from 'lucide-react';
+import { useAppStore } from './store/useAppStore';
+import { getT } from './i18n/translations';
+import { CameraPreset, WorkspaceModuleId } from './types/project';
+import { Workspace2D } from './components/workspace/Workspace2D';
+import { Workspace3D } from './components/workspace/Workspace3D';
+import { FlowchartRoutingCanvas } from './components/workspace/FlowchartRoutingCanvas';
+import { PropertiesPanel } from './components/panels/PropertiesPanel';
+import { BottomSimPanel } from './components/panels/BottomSimPanel';
+import { ProjectsModule } from './components/modules/ProjectsModule';
+import { FactoryModule } from './components/modules/FactoryModule';
+import { EquipmentModule, LayoutModule } from './components/modules/LayoutEquipmentModule';
+import {
+  ProcessesModule,
+  ProductsModule,
+  WorkforceModule,
+} from './components/modules/ProductProcessWorkforceModule';
+import { SimulationInspectorModule } from './components/modules/SimulationInspectorModule';
+import { AnalyticsModule } from './components/modules/AnalyticsModule';
+import { ScenariosModule } from './components/modules/ScenariosModule';
+import { ReportsModule } from './components/modules/ReportsModule';
+import { HelpGuideModal } from './components/modals/HelpGuideModal';
+
+export default function App() {
+  const initialized = useAppStore((s) => s.initialized);
+  const project = useAppStore((s) => s.project);
+  const activeModule = useAppStore((s) => s.activeModule);
+  const viewportMode = useAppStore((s) => s.viewportMode);
+  const cameraPreset = useAppStore((s) => s.cameraPreset);
+  const visualVariant = useAppStore((s) => s.visualVariant);
+  const theme = useAppStore((s) => s.theme);
+  const language = useAppStore((s) => s.language);
+  const saveStatus = useAppStore((s) => s.saveStatus);
+  const undoCount = useAppStore((s) => s.undoStack.length);
+  const redoCount = useAppStore((s) => s.redoStack.length);
+  const toastMessage = useAppStore((s) => s.toastMessage);
+  const validationIssues = useAppStore((s) => s.validationIssues);
+
+  const bootstrap = useAppStore((s) => s.bootstrap);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
+  const setViewportMode = useAppStore((s) => s.setViewportMode);
+  const setCameraPreset = useAppStore((s) => s.setCameraPreset);
+  const setVisualVariant = useAppStore((s) => s.setVisualVariant);
+  const setTheme = useAppStore((s) => s.setTheme);
+  const setLanguage = useAppStore((s) => s.setLanguage);
+  const saveCurrentProject = useAppStore((s) => s.saveCurrentProject);
+  const undo = useAppStore((s) => s.undo);
+  const redo = useAppStore((s) => s.redo);
+  const copySelectedObjects = useAppStore((s) => s.copySelectedObjects);
+  const pasteClipboardObjects = useAppStore((s) => s.pasteClipboardObjects);
+  const deleteSelectedObjects = useAppStore((s) => s.deleteSelectedObjects);
+  const importProjectJson = useAppStore((s) => s.importProjectJson);
+  const setToast = useAppStore((s) => s.setToast);
+
+  const clearSelection = useAppStore((s) => s.clearSelection);
+  const [sidebarDrawerOpen, setSidebarDrawerOpen] = React.useState(true);
+  const [guideOpen, setGuideOpen] = React.useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    bootstrap();
+  }, [bootstrap]);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+      if (isInput) return;
+
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redo();
+      } else if (mod && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        saveCurrentProject();
+      } else if (mod && e.key.toLowerCase() === 'c') {
+        e.preventDefault();
+        copySelectedObjects();
+      } else if (mod && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        pasteClipboardObjects();
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        deleteSelectedObjects();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [undo, redo, saveCurrentProject, copySelectedObjects, pasteClipboardObjects, deleteSelectedObjects]);
+
+  const t = getT(language);
+
+  const navItems: Array<{ id: WorkspaceModuleId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
+    { id: 'projects', label: t.modules.projects, icon: FolderKanban },
+    { id: 'factory', label: t.modules.factory, icon: Factory },
+    { id: 'layout', label: t.modules.layout, icon: Layers },
+    { id: 'equipment', label: t.modules.equipment, icon: Wrench },
+    { id: 'products', label: t.modules.products, icon: Package },
+    { id: 'processes', label: t.modules.processes, icon: Cpu },
+    { id: 'workforce', label: t.modules.workforce, icon: Users },
+    { id: 'simulation', label: t.modules.simulation, icon: PlayCircle },
+    { id: 'analytics', label: t.modules.analytics, icon: BarChart3 },
+    { id: 'scenarios', label: t.modules.scenarios, icon: GitBranch },
+    { id: 'reports', label: t.modules.reports, icon: FileText },
+  ];
+
+  const isFullPageModule =
+    activeModule === 'analytics' || activeModule === 'scenarios' || activeModule === 'reports';
+
+  const handleQuickExportJson = () => {
+    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${project.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}_linesim.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setToast(language === 'ar' ? 'تم تصدير ملف المشروع JSON' : 'Exported Project JSON', 'success');
+  };
+
+  if (!initialized) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-neutral-50 dark:bg-neutral-950 text-sm text-neutral-600 dark:text-neutral-300">
+        {language === 'ar' ? 'جارٍ تحميل مساحة عمل MK LineSim…' : 'Loading MK LineSim workspace…'}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100">
+      {/* Top Engineering Toolbar */}
+      <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={() => setSidebarDrawerOpen((v) => !v)}
+            className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 lg:hidden"
+            title="Toggle Sidebar"
+          >
+            <Menu className="w-4 h-4" />
+          </button>
+          <a
+            href="#top"
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveModule('layout');
+            }}
+            className="flex items-center gap-2 whitespace-nowrap shrink-0 group"
+            title={`${t.brand} — ${t.appName}`}
+          >
+            <img
+              src="./favicon.svg"
+              alt="MK LineSim"
+              className="h-7 w-7 rounded shadow-xs shrink-0 transition-transform group-hover:scale-105"
+            />
+            <span className="text-sm font-bold tracking-tight text-neutral-950 dark:text-white" dir="ltr">
+              {t.appName}
+            </span>
+          </a>
+          <span className="hidden sm:inline text-neutral-300 dark:text-neutral-700">|</span>
+          <span className="hidden sm:inline truncate text-xs font-medium text-neutral-700 dark:text-neutral-300 max-w-[220px]">
+            {project.name}
+          </span>
+        </div>
+
+        {/* Engineering Edit & IO Actions */}
+        <div className="flex items-center gap-1.5 overflow-x-auto">
+          <button
+            onClick={() => saveCurrentProject()}
+            className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+          >
+            <Save className="w-3.5 h-3.5 text-red-600" />
+            <span>{saveStatus === 'saving' ? t.actions.saving : saveStatus === 'saved' ? t.actions.saved : t.actions.save}</span>
+          </button>
+
+          <button
+            onClick={undo}
+            disabled={undoCount === 0}
+            title={`${t.actions.undo} (Ctrl+Z)`}
+            className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-35"
+          >
+            <Undo2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={redo}
+            disabled={redoCount === 0}
+            title={`${t.actions.redo} (Ctrl+Y)`}
+            className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-35"
+          >
+            <Redo2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={copySelectedObjects}
+            title={`${t.actions.copy} (Ctrl+C)`}
+            className="hidden md:inline-flex p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          >
+            <ClipboardCopy className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={pasteClipboardObjects}
+            title={`${t.actions.paste} (Ctrl+V)`}
+            className="hidden md:inline-flex p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          >
+            <ClipboardPaste className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            onClick={() => importInputRef.current?.click()}
+            title={t.actions.importJson}
+            className="hidden sm:flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            <span>{t.actions.importJson}</span>
+          </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,application/json"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (f) await importProjectJson(await f.text());
+              e.target.value = '';
+            }}
+            className="hidden"
+          />
+
+          <button
+            onClick={handleQuickExportJson}
+            title={t.actions.exportJson}
+            className="hidden sm:flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{t.actions.exportJson}</span>
+          </button>
+
+          <button
+            onClick={() => setGuideOpen(true)}
+            title={t.actions.guide}
+            className="flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-red-600" />
+            <span className="hidden md:inline">{t.actions.guide}</span>
+          </button>
+
+          <button
+            onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')}
+            className="rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+          >
+            {language === 'en' ? 'العربية' : 'EN'}
+          </button>
+          <button
+            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+            title={language === 'ar' ? 'تبديل الوضع الفاتح/الداكن' : 'Toggle Light/Dark Theme'}
+            className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          >
+            {theme === 'light' ? <Moon className="w-3.5 h-3.5" /> : <Sun className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </header>
+
+      {/* Main Engineering Body */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Left Compact Module Rail */}
+        <nav className="flex w-16 shrink-0 flex-col items-center gap-1 border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 py-2 overflow-y-auto">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = activeModule === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => {
+                  if (activeModule === item.id && !isFullPageModule) {
+                    setSidebarDrawerOpen((v) => !v);
+                  } else {
+                    setActiveModule(item.id);
+                    if (item.id === 'simulation') setViewportMode('simulation');
+                    setSidebarDrawerOpen(true);
+                  }
+                }}
+                className={`flex w-14 flex-col items-center gap-0.5 rounded py-1.5 px-1 text-[10px] font-medium transition-colors ${
+                  active
+                    ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400'
+                    : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                }`}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                <span className="truncate w-full text-center">{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Left Contextual Tool Drawer (hidden for full-page Analytics / Scenarios / Reports) */}
+        {!isFullPageModule && sidebarDrawerOpen && (
+          <aside className="w-72 shrink-0 border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5">
+              <h2 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+                {navItems.find((n) => n.id === activeModule)?.label}
+              </h2>
+              {validationIssues.length > 0 && (
+                <button
+                  onClick={() => clearSelection()}
+                  title={t.labels.validation}
+                  className="text-[10px] font-mono-tabular text-amber-600 dark:text-amber-400 hover:underline"
+                >
+                  {validationIssues.length} {t.labels.alertsCount}
+                </button>
+              )}
+            </div>
+
+            {activeModule === 'projects' && <ProjectsModule />}
+            {activeModule === 'factory' && <FactoryModule />}
+            {activeModule === 'layout' && <LayoutModule />}
+            {activeModule === 'equipment' && <EquipmentModule />}
+            {activeModule === 'products' && <ProductsModule />}
+            {activeModule === 'processes' && <ProcessesModule />}
+            {activeModule === 'workforce' && <WorkforceModule />}
+            {activeModule === 'simulation' && <SimulationInspectorModule />}
+          </aside>
+        )}
+
+        {/* Central Workspace */}
+        <main className="flex flex-1 flex-col min-w-0 min-h-0 overflow-hidden">
+          {isFullPageModule ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              {activeModule === 'analytics' && <AnalyticsModule />}
+              {activeModule === 'scenarios' && <ScenariosModule />}
+              {activeModule === 'reports' && <ReportsModule />}
+            </div>
+          ) : (
+            <>
+              {/* Workspace Viewport Mode Switcher & 3D Camera Controls */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-3 py-1.5">
+                <div className="flex items-center gap-1 rounded bg-neutral-100 dark:bg-neutral-800 p-0.5 overflow-x-auto">
+                  {[
+                    { id: '2d', label: t.views.view2d, icon: Layers },
+                    { id: '3d', label: t.views.view3d, icon: Box },
+                    { id: 'split', label: t.views.split, icon: Columns2 },
+                    { id: 'flowchart', label: t.views.flowchart, icon: Workflow },
+                    { id: 'simulation', label: t.views.liveSim, icon: Activity },
+                  ].map((v) => {
+                    const Icon = v.icon;
+                    const active = viewportMode === v.id;
+                    return (
+                      <button
+                        key={v.id}
+                        onClick={() => setViewportMode(v.id as typeof viewportMode)}
+                        className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                          active
+                            ? 'bg-white dark:bg-neutral-900 text-neutral-950 dark:text-white shadow-sm'
+                            : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Icon className={`w-3.5 h-3.5 ${v.id === 'flowchart' && active ? 'text-red-600' : ''}`} />
+                        <span>{v.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* 3D Camera & Rendering Style Controls */}
+                {viewportMode !== '2d' && viewportMode !== 'flowchart' && (
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <div className="flex items-center gap-0.5 rounded border border-neutral-200 dark:border-neutral-800 p-0.5">
+                      {(['perspective', 'top', 'front', 'side'] as CameraPreset[]).map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setCameraPreset(p)}
+                          className={`rounded px-2 py-0.5 text-[11px] ${
+                            cameraPreset === p
+                              ? 'bg-red-600 text-white font-medium'
+                              : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                          }`}
+                        >
+                          {t.camera[p]}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() =>
+                        setVisualVariant(visualVariant === 'realistic' ? 'engineering' : 'realistic')
+                      }
+                      className="rounded border border-neutral-200 dark:border-neutral-800 px-2.5 py-1 text-[11px] font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap"
+                    >
+                      {visualVariant === 'realistic' ? t.labels.realistic : t.labels.engineering}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Synchronized 2D / 3D / Flowchart Canvas Area */}
+              <div className="flex flex-1 min-h-0 overflow-hidden">
+                {viewportMode === 'flowchart' ? (
+                  <div className="w-full h-full min-w-0">
+                    <FlowchartRoutingCanvas />
+                  </div>
+                ) : (
+                  <>
+                    {(viewportMode === '2d' || viewportMode === 'split') && (
+                      <div
+                        className={`${
+                          viewportMode === 'split'
+                            ? 'w-1/2 border-e border-neutral-200 dark:border-neutral-800'
+                            : 'w-full'
+                        } h-full min-w-0`}
+                      >
+                        <Workspace2D />
+                      </div>
+                    )}
+                    {(viewportMode === '3d' ||
+                      viewportMode === 'split' ||
+                      viewportMode === 'simulation') && (
+                      <div className={`${viewportMode === 'split' ? 'w-1/2' : 'w-full'} h-full min-w-0`}>
+                        <Workspace3D />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Persistent Bottom Simulation Bar */}
+          <BottomSimPanel />
+        </main>
+
+        {/* Right Contextual Properties Panel */}
+        {!isFullPageModule && (
+          <div className="hidden lg:block h-full">
+            <PropertiesPanel />
+          </div>
+        )}
+      </div>
+
+      {/* Prominent Copyright & Contact Footer Bar */}
+      <footer className="flex h-9 shrink-0 items-center justify-between gap-3 border-t-2 border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-4 text-xs">
+        <div className="flex items-center gap-2 min-w-0">
+          <ShieldCheck className="w-4 h-4 text-red-600 shrink-0" />
+          <span className="font-semibold text-neutral-900 dark:text-white truncate">
+            {t.copyright}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          <a
+            href="tel:01200224513"
+            className="flex items-center gap-1.5 rounded border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-2.5 py-0.5 font-semibold text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/50 transition-colors"
+            title={t.phoneLabel}
+          >
+            <Phone className="w-3.5 h-3.5 shrink-0" />
+            <span className="hidden sm:inline text-[11px]">{t.phoneLabel}:</span>
+            <span className="font-mono-tabular font-bold tracking-wide" dir="ltr">
+              {t.phoneNumber}
+            </span>
+          </a>
+          <span className="hidden md:inline font-mono-tabular text-[11px] font-semibold text-neutral-600 dark:text-neutral-400" dir="ltr">
+            {t.brand} · {t.appName} v1.0
+          </span>
+        </div>
+      </footer>
+
+      <HelpGuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />
+
+      {/* Transient Engineering Toast Feedback */}
+      {toastMessage && (
+        <div
+          className={`fixed bottom-16 end-5 z-50 rounded border px-3.5 py-2 text-xs font-medium shadow-md ${
+            toastMessage.type === 'error'
+              ? 'border-red-300 bg-red-600 text-white'
+              : toastMessage.type === 'success'
+              ? 'border-emerald-300 bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+              : 'border-neutral-300 bg-neutral-900 text-white'
+          }`}
+        >
+          {toastMessage.text}
+        </div>
+      )}
+    </div>
+  );
+}
