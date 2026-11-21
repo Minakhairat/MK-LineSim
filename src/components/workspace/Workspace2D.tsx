@@ -1,9 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Maximize2, Ruler, ZoomIn, ZoomOut } from 'lucide-react';
+import { Flame, Maximize2, Ruler, ZoomIn, ZoomOut } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { fromMeters, snapValue } from '../../utils/units';
 import { LayoutObject, MachineRuntimeStatus } from '../../types/project';
 import { getT } from '../../i18n/translations';
+import {
+  computeObjectHeatmapMetrics,
+  HEATMAP_LEGEND_STOPS,
+  resolveHeatmapActiveTimeSec,
+} from '../../simulation/heatmap';
 
 const STATUS_RING: Record<MachineRuntimeStatus, string> = {
   running: '#16A34A',
@@ -29,6 +34,7 @@ export const Workspace2D: React.FC = () => {
   const selection = useAppStore((s) => s.selection);
   const layersVisible = useAppStore((s) => s.layersVisible);
   const measureMode = useAppStore((s) => s.measureMode);
+  const heatmapOverlayEnabled = useAppStore((s) => s.heatmapOverlayEnabled);
   const simSnapshot = useAppStore((s) => s.simSnapshot);
   const language = useAppStore((s) => s.language);
   const t = getT(language);
@@ -200,13 +206,28 @@ export const Workspace2D: React.FC = () => {
   const fW = factory.widthM;
   const unit = factory.unit;
 
+  const activeHeatWindowSec = heatmapOverlayEnabled
+    ? resolveHeatmapActiveTimeSec(project.simulationConfig, project.products[0], simSnapshot.clockSec)
+    : 0;
+  const bottleneckStageId = simSnapshot.result?.kpis.bottleneckStageId;
+
   const renderObjectGlyph = (obj: LayoutObject) => {
     const { length: L, width: W } = obj.geometry.dimensions;
     const isSelected = selection.kind === 'object' && selection.ids.includes(obj.id);
     const rt = simSnapshot.objects[obj.id];
     const simActive = simSnapshot.clockSec > 0;
     const statusColor = rt && simActive ? STATUS_RING[rt.status] : undefined;
-    const isBottleneck = simSnapshot.result?.kpis.bottleneckStageId === obj.stageId && simActive;
+    const isBottleneck = bottleneckStageId === obj.stageId && simActive;
+    const heat =
+      heatmapOverlayEnabled && obj.kind !== 'storage' && obj.kind !== 'vehicle'
+        ? computeObjectHeatmapMetrics({
+            obj,
+            runtime: rt,
+            clockSec: simSnapshot.clockSec,
+            activeSimTimeSec: activeHeatWindowSec,
+            isStageBottleneck: isBottleneck,
+          })
+        : null;
 
     return (
       <g
@@ -245,6 +266,21 @@ export const Workspace2D: React.FC = () => {
           />
         )}
 
+        {/* Heatmap outer thermal glow aura */}
+        {heat && (
+          <rect
+            x={-L / 2 - 0.16}
+            y={-W / 2 - 0.16}
+            width={L + 0.32}
+            height={W + 0.32}
+            rx={0.12}
+            fill={heat.colorHex}
+            fillOpacity={heat.tier === 'idle' ? 0.1 : 0.22}
+            stroke={heat.borderHex}
+            strokeWidth={1.6 / pxPerM}
+          />
+        )}
+
         {/* Bottleneck warning halo */}
         {isBottleneck && (
           <rect
@@ -266,11 +302,25 @@ export const Workspace2D: React.FC = () => {
           width={L}
           height={W}
           rx={0.06}
-          fill={obj.rendering.color || '#334155'}
-          fillOpacity={0.88}
-          stroke={isSelected ? '#DC2626' : statusColor || '#0F172A'}
-          strokeWidth={(isSelected || statusColor ? 2.5 : 1.2) / pxPerM}
+          fill={heat ? heat.colorHex : obj.rendering.color || '#334155'}
+          fillOpacity={heat ? (heat.tier === 'idle' ? 0.42 : 0.72) : 0.88}
+          stroke={isSelected ? '#DC2626' : heat ? heat.borderHex : statusColor || '#0F172A'}
+          strokeWidth={(isSelected || statusColor || heat ? 2.5 : 1.2) / pxPerM}
         />
+
+        {/* Downtime Hotspot Hazard Stripes when heatmap active */}
+        {heat && heat.tier === 'downtime' && (
+          <rect
+            x={-L / 2}
+            y={-W / 2}
+            width={L}
+            height={W}
+            rx={0.06}
+            fill="url(#heatmap-downtime-hatch)"
+            opacity={0.55}
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
 
         {/* Category-specific engineering details */}
         {obj.kind === 'conveyor' && (() => {
@@ -433,7 +483,7 @@ export const Workspace2D: React.FC = () => {
         {/* Label */}
         <text
           x={0}
-          y={0.05}
+          y={heat ? -0.14 : 0.05}
           textAnchor="middle"
           dominantBaseline="middle"
           fontSize={Math.max(0.24, Math.min(0.42, W * 0.38))}
@@ -443,6 +493,35 @@ export const Workspace2D: React.FC = () => {
         >
           {obj.name.length > 22 ? `${obj.name.slice(0, 20)}…` : obj.name}
         </text>
+
+        {/* Heatmap U% / D% compact pill readout */}
+        {heat && (
+          <g transform={`translate(0, ${Math.min(W * 0.28, 0.26)})`} style={{ pointerEvents: 'none' }}>
+            <rect
+              x={-Math.max(0.55, Math.min(L * 0.44, 0.95))}
+              y={-0.16}
+              width={Math.max(1.1, Math.min(L * 0.88, 1.9))}
+              height={0.32}
+              rx={0.08}
+              fill="#0F172A"
+              fillOpacity={0.86}
+              stroke={heat.colorHex}
+              strokeWidth={1 / pxPerM}
+            />
+            <text
+              x={0}
+              y={0.02}
+              textAnchor="middle"
+              dominantBaseline="middle"
+              fontSize={Math.max(0.18, Math.min(0.24, W * 0.24))}
+              fill="#F8FAFC"
+              fontWeight={700}
+              style={{ userSelect: 'none' }}
+            >
+              {heat.badgeText}
+            </text>
+          </g>
+        )}
 
         {/* Live status badge if simulating */}
         {statusColor && (
@@ -521,8 +600,8 @@ export const Workspace2D: React.FC = () => {
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden bg-neutral-100 dark:bg-neutral-900 select-none">
       {/* Compact 2D HUD toolbar */}
-      <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white/95 dark:bg-neutral-900/95 px-2 py-1 shadow-sm">
-        <span className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-200 px-1">
+      <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-1 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white/95 dark:bg-neutral-900/95 px-2 py-1 shadow-sm max-w-[calc(100%-1.5rem)]">
+        <span className="text-[11px] font-semibold text-neutral-700 dark:text-neutral-200 px-1 hidden sm:inline">
           {t.labels.viewport2d}
         </span>
         <button
@@ -581,10 +660,30 @@ export const Workspace2D: React.FC = () => {
         )}
       </div>
 
+      {/* 2D Heatmap Legend HUD when enabled */}
+      {heatmapOverlayEnabled && (
+        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex flex-wrap items-center gap-2 rounded bg-white/95 dark:bg-neutral-900/95 border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-[10px] shadow-sm max-w-[60%]">
+          <span className="inline-flex items-center gap-1 font-semibold text-red-600 dark:text-red-400">
+            <Flame className="w-3 h-3" />
+            {t.simInspector.heatmapOn}
+          </span>
+          {HEATMAP_LEGEND_STOPS.map((stop) => (
+            <span key={stop.tier} className="inline-flex items-center gap-1 text-neutral-700 dark:text-neutral-200">
+              <span
+                className="h-2 w-2 rounded-sm border border-black/15"
+                style={{ backgroundColor: stop.colorHex }}
+              />
+              {t.simInspector.heatmapLegend[stop.tier]}
+            </span>
+          ))}
+        </div>
+      )}
+
       <svg
         ref={svgRef}
         data-linesim-2d="true"
-        className="w-full h-full cursor-crosshair"
+        className="w-full h-full cursor-crosshair touch-none"
+        style={{ touchAction: 'none' }}
         onWheel={handleWheel}
         onPointerDown={handleSvgPointerDown}
         onPointerMove={handlePointerMove}
@@ -592,6 +691,15 @@ export const Workspace2D: React.FC = () => {
         onContextMenu={(e) => e.preventDefault()}
       >
         <defs>
+          <pattern
+            id="heatmap-downtime-hatch"
+            width="0.28"
+            height="0.28"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width="0.12" height="0.28" fill="#DC2626" />
+          </pattern>
           <marker
             id="flow-arrow-red"
             viewBox="0 0 10 10"
@@ -632,40 +740,44 @@ export const Workspace2D: React.FC = () => {
           />
 
           {/* Grid lines */}
-          {Array.from({ length: Math.floor(fL / factory.gridSizeM) + 1 }).map((_, idx) => {
-            const gx = idx * factory.gridSizeM;
-            const major = Math.abs(gx % 5) < 0.001;
-            return (
-              <line
-                key={`gx_${idx}`}
-                x1={gx}
-                y1={0}
-                x2={gx}
-                y2={fW}
-                stroke={major ? '#CBD5E1' : '#E2E8F0'}
-                strokeWidth={(major ? 1 : 0.5) / pxPerM}
-                opacity={0.75}
-                style={{ pointerEvents: 'none' }}
-              />
-            );
-          })}
-          {Array.from({ length: Math.floor(fW / factory.gridSizeM) + 1 }).map((_, idx) => {
-            const gz = idx * factory.gridSizeM;
-            const major = Math.abs(gz % 5) < 0.001;
-            return (
-              <line
-                key={`gz_${idx}`}
-                x1={0}
-                y1={gz}
-                x2={fL}
-                y2={gz}
-                stroke={major ? '#CBD5E1' : '#E2E8F0'}
-                strokeWidth={(major ? 1 : 0.5) / pxPerM}
-                opacity={0.75}
-                style={{ pointerEvents: 'none' }}
-              />
-            );
-          })}
+          {layersVisible.grid !== false && (
+            <>
+              {Array.from({ length: Math.floor(fL / Math.max(0.1, factory.gridSizeM)) + 1 }).map((_, idx) => {
+                const gx = idx * factory.gridSizeM;
+                const major = Math.abs(gx % 5) < 0.001;
+                return (
+                  <line
+                    key={`gx_${idx}`}
+                    x1={gx}
+                    y1={0}
+                    x2={gx}
+                    y2={fW}
+                    stroke={major ? '#CBD5E1' : '#E2E8F0'}
+                    strokeWidth={(major ? 1 : 0.5) / pxPerM}
+                    opacity={0.75}
+                    style={{ pointerEvents: 'none' }}
+                  />
+                );
+              })}
+              {Array.from({ length: Math.floor(fW / Math.max(0.1, factory.gridSizeM)) + 1 }).map((_, idx) => {
+                const gz = idx * factory.gridSizeM;
+                const major = Math.abs(gz % 5) < 0.001;
+                return (
+                  <line
+                    key={`gz_${idx}`}
+                    x1={0}
+                    y1={gz}
+                    x2={fL}
+                    y2={gz}
+                    stroke={major ? '#CBD5E1' : '#E2E8F0'}
+                    strokeWidth={(major ? 1 : 0.5) / pxPerM}
+                    opacity={0.75}
+                    style={{ pointerEvents: 'none' }}
+                  />
+                );
+              })}
+            </>
+          )}
 
           {/* Factory Zones */}
           {layersVisible.zones &&
@@ -918,24 +1030,53 @@ export const Workspace2D: React.FC = () => {
               );
             })}
 
-          {/* Live Simulated Products in transit / stations */}
+          {/* Live Simulated Products & Grouped Pallet/Batch Carriers in transit / stations */}
           {simSnapshot.products.map((ent) => {
             const pDef = project.products.find((p) => p.id === ent.productId) || project.products[0];
-            const pw = Math.max(0.32, Math.min(0.85, pDef?.dimensions.length || 0.58));
-            const pd = Math.max(0.24, Math.min(0.65, pDef?.dimensions.width || 0.42));
+            const isBatch = Boolean(ent.isBatchCarrier && (ent.batchCount ?? 1) > 1);
+            const isPallet = ent.containerKind === 'pallet';
+            const pw = isBatch
+              ? isPallet
+                ? 0.96
+                : 0.76
+              : Math.max(0.32, Math.min(0.85, pDef?.dimensions.length || 0.58));
+            const pd = isBatch
+              ? isPallet
+                ? 0.78
+                : 0.58
+              : Math.max(0.24, Math.min(0.65, pDef?.dimensions.width || 0.42));
+            const fillColor = isBatch
+              ? isPallet
+                ? '#B45309'
+                : '#D97706'
+              : ent.locationKind === 'conveyor'
+              ? '#DC2626'
+              : '#2563EB';
             return (
               <g
                 key={ent.id}
                 transform={`translate(${ent.worldPosition.x}, ${ent.worldPosition.z})`}
                 style={{ pointerEvents: 'none' }}
               >
+                {isBatch && (
+                  <rect
+                    x={-pw / 2 - 0.05}
+                    y={-pd / 2 - 0.05}
+                    width={pw + 0.1}
+                    height={pd + 0.1}
+                    rx={0.07}
+                    fill="none"
+                    stroke="#F59E0B"
+                    strokeWidth={1.6 / pxPerM}
+                  />
+                )}
                 <rect
                   x={-pw / 2}
                   y={-pd / 2}
                   width={pw}
                   height={pd}
                   rx={0.05}
-                  fill={ent.locationKind === 'conveyor' ? '#DC2626' : '#2563EB'}
+                  fill={fillColor}
                   stroke="#FFFFFF"
                   strokeWidth={1.3 / pxPerM}
                 />
@@ -943,11 +1084,11 @@ export const Workspace2D: React.FC = () => {
                   y={0.04}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fontSize={0.19}
+                  fontSize={isBatch ? 0.2 : 0.19}
                   fill="#FFFFFF"
                   fontWeight={700}
                 >
-                  #{ent.serialNumber}
+                  {isBatch ? ent.batchLabel || `×${ent.batchCount}` : `#${ent.serialNumber}`}
                 </text>
               </g>
             );

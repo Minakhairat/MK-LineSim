@@ -136,6 +136,9 @@ export const LayoutModule: React.FC = () => {
   const setToast = useAppStore((s) => s.setToast);
   const autoWireForSimulation = useAppStore((s) => s.autoWireForSimulation);
   const startSimulation = useAppStore((s) => s.startSimulation);
+  const layersVisible = useAppStore((s) => s.layersVisible);
+  const toggleLayerVisibility = useAppStore((s) => s.toggleLayerVisibility);
+  const updateFactory = useAppStore((s) => s.updateFactory);
 
   const t = getT(language);
   const isAr = language === 'ar';
@@ -513,6 +516,64 @@ export const LayoutModule: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Grid Settings Section */}
+      <section className="flex flex-col gap-2.5 border-t border-neutral-200 dark:border-neutral-800 pt-3 min-w-0">
+        <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+          {t.layout.gridSettings}
+        </h3>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex items-center gap-2 rounded border border-neutral-200 dark:border-neutral-800 px-2.5 py-1.5 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
+            <input
+              type="checkbox"
+              checked={layersVisible.grid !== false}
+              onChange={() => toggleLayerVisibility('grid')}
+            />
+            <span className="text-[11px] font-medium truncate">{t.layout.showGrid}</span>
+          </label>
+          <label className="flex items-center gap-2 rounded border border-neutral-200 dark:border-neutral-800 px-2.5 py-1.5 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
+            <input
+              type="checkbox"
+              checked={project.factory.snapToGrid}
+              onChange={(e) => updateFactory({ snapToGrid: e.target.checked })}
+            />
+            <span className="text-[11px] font-medium truncate">{t.layout.snapToGrid}</span>
+          </label>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-neutral-500">{t.layout.gridSpacing}</span>
+          <div className="flex items-center gap-1">
+            {[0.25, 0.5, 1, 2].map((stepVal) => (
+              <button
+                key={stepVal}
+                type="button"
+                onClick={() => updateFactory({ gridSizeM: stepVal })}
+                className={`rounded px-1.5 py-0.5 text-[10px] font-mono-tabular border transition-colors ${
+                  Math.abs(project.factory.gridSizeM - stepVal) < 0.001
+                    ? 'border-red-600 bg-red-600 text-white'
+                    : 'border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                }`}
+              >
+                {stepVal}m
+              </button>
+            ))}
+            <input
+              type="number"
+              min={0.1}
+              max={10}
+              step={0.1}
+              value={project.factory.gridSizeM}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                if (!Number.isNaN(v) && v >= 0.1) {
+                  updateFactory({ gridSizeM: Math.min(10, v) });
+                }
+              }}
+              className="w-14 rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-1.5 py-0.5 text-[11px] font-mono-tabular text-end"
+            />
+          </div>
+        </div>
+      </section>
 
       {/* Placed Floor Equipment List (Edit / Select & Delete) */}
       <section className="flex flex-col gap-2 border-t border-neutral-200 dark:border-neutral-800 pt-3 min-w-0">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Copy, Pencil, Play, Plus, Trash2 } from 'lucide-react';
+import { Copy, Maximize2, Minimize2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { applyScenarioOverrides, runSimulationInWorker } from '../../simulation/workerClient';
 import { ScenarioRecord } from '../../types/project';
@@ -13,6 +13,8 @@ export const ScenariosModule: React.FC = () => {
   const updateScenario = useAppStore((s) => s.updateScenario);
   const updateScenarioResult = useAppStore((s) => s.updateScenarioResult);
   const deleteScenario = useAppStore((s) => s.deleteScenario);
+  const isFullscreen = useAppStore((s) => s.isFullscreen);
+  const toggleFullscreen = useAppStore((s) => s.toggleFullscreen);
   const setToast = useAppStore((s) => s.setToast);
 
   const t = getT(language);
@@ -137,11 +139,26 @@ export const ScenariosModule: React.FC = () => {
   return (
     <div className="h-full overflow-y-auto bg-neutral-50 dark:bg-neutral-950 p-6">
       <div className="mx-auto max-w-6xl flex flex-col gap-6">
-        <div className="border-b border-neutral-200 dark:border-neutral-800 pb-4">
-          <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
-            {t.scenarios.title}
-          </h2>
-          <p className="text-xs text-neutral-500">{t.scenarios.subtitle}</p>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 dark:border-neutral-800 pb-4">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
+              {t.scenarios.title}
+            </h2>
+            <p className="text-xs text-neutral-500">{t.scenarios.subtitle}</p>
+          </div>
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? t.actions.exitFullscreen : t.actions.fullscreen}
+            className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs font-medium shrink-0 ${
+              isFullscreen
+                ? 'border-red-600 bg-red-600 text-white'
+                : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+            }`}
+          >
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{isFullscreen ? t.actions.exitFullscreen : t.actions.fullscreen}</span>
+          </button>
         </div>
 
         {/* Scenario Builder */}

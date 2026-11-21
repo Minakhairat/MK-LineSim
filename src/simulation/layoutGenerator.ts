@@ -459,7 +459,7 @@ export function generateAutomaticLineLayout(
       operations: {
         ...tpl.defaultOperations,
         processingTimeSec: input.defaultProcessingTimeSec,
-        requiredOperators: 1,
+        requiredOperators: tpl.kind === 'buffer' ? 0 : tpl.defaultOperations.requiredOperators,
       },
       rendering: { color: tpl.defaultColor, visible: true, locked: false, layer: 'equipment' },
     });
@@ -473,11 +473,11 @@ export function generateAutomaticLineLayout(
       setupTimeSec: 0,
       loadingTimeSec: 0,
       unloadingTimeSec: 0,
-      requiredWorkers: 1,
+      requiredWorkers: tpl.kind === 'buffer' ? 0 : tpl.defaultOperations.requiredOperators,
       requiredMachines: 1,
       inputQty: 1,
       outputQty: 1,
-      scrapRate: 0.005,
+      scrapRate: 0,
       reworkProbability: 0,
       bufferCapacity: 4,
       predecessorIds: i > 0 ? [stageIds[i - 1]] : [],

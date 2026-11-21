@@ -217,6 +217,7 @@ export function createDesertAirCoolerProject(): ProjectData {
       requiredOperators: s.workers,
       mtbfSec: 18000,
       mttrSec: 300,
+      ...(s.id === 'stg_7_packing' ? { batchSize: 4, batchMode: 'collect_batch' as const } : {}),
     },
     rendering: {
       color:
@@ -400,6 +401,7 @@ export function createDesertAirCoolerProject(): ProjectData {
     successorIds: idx < stageSpecs.length - 1 ? [stageSpecs[idx + 1].id] : [],
     assignedObjectIds: [`obj_st_${idx + 1}`],
     conveyorObjectId: mainConveyorId,
+    ...(s.id === 'stg_7_packing' ? { batchSize: 4, batchMode: 'collect_batch' as const } : {}),
   }));
 
   // 10 Workers assigned across the 8 stations (Stage 3 & Stage 5 get 2 workers each to balance 60s & 40s ops)

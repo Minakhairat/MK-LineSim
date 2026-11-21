@@ -182,6 +182,8 @@ export interface OperationalProps {
   mtbfSec?: number; // mean time between failures (optional)
   mttrSec?: number; // mean time to repair
   operatingSchedule?: string;
+  batchSize?: number; // number of items grouped per machine/pallet cycle (>=1)
+  batchMode?: 'single' | 'collect_batch' | 'unbatch';
 }
 
 export interface RenderingProps {
@@ -270,6 +272,8 @@ export interface ProductionStage {
   assignedObjectIds: string[]; // stations/machines executing this stage
   conveyorObjectId?: string;   // optional conveyor carrying units out of this stage
   flowPos?: { x: number; y: number };
+  batchSize?: number; // items grouped into 1 batch/pallet per cycle (>=1)
+  batchMode?: 'single' | 'collect_batch' | 'unbatch';
 }
 
 export interface ProductionRoute {
@@ -372,6 +376,11 @@ export interface ProductEntityState {
   waitingTimeSec: number;
   processingTimeSec: number;
   transportTimeSec: number;
+  batchCount?: number; // number of individual product items carried by this entity (>=1)
+  isBatchCarrier?: boolean;
+  containerKind?: 'pallet' | 'carton' | 'pack';
+  batchLabel?: string;
+  absorbedIntoEntityId?: string;
 }
 
 export interface ObjectRuntimeState {
@@ -422,6 +431,26 @@ export interface StageAnalytics {
   starvedPct: number;
   downPct: number;
   isBottleneck: boolean;
+  batchesCompleted?: number;
+  batchSize?: number;
+  configuredCycleTimeSec?: number;
+  effectiveTheoreticalUnitCycleSec?: number;
+  theoreticalCapacityPerHour?: number;
+  actualCapacityPerHour?: number;
+  cycleDeviationSec?: number;
+  cycleDeviationPct?: number;
+  bottleneckReasonCode?:
+    | 'balanced'
+    | 'user_cycle_bottleneck'
+    | 'worker_walk'
+    | 'worker_starvation'
+    | 'downstream_blocked'
+    | 'upstream_starved'
+    | 'downtime'
+    | 'batch_accumulation'
+    | 'conveyor_saturation';
+  bottleneckReasonDetail?: string;
+  bottleneckReasonDetailAr?: string;
 }
 
 export interface HourlyProductionPoint {
@@ -471,6 +500,13 @@ export interface SimulationKPIs {
   avgBufferOccupancyPct: number;
   totalStarvedTimeSec: number;
   totalBlockedTimeSec: number;
+  theoreticalThroughputPerHour?: number;
+  throughputVariancePct?: number;
+  theoreticalBottleneckStageId?: string;
+  theoreticalBottleneckStageName?: string;
+  theoreticalBottleneckCycleSec?: number;
+  totalBatchesCompleted?: number;
+  avgBatchSize?: number;
 }
 
 export interface SimulationResult {
@@ -484,6 +520,13 @@ export interface SimulationResult {
   totalEventsExecuted: number;
 }
 
+export interface StageBatchSnapshot {
+  stageId: string;
+  bufferedItems: number;
+  targetBatchSize: number;
+  activeBatchEntities: number;
+}
+
 export interface SimulationSnapshot {
   status: 'idle' | 'running' | 'paused' | 'completed';
   clockSec: number;
@@ -492,6 +535,7 @@ export interface SimulationSnapshot {
   objects: Record<string, ObjectRuntimeState>;
   workers: Record<string, WorkerRuntimeState>;
   products: ProductEntityState[];
+  stageBatches?: Record<string, StageBatchSnapshot>;
   recentEvents: SimEvent[];
   totalEventsExecuted: number;
   result?: SimulationResult;

@@ -67,19 +67,20 @@ export function applyScenarioOverrides(
   }
 
   // Adjust processing time scale & buffer capacities
-  const scale = Math.max(0.2, overrides.processingTimeScale);
+  const scale = Math.max(0.1, overrides.processingTimeScale);
   for (const st of cloned.stages) {
-    st.processingTimeSec = Math.max(1, Math.round(st.processingTimeSec * scale * 10) / 10);
+    st.processingTimeSec =
+      st.processingTimeSec === 0 ? 0 : Math.max(0.05, Math.round(st.processingTimeSec * scale * 100) / 100);
     st.bufferCapacity = Math.max(1, overrides.bufferCapacity);
   }
   for (const obj of cloned.layoutObjects) {
     if (obj.kind === 'conveyor') {
       obj.operations.speedMps = Math.max(0.01, overrides.conveyorSpeedMps);
     } else if (obj.kind === 'machine' || obj.kind === 'workstation') {
-      obj.operations.processingTimeSec = Math.max(
-        1,
-        Math.round(obj.operations.processingTimeSec * scale * 10) / 10
-      );
+      obj.operations.processingTimeSec =
+        obj.operations.processingTimeSec === 0
+          ? 0
+          : Math.max(0.05, Math.round(obj.operations.processingTimeSec * scale * 100) / 100);
     }
   }
 

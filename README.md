@@ -8,7 +8,7 @@ Industrial Layout Design, Digital Factory Modeling & Real-Time Discrete-Event Pr
 - **Discrete Event Simulation (DES) Engine**: Deterministic min-heap priority queue running in a Web Worker, enforcing finite buffers, conveyor spacing/speed, worker travel times, shift breaks, and optional machine breakdowns.
 - **Factory & Automatic Line Layout Generator**: Supports Straight, U-Shaped, L-Shaped, Parallel, and Loop production lines with constraint checking.
 - **Offline-First Persistence**: IndexedDB project and custom equipment storage + versioned JSON import/export.
-- **Analytics, What-If Scenarios & Reports**: Chart.js dashboards, side-by-side scenario testing, PDF engineering reports, 3D PNG snapshots, and CSV event traces.
+- **Analytics, What-If Scenarios, CAD & Reports**: Chart.js dashboards, side-by-side scenario testing, 2D AutoCAD DXF, 3D SolidWorks/Autodesk Inventor STL & OBJ CAD exports, PDF engineering reports, 3D PNG snapshots, and CSV event traces.
 - **Bilingual UI**: Full English (LTR) and Arabic (RTL) interface with Light & Dark themes.
 
 ## Local Development
@@ -31,4 +31,4 @@ npm run build
 3. The included `.github/workflows/deploy.yml` workflow builds `dist/` and publishes the app automatically on every push to `main`.
 
 ---
-© 2026 **MK Tech**. All rights reserved.
+© 2026 **MK Tech — MK LineSim**. Eng. Mina Khairat. All rights reserved.

@@ -584,9 +584,28 @@ export function buildWorkerGroup(colorHex = '#1D4ED8'): {
   return { group, vestMesh };
 }
 
-export function buildProductGroup(product: ProductDefinition): THREE.Group {
+export function buildProductGroup(
+  product: ProductDefinition,
+  overrideShape?: ProductDefinition['modelShape']
+): THREE.Group {
   const group = new THREE.Group();
-  const { length: L, width: W, height: H } = product.dimensions;
+  const baseL = product.dimensions.length;
+  const baseW = product.dimensions.width;
+  const baseH = product.dimensions.height;
+  const shape = overrideShape || product.modelShape;
+  const L =
+    overrideShape === 'wrapped_pallet' || overrideShape === 'pallet_wood'
+      ? Math.max(baseL, 1.05)
+      : overrideShape === 'carton_box'
+      ? Math.max(baseL, 0.72)
+      : baseL;
+  const W =
+    overrideShape === 'wrapped_pallet' || overrideShape === 'pallet_wood'
+      ? Math.max(baseW, 0.85)
+      : overrideShape === 'carton_box'
+      ? Math.max(baseW, 0.56)
+      : baseW;
+  const H = overrideShape === 'wrapped_pallet' ? Math.max(baseH, 0.95) : baseH;
   const bodyMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(product.color || '#E2E8F0'),
     roughness: 0.45,
@@ -606,8 +625,6 @@ export function buildProductGroup(product: ProductDefinition): THREE.Group {
   const hdpeMat = new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.36, metalness: 0.08 });
   const cartonMat = new THREE.MeshStandardMaterial({ color: 0xc28b53, roughness: 0.8, metalness: 0.02 });
   const tapeMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.5, metalness: 0.05 });
-
-  const shape = product.modelShape;
 
   if (shape === 'air_cooler') {
     group.add(createBoxPart(L, H * 0.28, W, grilleMat, 0, H * 0.14, 0));

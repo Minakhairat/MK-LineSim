@@ -95,13 +95,13 @@ export const BottomSimPanel: React.FC = () => {
       )}
 
       {/* Primary Controls Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-2.5 sm:px-4 py-1.5 sm:py-2">
         {/* Simulation transport buttons */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
           {simSnapshot.status === 'idle' || simSnapshot.status === 'completed' ? (
             <button
               onClick={startSimulation}
-              className="flex items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 whitespace-nowrap shrink-0"
+              className="flex items-center gap-1 rounded bg-red-600 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 whitespace-nowrap shrink-0"
             >
               <Play className="w-3.5 h-3.5" />
               <span>{t.actions.start}</span>
@@ -109,7 +109,7 @@ export const BottomSimPanel: React.FC = () => {
           ) : simSnapshot.status === 'running' ? (
             <button
               onClick={pauseSimulation}
-              className="flex items-center gap-1.5 rounded bg-neutral-900 dark:bg-neutral-100 px-3 py-1.5 text-xs font-medium text-white dark:text-neutral-900 whitespace-nowrap shrink-0"
+              className="flex items-center gap-1 rounded bg-neutral-900 dark:bg-neutral-100 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-white dark:text-neutral-900 whitespace-nowrap shrink-0"
             >
               <Pause className="w-3.5 h-3.5" />
               <span>{t.actions.pause}</span>
@@ -117,7 +117,7 @@ export const BottomSimPanel: React.FC = () => {
           ) : (
             <button
               onClick={resumeSimulation}
-              className="flex items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 whitespace-nowrap shrink-0"
+              className="flex items-center gap-1 rounded bg-red-600 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 whitespace-nowrap shrink-0"
             >
               <Play className="w-3.5 h-3.5" />
               <span>{t.actions.resume}</span>
@@ -127,7 +127,7 @@ export const BottomSimPanel: React.FC = () => {
           <button
             onClick={stepSimulationEvent}
             title={t.actions.step}
-            className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 px-2.5 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+            className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 px-2 sm:px-2.5 py-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
           >
             <StepForward className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">{t.actions.step}</span>
@@ -153,26 +153,27 @@ export const BottomSimPanel: React.FC = () => {
           <button
             onClick={() => runFullShiftSimulation()}
             disabled={simWorkerBusy}
-            className="flex items-center gap-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 px-2.5 py-1.5 text-xs font-medium text-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 whitespace-nowrap shrink-0"
+            title={t.actions.runFullShift}
+            className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 px-2 sm:px-2.5 py-1.5 text-xs font-medium text-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 whitespace-nowrap shrink-0"
           >
             <FastForward className="w-3.5 h-3.5 text-red-600" />
-            <span>{simWorkerBusy ? t.actions.computing : t.actions.runFullShift}</span>
+            <span className="hidden md:inline">{simWorkerBusy ? t.actions.computing : t.actions.runFullShift}</span>
           </button>
 
           {needsAutoWire && (
             <button
               onClick={() => autoWireForSimulation()}
-              className="flex items-center gap-1 rounded border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-2.5 py-1.5 text-xs font-medium text-red-700 dark:text-red-300 hover:bg-red-100 whitespace-nowrap shrink-0"
+              className="flex items-center gap-1 rounded border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-2 py-1.5 text-xs font-medium text-red-700 dark:text-red-300 hover:bg-red-100 whitespace-nowrap shrink-0"
             >
               <Link2 className="w-3.5 h-3.5" />
-              <span>{t.actions.autoWire}</span>
+              <span className="hidden sm:inline">{t.actions.autoWire}</span>
             </button>
           )}
 
           <select
             value={project.simulationConfig.speedMultiplier}
             onChange={(e) => updateSimConfig({ speedMultiplier: Number(e.target.value) })}
-            className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1.5 text-xs font-mono-tabular"
+            className="rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 sm:px-2 py-1.5 text-xs font-mono-tabular"
             title={t.labels.speedMultiplier}
           >
             <option value={1}>{language === 'ar' ? '1× حقيقي' : '1× Real'}</option>
@@ -185,17 +186,17 @@ export const BottomSimPanel: React.FC = () => {
         </div>
 
         {/* Timeline Scrub / Clock */}
-        <div className="flex flex-1 items-center gap-3 min-w-[200px] max-w-md">
-          <span className="text-xs font-mono-tabular text-neutral-700 dark:text-neutral-200 whitespace-nowrap">
+        <div className="flex flex-1 items-center gap-2 sm:gap-3 min-w-[140px] max-w-md">
+          <span className="text-[11px] sm:text-xs font-mono-tabular text-neutral-700 dark:text-neutral-200 whitespace-nowrap">
             {formatDuration(simSnapshot.clockSec)} / {formatDuration(duration)}
           </span>
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800 hidden xs:block sm:block">
             <div
               className="h-full bg-red-600 transition-all duration-150"
               style={{ width: `${progressPct}%` }}
             />
           </div>
-          <span className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400 whitespace-nowrap">
+          <span className="hidden sm:inline text-[11px] font-medium text-neutral-600 dark:text-neutral-400 whitespace-nowrap">
             {simSnapshot.onBreak
               ? t.simStatus.onBreak
               : t.simStatus[simSnapshot.status] || simSnapshot.status}
@@ -203,8 +204,8 @@ export const BottomSimPanel: React.FC = () => {
         </div>
 
         {/* Live KPI summary & Event Log Toggle */}
-        <div className="flex items-center gap-4 text-xs font-mono-tabular">
-          <div className="flex items-center gap-3 text-neutral-700 dark:text-neutral-300">
+        <div className="flex items-center gap-2 sm:gap-4 text-xs font-mono-tabular">
+          <div className="flex items-center gap-2 sm:gap-3 text-neutral-700 dark:text-neutral-300">
             <span>
               {t.labels.good}: <strong className="text-neutral-950 dark:text-white">{kpis?.goodUnits ?? 0}</strong>
             </span>
@@ -219,10 +220,11 @@ export const BottomSimPanel: React.FC = () => {
           </div>
           <button
             onClick={() => setLogOpen(!logOpen)}
-            className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 px-2.5 py-1 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+            className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 px-2 py-1 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
           >
             {logOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
-            <span>{t.labels.events} ({simSnapshot.totalEventsExecuted})</span>
+            <span className="hidden sm:inline">{t.labels.events}</span>
+            <span>({simSnapshot.totalEventsExecuted})</span>
           </button>
         </div>
       </div>

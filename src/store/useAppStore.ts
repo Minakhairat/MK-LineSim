@@ -44,6 +44,14 @@ import {
   saveProjectToDb,
 } from '../storage/indexedDb';
 import { uid } from '../utils/units';
+import {
+  export2DFactoryDxf,
+  export3DFactoryObj,
+  export3DFactoryStep,
+  export3DFactoryStl,
+} from '../utils/cadExporter';
+
+export type CadExportFormat = 'dxf' | 'step' | 'stl' | 'obj';
 
 interface SelectionState {
   ids: string[];
@@ -66,6 +74,7 @@ interface AppState {
   visualVariant: VisualVariant;
   measureMode: boolean;
   isFullscreen: boolean;
+  heatmapOverlayEnabled: boolean;
   layersVisible: Record<string, boolean>;
 
   theme: AppTheme;
@@ -99,6 +108,8 @@ interface AppState {
   setMeasureMode: (on: boolean) => void;
   toggleFullscreen: () => void;
   setFullscreen: (on: boolean) => void;
+  setHeatmapOverlayEnabled: (on: boolean) => void;
+  toggleHeatmapOverlay: () => void;
   toggleLayerVisibility: (layer: string) => void;
 
   // Selection & clipboard
@@ -117,6 +128,7 @@ interface AppState {
   renameProjectById: (id: string, name: string, factoryName: string) => Promise<void>;
   deleteProjectById: (id: string) => Promise<void>;
   importProjectJson: (rawText: string) => Promise<boolean>;
+  exportProjectCad: (format: CadExportFormat) => boolean;
 
   // Mutators with undo history
   commitProjectEdit: (updater: (draft: ProjectData) => void, skipHistory?: boolean) => void;
@@ -203,6 +215,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   visualVariant: 'realistic',
   measureMode: false,
   isFullscreen: false,
+  heatmapOverlayEnabled: false,
   layersVisible: {
     zones: true,
     columns: true,
@@ -214,6 +227,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     workers: true,
     dimensions: true,
     flowArrows: true,
+    grid: true,
   },
 
   theme: 'light',
@@ -305,6 +319,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setMeasureMode: (measureMode) => set({ measureMode }),
   toggleFullscreen: () => set((s) => ({ isFullscreen: !s.isFullscreen })),
   setFullscreen: (isFullscreen) => set({ isFullscreen }),
+  setHeatmapOverlayEnabled: (heatmapOverlayEnabled) => set({ heatmapOverlayEnabled }),
+  toggleHeatmapOverlay: () => set((s) => ({ heatmapOverlayEnabled: !s.heatmapOverlayEnabled })),
   toggleLayerVisibility: (layer) =>
     set((s) => ({
       layersVisible: { ...s.layersVisible, [layer]: !s.layersVisible[layer] },
@@ -603,6 +619,57 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  exportProjectCad: (format) => {
+    const { project, language, setToast } = get();
+    const isAr = language === 'ar';
+    try {
+      if (format === 'dxf') {
+        export2DFactoryDxf(project);
+        setToast(
+          isAr
+            ? 'تم تصدير رسم أوتوكاد 2D (DXF) جاهز لـ AutoCAD و Inventor و SolidWorks'
+            : 'Exported 2D AutoCAD DXF layout (meters)',
+          'success'
+        );
+      } else if (format === 'step') {
+        export3DFactoryStep(project);
+        setToast(
+          isAr
+            ? 'تم تصدير تجميع 3D STEP (AP214 بالمم) جاهز لـ SolidWorks و Autodesk Inventor'
+            : 'Exported 3D STEP AP214 CAD assembly (millimeters, Z-up)',
+          'success'
+        );
+      } else if (format === 'stl') {
+        export3DFactoryStl(project);
+        setToast(
+          isAr
+            ? 'تم تصدير مجسم 3D STL (بالمم) جاهز لـ SolidWorks و Inventor و AutoCAD'
+            : 'Exported 3D Binary STL CAD model (millimeters, Z-up)',
+          'success'
+        );
+      } else if (format === 'obj') {
+        export3DFactoryObj(project);
+        setToast(
+          isAr
+            ? 'تم تصدير تجميع 3D OBJ بمجموعات الماكينات والسيور'
+            : 'Exported 3D Wavefront OBJ grouped CAD assembly (meters)',
+          'success'
+        );
+      }
+      return true;
+    } catch (err) {
+      setToast(
+        err instanceof Error
+          ? err.message
+          : isAr
+          ? 'فشل تصدير ملف CAD'
+          : 'Failed to export CAD file',
+        'error'
+      );
+      return false;
+    }
+  },
+
   commitProjectEdit: (updater, skipHistory = false) => {
     const prev = get().project;
     const next = structuredClone(prev);
@@ -742,6 +809,12 @@ export const useAppStore = create<AppState>((set, get) => ({
             }
             if (partial.operations.requiredOperators !== undefined) {
               st.requiredWorkers = partial.operations.requiredOperators;
+            }
+            if (partial.operations.batchSize !== undefined) {
+              st.batchSize = partial.operations.batchSize;
+            }
+            if (partial.operations.batchMode !== undefined) {
+              st.batchMode = partial.operations.batchMode;
             }
           }
         }
@@ -923,6 +996,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (partial.loadingTimeSec !== undefined) obj.operations.loadingTimeSec = partial.loadingTimeSec;
         if (partial.unloadingTimeSec !== undefined) obj.operations.unloadingTimeSec = partial.unloadingTimeSec;
         if (partial.requiredWorkers !== undefined) obj.operations.requiredOperators = partial.requiredWorkers;
+        if (partial.batchSize !== undefined) obj.operations.batchSize = partial.batchSize;
+        if (partial.batchMode !== undefined) obj.operations.batchMode = partial.batchMode;
       }
       if (partial.successorIds !== undefined || partial.assignedObjectIds !== undefined) {
         syncStagePredecessorsAndObjectLinks(draft);

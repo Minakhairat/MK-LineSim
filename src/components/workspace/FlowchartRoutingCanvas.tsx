@@ -449,15 +449,15 @@ export const FlowchartRoutingCanvas: React.FC = () => {
           : isAr
           ? 'مرحلة مضافة عبر مخطط التدفق'
           : 'Stage created in Flowchart editor',
-        processingTimeSec: isConv ? 0 : targetObj?.operations.processingTimeSec || 25,
+        processingTimeSec: isConv ? 0 : (targetObj?.operations.processingTimeSec ?? 25),
         setupTimeSec: 0,
         loadingTimeSec: 0,
         unloadingTimeSec: 0,
-        requiredWorkers: isConv || targetObj?.kind === 'buffer' ? 0 : 1,
+        requiredWorkers: isConv || targetObj?.kind === 'buffer' ? 0 : (targetObj?.operations.requiredOperators ?? 1),
         requiredMachines: 1,
         inputQty: 1,
         outputQty: 1,
-        scrapRate: isConv ? 0 : 0.005,
+        scrapRate: 0,
         reworkProbability: 0,
         bufferCapacity: isConv ? 12 : 4,
         predecessorIds: [],
@@ -700,13 +700,13 @@ export const FlowchartRoutingCanvas: React.FC = () => {
       </div>
 
       {/* Main Split: Unlinked Floor Equipment & Conveyors Tray + Flowchart Canvas */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left Resource Tray: Add Conveyors & Floor Machines directly into Flowchart */}
-        <aside className="flex w-52 shrink-0 flex-col border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
-          <div className="border-b border-neutral-200 dark:border-neutral-800 px-3 py-2 text-[11px] font-semibold text-neutral-800 dark:text-neutral-200">
+      <div className="flex flex-1 flex-col sm:flex-row min-h-0 overflow-hidden">
+        {/* Resource Tray: Add Conveyors & Floor Machines directly into Flowchart */}
+        <aside className="flex max-h-32 sm:max-h-none sm:w-52 shrink-0 flex-col border-b sm:border-b-0 sm:border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-hidden">
+          <div className="border-b border-neutral-200 dark:border-neutral-800 px-3 py-1.5 sm:py-2 text-[11px] font-semibold text-neutral-800 dark:text-neutral-200">
             {t.flowchart.floorResources} ({unlinkedResources.length})
           </div>
-          <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1.5">
+          <div className="flex-1 overflow-x-auto sm:overflow-y-auto p-2 flex flex-row sm:flex-col gap-1.5">
             {unlinkedResources.length === 0 ? (
               <div className="rounded border border-dashed border-neutral-200 dark:border-neutral-800 p-2.5 text-[11px] text-neutral-500 leading-relaxed">
                 {t.flowchart.allPlacedInFlow}
@@ -719,7 +719,7 @@ export const FlowchartRoutingCanvas: React.FC = () => {
                     key={obj.id}
                     type="button"
                     onClick={() => handleAddFloorObjectNode(obj.id)}
-                    className="flex flex-col gap-1 rounded border border-neutral-200 dark:border-neutral-800 p-2 text-start hover:border-red-500 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors"
+                    className="flex min-w-[155px] sm:min-w-0 flex-col gap-1 rounded border border-neutral-200 dark:border-neutral-800 p-2 text-start hover:border-red-500 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 transition-colors shrink-0"
                   >
                     <div className="flex items-center justify-between gap-1">
                       <span
@@ -777,6 +777,7 @@ export const FlowchartRoutingCanvas: React.FC = () => {
             >
               {/* SVG Wires Layer */}
               <svg
+                data-linesim-flowchart="true"
                 width={CANVAS_W}
                 height={CANVAS_H}
                 className="absolute inset-0 pointer-events-none"

@@ -356,6 +356,58 @@ export const PropertiesPanel: React.FC = () => {
                 0.01,
                 0.1
               )}
+              {selectedObj.kind !== 'conveyor' && (
+                <>
+                  {numInput(
+                    t.labels.batchSize,
+                    selectedObj.operations.batchSize ?? 1,
+                    false,
+                    (v) => {
+                      const nextBatch = Math.max(1, Math.round(v));
+                      updateLayoutObject(selectedObj.id, {
+                        operations: {
+                          ...selectedObj.operations,
+                          batchSize: nextBatch,
+                          batchMode:
+                            nextBatch > 1
+                              ? selectedObj.operations.batchMode === 'unbatch'
+                                ? 'collect_batch'
+                                : selectedObj.operations.batchMode || 'collect_batch'
+                              : 'single',
+                        },
+                      });
+                    },
+                    1,
+                    1
+                  )}
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400">
+                      {t.labels.batchMode}
+                    </span>
+                    <select
+                      value={selectedObj.operations.batchMode || ((selectedObj.operations.batchSize ?? 1) > 1 ? 'collect_batch' : 'single')}
+                      onChange={(e) => {
+                        const mode = e.target.value as 'single' | 'collect_batch' | 'unbatch';
+                        updateLayoutObject(selectedObj.id, {
+                          operations: {
+                            ...selectedObj.operations,
+                            batchMode: mode,
+                            batchSize:
+                              mode === 'collect_batch'
+                                ? Math.max(2, selectedObj.operations.batchSize ?? 4)
+                                : 1,
+                          },
+                        });
+                      }}
+                      className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-1 text-[11px] text-neutral-900 dark:text-neutral-100 focus:border-red-600 focus:outline-none"
+                    >
+                      <option value="single">{t.labels.batchSingle}</option>
+                      <option value="collect_batch">{t.labels.batchCollect}</option>
+                      <option value="unbatch">{t.labels.batchUnbatch}</option>
+                    </select>
+                  </label>
+                </>
+              )}
             </div>
           </div>
 

@@ -12,6 +12,11 @@ import {
 import { CameraPreset, MachineRuntimeStatus, WorkerRuntimeStatus } from '../../types/project';
 import { snapValue } from '../../utils/units';
 import { getT } from '../../i18n/translations';
+import {
+  computeObjectHeatmapMetrics,
+  HEATMAP_LEGEND_STOPS,
+  resolveHeatmapActiveTimeSec,
+} from '../../simulation/heatmap';
 
 const STATUS_COLORS: Record<MachineRuntimeStatus, number> = {
   running: 0x16a34a,
@@ -50,6 +55,7 @@ export const Workspace3D: React.FC = () => {
   const cameraPreset = useAppStore((s) => s.cameraPreset);
   const visualVariant = useAppStore((s) => s.visualVariant);
   const layersVisible = useAppStore((s) => s.layersVisible);
+  const heatmapOverlayEnabled = useAppStore((s) => s.heatmapOverlayEnabled);
   const theme = useAppStore((s) => s.theme);
   const language = useAppStore((s) => s.language);
   const simSnapshot = useAppStore((s) => s.simSnapshot);
@@ -68,7 +74,9 @@ export const Workspace3D: React.FC = () => {
   const flowGroupRef = useRef<THREE.Group | null>(null);
   const selectionBoxRef = useRef<THREE.BoxHelper | null>(null);
 
-  const objectMeshMap = useRef<Map<string, { group: THREE.Group; beacon?: THREE.Mesh }>>(new Map());
+  const objectMeshMap = useRef<
+    Map<string, { group: THREE.Group; beacon?: THREE.Mesh; heatmapPad?: THREE.Mesh }>
+  >(new Map());
   const workerMeshMap = useRef<Map<string, { group: THREE.Group; vest: THREE.Mesh }>>(new Map());
   const productMeshMap = useRef<Map<string, THREE.Group>>(new Map());
 
@@ -98,6 +106,7 @@ export const Workspace3D: React.FC = () => {
 
     const renderer = new THREE.WebGLRenderer({
       antialias: !isSoftwareGl,
+      preserveDrawingBuffer: true,
       powerPreference: 'high-performance',
     });
     renderer.setSize(width, height);
@@ -107,9 +116,11 @@ export const Workspace3D: React.FC = () => {
     renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.domElement.setAttribute('data-linesim-3d', 'true');
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
+    renderer.domElement.style.touchAction = 'none';
     container.appendChild(renderer.domElement);
 
     // Procedural Studio Environment
@@ -432,11 +443,15 @@ export const Workspace3D: React.FC = () => {
     fg.add(floor);
 
     // Metric grid overlay
-    const gridHelper = new THREE.GridHelper(Math.max(L, W), Math.max(L, W), 0x64748b, 0x94a3b8);
-    gridHelper.position.set(L / 2, 0.005, W / 2);
-    (gridHelper.material as THREE.Material).transparent = true;
-    (gridHelper.material as THREE.Material).opacity = 0.25;
-    fg.add(gridHelper);
+    if (layersVisible.grid !== false) {
+      const span = Math.max(L, W);
+      const divisions = Math.max(4, Math.min(200, Math.round(span / Math.max(0.2, project.factory.gridSizeM || 1))));
+      const gridHelper = new THREE.GridHelper(span, divisions, 0x64748b, 0x94a3b8);
+      gridHelper.position.set(L / 2, 0.005, W / 2);
+      (gridHelper.material as THREE.Material).transparent = true;
+      (gridHelper.material as THREE.Material).opacity = 0.25;
+      fg.add(gridHelper);
+    }
 
     // Perimeter low architectural cutaway walls (back north wall full height, side/front cutaway for clear interior sight)
     const wallMat = new THREE.MeshStandardMaterial({
@@ -507,7 +522,7 @@ export const Workspace3D: React.FC = () => {
         fg.add(zMesh);
       }
     }
-  }, [project.factory, layersVisible.columns, layersVisible.zones, theme]);
+  }, [project.factory, layersVisible.columns, layersVisible.zones, layersVisible.grid, theme]);
 
   // Sync Layout Objects (Machines, Conveyors, Workstations, Racks, Forklifts)
   useEffect(() => {
@@ -741,7 +756,14 @@ export const Workspace3D: React.FC = () => {
       if (!meshGroup) {
         const prodDef = project.products.find((p) => p.id === ent.productId) || defaultProd;
         if (!prodDef) continue;
-        meshGroup = buildProductGroup(prodDef);
+        const carrierShape = ent.isBatchCarrier
+          ? ent.containerKind === 'pallet'
+            ? 'wrapped_pallet'
+            : ent.containerKind === 'pack'
+            ? 'shrink_pack'
+            : 'carton_box'
+          : undefined;
+        meshGroup = buildProductGroup(prodDef, carrierShape);
         pg.add(meshGroup);
         productMeshMap.current.set(ent.id, meshGroup);
       }
@@ -749,16 +771,168 @@ export const Workspace3D: React.FC = () => {
     }
   }, [simSnapshot, project.workers, project.products]);
 
+  // Sync 3D Utilization vs. Downtime Heatmap Overlay onto Floor Equipment
+  useEffect(() => {
+    const activeWindowSec = heatmapOverlayEnabled
+      ? resolveHeatmapActiveTimeSec(
+          project.simulationConfig,
+          project.products[0],
+          simSnapshot.clockSec
+        )
+      : 0;
+    const bottleneckStageId = simSnapshot.result?.kpis.bottleneckStageId;
+
+    const visitMaterials = (
+      mat: THREE.Material | THREE.Material[],
+      cb: (m: THREE.MeshStandardMaterial) => void
+    ) => {
+      const list = Array.isArray(mat) ? mat : [mat];
+      for (const item of list) {
+        if (item instanceof THREE.MeshStandardMaterial) {
+          cb(item);
+        }
+      }
+    };
+
+    for (const [objId, entry] of objectMeshMap.current.entries()) {
+      const obj = project.layoutObjects.find((o) => o.id === objId);
+      const isExcluded = !obj || obj.kind === 'storage' || obj.kind === 'vehicle';
+
+      if (!heatmapOverlayEnabled || isExcluded) {
+        // Restore exact cached original material colors & hide thermal pad
+        entry.group.traverse((child) => {
+          if (child === entry.beacon || child.userData?.isHeatmapPad) return;
+          if (child instanceof THREE.Mesh) {
+            visitMaterials(child.material, (m) => {
+              const orig = m.userData?.__origHeatMat as
+                | { colorHex: number; emissiveHex: number; emissiveIntensity: number }
+                | undefined;
+              if (orig) {
+                m.color.setHex(orig.colorHex);
+                m.emissive.setHex(orig.emissiveHex);
+                m.emissiveIntensity = orig.emissiveIntensity;
+              }
+            });
+          }
+        });
+        if (entry.heatmapPad) {
+          entry.heatmapPad.visible = false;
+        }
+        continue;
+      }
+
+      const stage = project.stages.find(
+        (s) => s.assignedObjectIds.includes(obj.id) || s.id === obj.stageId
+      );
+      const isStageBn = Boolean(stage && bottleneckStageId === stage.id && simSnapshot.clockSec > 0);
+      const heat = computeObjectHeatmapMetrics({
+        obj,
+        runtime: simSnapshot.objects[obj.id],
+        clockSec: simSnapshot.clockSec,
+        activeSimTimeSec: activeWindowSec,
+        isStageBottleneck: isStageBn,
+      });
+
+      const heatColor = new THREE.Color(heat.colorNum);
+      const tintLerp = heat.tier === 'idle' ? 0.25 : 0.56;
+      const emissivePower =
+        heat.tier === 'bottleneck' || heat.tier === 'downtime'
+          ? 0.45
+          : heat.tier === 'idle'
+          ? 0.06
+          : 0.26;
+
+      entry.group.traverse((child) => {
+        if (child === entry.beacon || child.userData?.isHeatmapPad) return;
+        if (child instanceof THREE.Mesh) {
+          visitMaterials(child.material, (m) => {
+            if (!m.userData.__origHeatMat) {
+              m.userData.__origHeatMat = {
+                colorHex: m.color.getHex(),
+                emissiveHex: m.emissive.getHex(),
+                emissiveIntensity: m.emissiveIntensity,
+              };
+            }
+            const orig = m.userData.__origHeatMat as {
+              colorHex: number;
+              emissiveHex: number;
+              emissiveIntensity: number;
+            };
+            m.color.setHex(orig.colorHex).lerp(heatColor, tintLerp);
+            m.emissive.setHex(heat.colorNum);
+            m.emissiveIntensity = emissivePower;
+          });
+        }
+      });
+
+      // Create or update thermal floor outline pad beneath each machine
+      if (!entry.heatmapPad) {
+        const padW = obj.geometry.dimensions.length + 0.45;
+        const padD = obj.geometry.dimensions.width + 0.45;
+        const padGeo = new THREE.PlaneGeometry(padW, padD);
+        const padMat = new THREE.MeshStandardMaterial({
+          color: heat.colorNum,
+          emissive: heat.colorNum,
+          emissiveIntensity: 0.55,
+          transparent: true,
+          opacity: 0.4,
+          roughness: 0.9,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2,
+        });
+        const padMesh = new THREE.Mesh(padGeo, padMat);
+        padMesh.rotation.x = -Math.PI / 2;
+        padMesh.position.set(0, 0.025, 0);
+        padMesh.userData.isHeatmapPad = true;
+        entry.group.add(padMesh);
+        entry.heatmapPad = padMesh;
+      }
+
+      const padMat = entry.heatmapPad.material as THREE.MeshStandardMaterial;
+      padMat.color.setHex(heat.colorNum);
+      padMat.emissive.setHex(heat.colorNum);
+      padMat.emissiveIntensity = heat.tier === 'downtime' || heat.tier === 'bottleneck' ? 0.72 : 0.45;
+      padMat.opacity = heat.tier === 'idle' ? 0.16 : heat.tier === 'downtime' || heat.tier === 'bottleneck' ? 0.52 : 0.36;
+      entry.heatmapPad.visible = true;
+    }
+  }, [
+    heatmapOverlayEnabled,
+    simSnapshot,
+    project.layoutObjects,
+    project.stages,
+    project.products,
+    project.simulationConfig,
+    visualVariant,
+    layersVisible,
+  ]);
+
   return (
-    <div className="relative w-full h-full overflow-hidden bg-slate-200 dark:bg-neutral-950">
-      <div ref={mountRef} className="w-full h-full" />
-      <div className="pointer-events-none absolute top-3 left-3 flex items-center gap-2 rounded bg-neutral-900/80 px-2.5 py-1 text-[11px] font-mono-tabular text-neutral-100">
+    <div className="relative w-full h-full overflow-hidden bg-slate-200 dark:bg-neutral-950 touch-none">
+      <div ref={mountRef} className="w-full h-full touch-none" />
+      <div className="pointer-events-none absolute top-3 left-3 flex items-center gap-2 rounded bg-neutral-900/80 px-2.5 py-1 text-[10px] sm:text-[11px] font-mono-tabular text-neutral-100 max-w-[calc(100%-1.5rem)] truncate">
         <span>{t.labels.viewport3d}</span>
         <span aria-hidden="true">·</span>
         <span>{t.camera[cameraPreset]}</span>
-        <span aria-hidden="true">·</span>
-        <span>{project.factory.lengthM}m × {project.factory.widthM}m × {project.factory.heightM}m</span>
+        <span aria-hidden="true" className="hidden sm:inline">·</span>
+        <span className="hidden sm:inline">{project.factory.lengthM}m × {project.factory.widthM}m × {project.factory.heightM}m</span>
       </div>
+
+      {heatmapOverlayEnabled && (
+        <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex flex-wrap items-center gap-2 rounded bg-neutral-900/85 border border-neutral-700 px-2.5 py-1 text-[10px] text-neutral-100 shadow-sm max-w-[65%]">
+          <span className="font-semibold text-red-400">{t.simInspector.heatmapOn}</span>
+          {HEATMAP_LEGEND_STOPS.map((stop) => (
+            <span key={stop.tier} className="inline-flex items-center gap-1">
+              <span
+                className="h-2 w-2 rounded-sm border border-white/25"
+                style={{ backgroundColor: stop.colorHex }}
+              />
+              {t.simInspector.heatmapLegend[stop.tier]}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

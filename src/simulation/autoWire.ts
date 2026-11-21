@@ -268,6 +268,8 @@ export function importFlowchartToSimulationData(project: ProjectData): {
         primaryObj.operations.unloadingTimeSec = Math.max(0, st.unloadingTimeSec);
         primaryObj.operations.requiredOperators =
           primaryObj.kind === 'buffer' ? 0 : Math.max(0, st.requiredWorkers);
+        if (st.batchSize !== undefined) primaryObj.operations.batchSize = st.batchSize;
+        if (st.batchMode !== undefined) primaryObj.operations.batchMode = st.batchMode;
       }
     }
 
@@ -443,7 +445,7 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
         clearanceM: 0.3,
       },
       operations: {
-        processingTimeSec: 6,
+        processingTimeSec: 0,
         setupTimeSec: 0,
         loadingTimeSec: 0,
         unloadingTimeSec: 0,
@@ -521,21 +523,26 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
       code: `OP-${idx * 10}`,
       name: obj.name,
       description: `Linked operation for ${obj.name}`,
-      processingTimeSec: Math.max(5, obj.operations.processingTimeSec || 25),
+      processingTimeSec: Math.max(0, obj.operations.processingTimeSec ?? 25),
       setupTimeSec: obj.operations.setupTimeSec || 0,
       loadingTimeSec: obj.operations.loadingTimeSec || 0,
       unloadingTimeSec: obj.operations.unloadingTimeSec || 0,
-      requiredWorkers: obj.kind === 'buffer' ? 0 : Math.max(1, obj.operations.requiredOperators || 1),
+      requiredWorkers:
+        obj.kind === 'buffer' || obj.operations.requiredOperators === 0
+          ? 0
+          : Math.max(0, obj.operations.requiredOperators ?? 1),
       requiredMachines: 1,
       inputQty: 1,
       outputQty: 1,
-      scrapRate: 0.005,
+      scrapRate: 0,
       reworkProbability: 0,
       bufferCapacity: 4,
       predecessorIds: [],
       successorIds: [],
       assignedObjectIds: [obj.id],
       conveyorObjectId: nearestConv?.id,
+      ...(obj.operations.batchSize !== undefined ? { batchSize: obj.operations.batchSize } : {}),
+      ...(obj.operations.batchMode !== undefined ? { batchMode: obj.operations.batchMode } : {}),
     };
     obj.stageId = stId;
     draft.stages.push(newStage);

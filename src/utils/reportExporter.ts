@@ -1,0 +1,613 @@
+import { jsPDF } from 'jspdf';
+import { ProjectData, SimulationResult } from '../types/project';
+import { formatDuration } from './units';
+import { downloadBlob, downloadDataUrl, rasterize2DSvgCanvas, sanitizeFilename } from './mediaCapture';
+
+export interface PdfExportOptions {
+  orientation: 'landscape' | 'portrait';
+  paperSize: 'a4' | 'letter';
+  isAr: boolean;
+  lineOnly?: boolean;
+}
+
+const FONT_STACK = '"Segoe UI", "Tahoma", "Cairo", "IBM Plex Sans Arabic", system-ui, sans-serif';
+
+function createReportCanvas(orientation: 'landscape' | 'portrait'): {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  w: number;
+  h: number;
+} {
+  const w = orientation === 'landscape' ? 1754 : 1240;
+  const h = orientation === 'landscape' ? 1240 : 1754;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, w, h);
+  return { canvas, ctx, w, h };
+}
+
+function drawReportChrome(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  project: ProjectData,
+  title: string,
+  isAr: boolean,
+  pageNum = 1,
+  totalPages = 1
+): number {
+  ctx.save();
+  // Dark slate header bar
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, w, 96);
+  ctx.fillStyle = '#dc2626';
+  ctx.fillRect(0, 96, w, 6);
+
+  ctx.direction = isAr ? 'rtl' : 'ltr';
+  ctx.textBaseline = 'middle';
+
+  // Left/Right title
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 28px ${FONT_STACK}`;
+  ctx.textAlign = isAr ? 'right' : 'left';
+  const titleX = isAr ? w - 48 : 48;
+  ctx.fillText(`MK Tech  |  MK LineSim — ${title}`, titleX, 48);
+
+  // Date badge on opposite edge
+  ctx.font = `600 18px ${FONT_STACK}`;
+  ctx.fillStyle = '#cbd5e1';
+  ctx.textAlign = isAr ? 'left' : 'right';
+  const dateX = isAr ? 48 : w - 48;
+  const dateStr = new Date().toLocaleDateString(isAr ? 'ar-EG' : 'en-US');
+  ctx.fillText(`${isAr ? 'التاريخ:' : 'Date:'} ${dateStr}`, dateX, 48);
+
+  // Sub-banner metadata
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 102, w, 54);
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(0, 156);
+  ctx.lineTo(w, 156);
+  ctx.stroke();
+
+  ctx.fillStyle = '#334155';
+  ctx.font = `600 19px ${FONT_STACK}`;
+  ctx.textAlign = isAr ? 'right' : 'left';
+  const metaText = isAr
+    ? `المشروع: ${project.name}   |   المصنع: ${project.factoryName} (${project.factory.lengthM}م × ${project.factory.widthM}م × ${project.factory.heightM}م)`
+    : `Project: ${project.name}   |   Factory: ${project.factoryName} (${project.factory.lengthM}m × ${project.factory.widthM}m × ${project.factory.heightM}m)`;
+  ctx.fillText(metaText, titleX, 130);
+
+  // Footer with Eng. Mina Khairat copyright & support phone
+  ctx.fillStyle = '#f1f5f9';
+  ctx.fillRect(0, h - 54, w, 54);
+  ctx.fillStyle = '#475569';
+  ctx.font = `600 16px ${FONT_STACK}`;
+  ctx.textAlign = isAr ? 'right' : 'left';
+  const copyrightText = isAr
+    ? '© 2026 MK Tech — MK LineSim. جميع الحقوق محفوظة — المهندس مينا خيرت  |  01200224513'
+    : '© 2026 MK Tech — MK LineSim. Eng. Mina Khairat. All Rights Reserved.  |  01200224513';
+  ctx.fillText(copyrightText, titleX, h - 26);
+
+  ctx.textAlign = isAr ? 'left' : 'right';
+  ctx.fillText(
+    isAr ? `صفحة ${pageNum} من ${totalPages}` : `Page ${pageNum} / ${totalPages}`,
+    dateX,
+    h - 26
+  );
+
+  ctx.restore();
+  return 184;
+}
+
+function appendCanvasPagesToPdf(
+  canvases: HTMLCanvasElement[],
+  opts: PdfExportOptions,
+  filename: string
+): void {
+  const doc = new jsPDF({
+    orientation: opts.orientation,
+    unit: 'mm',
+    format: opts.paperSize,
+  });
+  const pw = doc.internal.pageSize.getWidth();
+  const ph = doc.internal.pageSize.getHeight();
+  canvases.forEach((canvas, idx) => {
+    if (idx > 0) doc.addPage();
+    const imgData = canvas.toDataURL('image/png');
+    doc.addImage(imgData, 'PNG', 0, 0, pw, ph, undefined, 'FAST');
+  });
+  doc.save(filename);
+}
+
+function draw2DPlanOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  project: ProjectData,
+  startY: number,
+  canvasW: number,
+  canvasH: number,
+  isAr: boolean,
+  lineOnly: boolean
+) {
+  const fL = project.factory.lengthM;
+  const fW = project.factory.widthM;
+  const padX = 72;
+  const availW = canvasW - padX * 2;
+  const availH = canvasH - startY - 128;
+  const scale = Math.min(availW / fL, availH / fW);
+  const ox = (canvasW - fL * scale) / 2;
+  const oy = startY + (availH - fW * scale) / 2;
+
+  ctx.save();
+
+  // Floor slab
+  ctx.fillStyle = '#ffffff';
+  ctx.strokeStyle = '#0f172a';
+  ctx.lineWidth = 3;
+  ctx.fillRect(ox, oy, fL * scale, fW * scale);
+  ctx.strokeRect(ox, oy, fL * scale, fW * scale);
+
+  // Metric Grid
+  const gStep = Math.max(0.5, project.factory.gridSizeM || 1);
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 1;
+  for (let gx = gStep; gx < fL; gx += gStep) {
+    ctx.beginPath();
+    ctx.moveTo(ox + gx * scale, oy);
+    ctx.lineTo(ox + gx * scale, oy + fW * scale);
+    ctx.stroke();
+  }
+  for (let gz = gStep; gz < fW; gz += gStep) {
+    ctx.beginPath();
+    ctx.moveTo(ox, oy + gz * scale);
+    ctx.lineTo(ox + fL * scale, oy + gz * scale);
+    ctx.stroke();
+  }
+
+  // Zones
+  if (!lineOnly) {
+    for (const z of project.factory.zones) {
+      if (!z.visible) continue;
+      const cx = ox + z.position.x * scale;
+      const cz = oy + z.position.z * scale;
+      const rw = z.dimensions.length * scale;
+      const rh = z.dimensions.width * scale;
+      ctx.save();
+      ctx.translate(cx, cz);
+      ctx.rotate((z.rotationDeg * Math.PI) / 180);
+      ctx.fillStyle = `${z.color || '#64748b'}22`;
+      ctx.strokeStyle = z.color || '#64748b';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.fillRect(-rw / 2, -rh / 2, rw, rh);
+      ctx.strokeRect(-rw / 2, -rh / 2, rw, rh);
+      ctx.setLineDash([]);
+      ctx.fillStyle = z.color || '#475569';
+      ctx.font = `600 14px ${FONT_STACK}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(z.name, 0, 0, rw - 8);
+      ctx.restore();
+    }
+  }
+
+  // Flow connections & arrows
+  for (const obj of project.layoutObjects) {
+    if (!obj.rendering.visible) continue;
+    for (const tid of obj.connectedToIds) {
+      const target = project.layoutObjects.find((o) => o.id === tid && o.rendering.visible);
+      if (!target) continue;
+      const x1 = ox + obj.geometry.position.x * scale;
+      const y1 = oy + obj.geometry.position.z * scale;
+      const x2 = ox + target.geometry.position.x * scale;
+      const y2 = oy + target.geometry.position.z * scale;
+      ctx.save();
+      ctx.strokeStyle = obj.kind === 'conveyor' ? '#16a34a' : '#dc2626';
+      ctx.lineWidth = 2.4;
+      ctx.setLineDash([8, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      const ang = Math.atan2(y2 - y1, x2 - x1);
+      ctx.translate(mx, my);
+      ctx.rotate(ang);
+      ctx.fillStyle = obj.kind === 'conveyor' ? '#16a34a' : '#dc2626';
+      ctx.beginPath();
+      ctx.moveTo(10, 0);
+      ctx.lineTo(-7, -6);
+      ctx.lineTo(-7, 6);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Layout Objects
+  for (const obj of project.layoutObjects) {
+    if (!obj.rendering.visible) continue;
+    if (lineOnly && !obj.productionLineId && !obj.stageId && obj.kind !== 'conveyor') continue;
+    const cx = ox + obj.geometry.position.x * scale;
+    const cz = oy + obj.geometry.position.z * scale;
+    const rw = Math.max(18, obj.geometry.dimensions.length * scale);
+    const rh = Math.max(14, obj.geometry.dimensions.width * scale);
+
+    ctx.save();
+    ctx.translate(cx, cz);
+    ctx.rotate((obj.geometry.rotationDeg * Math.PI) / 180);
+    ctx.fillStyle =
+      obj.kind === 'conveyor'
+        ? '#334155'
+        : obj.kind === 'workstation'
+        ? '#1e3a8a'
+        : obj.kind === 'buffer'
+        ? '#0f766e'
+        : obj.kind === 'storage'
+        ? '#92400e'
+        : '#1e293b';
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2;
+    ctx.fillRect(-rw / 2, -rh / 2, rw, rh);
+    ctx.strokeRect(-rw / 2, -rh / 2, rw, rh);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `600 13px ${FONT_STACK}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(obj.name, 0, 0, rw - 6);
+    ctx.restore();
+  }
+
+  // Workers
+  for (const w of project.workers) {
+    const wx = ox + w.position.x * scale;
+    const wz = oy + w.position.z * scale;
+    ctx.beginPath();
+    ctx.arc(wx, wz, Math.max(10, 0.34 * scale), 0, Math.PI * 2);
+    ctx.fillStyle = w.color || '#1d4ed8';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#ffffff';
+    ctx.stroke();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `bold 11px ${FONT_STACK}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(w.label, wx, wz);
+  }
+
+  // Summary Legend bar
+  ctx.direction = isAr ? 'rtl' : 'ltr';
+  ctx.fillStyle = '#475569';
+  ctx.font = `600 16px ${FONT_STACK}`;
+  ctx.textAlign = 'center';
+  const summary = isAr
+    ? `الأبعاد: ${fL}م × ${fW}م  ·  الشبكة: ${gStep}م  ·  المعدات: ${project.layoutObjects.length}  ·  المراحل: ${project.stages.length}  ·  العمال: ${project.workers.length}`
+    : `Dimensions: ${fL}m × ${fW}m  ·  Grid: ${gStep}m  ·  Equipment: ${project.layoutObjects.length}  ·  Stages: ${project.stages.length}  ·  Operators: ${project.workers.length}`;
+  ctx.fillText(summary, canvasW / 2, oy + fW * scale + 36);
+
+  ctx.restore();
+}
+
+export function export2DFactoryCanvasPdf(project: ProjectData, opts: PdfExportOptions): void {
+  const { canvas, ctx, w, h } = createReportCanvas(opts.orientation);
+  const title = opts.lineOnly
+    ? opts.isAr
+      ? 'مخطط خط الإنتاج الهندسي (2D)'
+      : '2D Production Line Engineering Layout'
+    : opts.isAr
+    ? 'مخطط المصنع الهندسي الكامل (2D)'
+    : '2D Factory Engineering Layout';
+  const startY = drawReportChrome(ctx, w, h, project, title, opts.isAr, 1, 1);
+  draw2DPlanOnCanvas(ctx, project, startY, w, h, opts.isAr, Boolean(opts.lineOnly));
+
+  const suffix = opts.lineOnly ? 'line_2d' : 'factory_2d';
+  appendCanvasPagesToPdf([canvas], opts, `${sanitizeFilename(project.name)}_${suffix}.pdf`);
+}
+
+export async function export2DFactoryPng(project: ProjectData, isAr: boolean): Promise<void> {
+  const liveCanvas = await rasterize2DSvgCanvas(false);
+  if (liveCanvas) {
+    downloadDataUrl(liveCanvas.toDataURL('image/png'), `${sanitizeFilename(project.name)}_2d_layout.png`);
+    return;
+  }
+  const { canvas, ctx, w, h } = createReportCanvas('landscape');
+  const title = isAr ? 'مخطط المصنع ثنائي الأبعاد (2D)' : '2D Factory Layout Snapshot';
+  const startY = drawReportChrome(ctx, w, h, project, title, isAr, 1, 1);
+  draw2DPlanOnCanvas(ctx, project, startY, w, h, isAr, false);
+  canvas.toBlob((blob) => {
+    if (blob) downloadBlob(blob, `${sanitizeFilename(project.name)}_2d_layout.png`);
+  }, 'image/png');
+}
+
+export function exportKpiCanvasPdf(
+  project: ProjectData,
+  result: SimulationResult,
+  opts: PdfExportOptions
+): void {
+  const { isAr } = opts;
+  const k = result.kpis;
+  const rows = result.stageAnalytics;
+
+  const firstPageRowsCap = opts.orientation === 'landscape' ? 8 : 16;
+  const nextPageRowsCap = opts.orientation === 'landscape' ? 14 : 24;
+  const remaining = Math.max(0, rows.length - firstPageRowsCap);
+  const totalPages = 1 + (remaining > 0 ? Math.ceil(remaining / nextPageRowsCap) : 0);
+
+  const pages: HTMLCanvasElement[] = [];
+
+  // Page 1: KPI Cards + Stage Table Head
+  const p1 = createReportCanvas(opts.orientation);
+  const title = isAr ? 'تقرير مؤشرات الأداء وتحليل الاختناقات (KPI)' : 'Simulation KPI & Bottleneck Report';
+  let y = drawReportChrome(p1.ctx, p1.w, p1.h, project, title, isAr, 1, totalPages);
+
+  const ctx = p1.ctx;
+  ctx.save();
+  ctx.direction = isAr ? 'rtl' : 'ltr';
+
+  ctx.fillStyle = '#0f172a';
+  ctx.font = `bold 24px ${FONT_STACK}`;
+  ctx.textAlign = isAr ? 'right' : 'left';
+  const edgeX = isAr ? p1.w - 48 : 48;
+  ctx.fillText(
+    isAr ? 'ملخص مؤشرات الأداء المحسوبة من محرك الأحداث المتقطعة' : 'Executive KPI Summary (Measured from Discrete Event Engine)',
+    edgeX,
+    y + 10
+  );
+  y += 38;
+
+  const kpiCards = [
+    {
+      label: isAr ? 'الوحدات السليمة' : 'Good Units',
+      val: `${k.goodUnits}`,
+      sub: isAr ? `الهالك: ${k.defectiveUnits} · الإجمالي: ${k.actualProduction}` : `Scrap: ${k.defectiveUnits} · Total: ${k.actualProduction}`,
+    },
+    {
+      label: isAr ? 'الإنتاج المخطط ونسبة التحقق' : 'Planned & Attainment',
+      val: `${k.productionAttainmentPct.toFixed(1)}%`,
+      sub: isAr ? `المخطط: ${k.totalPlannedProduction} وحدة` : `Target: ${k.totalPlannedProduction} units`,
+    },
+    {
+      label: isAr ? 'معدل الإنتاج / ساعة' : 'Throughput / Hour',
+      val: `${k.hourlyOutput.toFixed(1)} ${isAr ? 'و/س' : 'u/hr'}`,
+      sub: isAr ? `متوسط الدورة: ${k.avgCycleTimeSec.toFixed(1)}ث` : `Avg Cycle: ${k.avgCycleTimeSec.toFixed(1)}s`,
+    },
+    {
+      label: isAr ? 'مرحلة الاختناق' : 'Bottleneck Stage',
+      val: k.bottleneckStageName || 'N/A',
+      sub: isAr ? `كفاءة الخط: ${k.lineEfficiencyPct.toFixed(1)}%` : `Line Eff: ${k.lineEfficiencyPct.toFixed(1)}%`,
+    },
+    {
+      label: isAr ? 'متوسط زمن التسليم' : 'Avg Lead Time',
+      val: formatDuration(k.avgLeadTimeSec),
+      sub: isAr ? `تشغيل: ${k.avgProcessingTimeSec.toFixed(0)}ث · انتظار: ${k.avgWaitingTimeSec.toFixed(0)}ث` : `Proc: ${k.avgProcessingTimeSec.toFixed(0)}s · Wait: ${k.avgWaitingTimeSec.toFixed(0)}s`,
+    },
+    {
+      label: isAr ? 'استغلال العمال والماكينات' : 'Worker & Machine Util',
+      val: `${k.workerUtilizationPct.toFixed(1)}% / ${k.machineUtilizationPct.toFixed(1)}%`,
+      sub: isAr ? `متوسط تحت التشغيل WIP: ${k.avgWip.toFixed(1)}` : `Average WIP: ${k.avgWip.toFixed(1)} units`,
+    },
+  ];
+
+  const cols = opts.orientation === 'landscape' ? 3 : 2;
+  const cardGap = 18;
+  const cardW = (p1.w - 96 - cardGap * (cols - 1)) / cols;
+  const cardH = 104;
+
+  kpiCards.forEach((c, idx) => {
+    const colIdx = idx % cols;
+    const rowIdx = Math.floor(idx / cols);
+    const visualCol = isAr ? cols - 1 - colIdx : colIdx;
+    const cx = 48 + visualCol * (cardW + cardGap);
+    const cy = y + rowIdx * (cardH + 14);
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(cx, cy, cardW, cardH);
+    ctx.strokeRect(cx, cy, cardW, cardH);
+
+    const textPad = isAr ? cx + cardW - 18 : cx + 18;
+    ctx.textAlign = isAr ? 'right' : 'left';
+    ctx.fillStyle = '#64748b';
+    ctx.font = `600 16px ${FONT_STACK}`;
+    ctx.fillText(c.label, textPad, cy + 26, cardW - 32);
+
+    ctx.fillStyle = idx === 3 ? '#dc2626' : '#0f172a';
+    ctx.font = `bold 24px ${FONT_STACK}`;
+    ctx.fillText(c.val, textPad, cy + 58, cardW - 32);
+
+    ctx.fillStyle = '#475569';
+    ctx.font = `500 15px ${FONT_STACK}`;
+    ctx.fillText(c.sub, textPad, cy + 86, cardW - 32);
+  });
+
+  y += Math.ceil(kpiCards.length / cols) * (cardH + 14) + 28;
+  ctx.restore();
+
+  const drawStageTableSlice = (
+    targetCtx: CanvasRenderingContext2D,
+    pw: number,
+    startTableY: number,
+    slice: typeof rows
+  ) => {
+    targetCtx.save();
+    targetCtx.direction = isAr ? 'rtl' : 'ltr';
+    targetCtx.fillStyle = '#0f172a';
+    targetCtx.font = `bold 22px ${FONT_STACK}`;
+    targetCtx.textAlign = isAr ? 'right' : 'left';
+    targetCtx.fillText(
+      isAr ? 'تحليل أداء مراحل الإنتاج التفصيلي' : 'Stage Performance Breakdown',
+      isAr ? pw - 48 : 48,
+      startTableY
+    );
+
+    const ty = startTableY + 22;
+    const tableW = pw - 96;
+    const weights = [0.28, 0.09, 0.09, 0.08, 0.11, 0.11, 0.08, 0.08, 0.08];
+    const headers = isAr
+      ? ['المرحلة', 'الداخل', 'المكتمل', 'الهالك', 'الدورة (ث)', 'الانتظار (ث)', 'أقصى طابور', 'استغلال%', 'حجب%']
+      : ['Stage', 'Entered', 'Done', 'Scrap', 'Cycle (s)', 'Wait (s)', 'Max Q', 'Util %', 'Blocked %'];
+
+    const rowH = 44;
+    // Header background
+    targetCtx.fillStyle = '#0f172a';
+    targetCtx.fillRect(48, ty, tableW, rowH);
+    targetCtx.fillStyle = '#ffffff';
+    targetCtx.font = `bold 15px ${FONT_STACK}`;
+    targetCtx.textBaseline = 'middle';
+
+    let cursorX = isAr ? pw - 48 : 48;
+    headers.forEach((hdr, i) => {
+      const colW = tableW * weights[i];
+      if (isAr) {
+        targetCtx.textAlign = i === 0 ? 'right' : 'center';
+        targetCtx.fillText(hdr, i === 0 ? cursorX - 12 : cursorX - colW / 2, ty + rowH / 2, colW - 10);
+        cursorX -= colW;
+      } else {
+        targetCtx.textAlign = i === 0 ? 'left' : 'center';
+        targetCtx.fillText(hdr, i === 0 ? cursorX + 12 : cursorX + colW / 2, ty + rowH / 2, colW - 10);
+        cursorX += colW;
+      }
+    });
+
+    slice.forEach((sa, idx) => {
+      const ry = ty + rowH * (idx + 1);
+      targetCtx.fillStyle = sa.isBottleneck ? '#fef2f2' : idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+      targetCtx.fillRect(48, ry, tableW, rowH);
+      targetCtx.strokeStyle = '#e2e8f0';
+      targetCtx.lineWidth = 1;
+      targetCtx.strokeRect(48, ry, tableW, rowH);
+
+      const vals = [
+        sa.isBottleneck ? `${sa.stageName} ★` : sa.stageName,
+        `${sa.enteredCount}`,
+        `${sa.completedCount}`,
+        `${sa.scrapCount}`,
+        `${sa.avgCycleTimeSec.toFixed(1)}`,
+        `${sa.avgWaitTimeSec.toFixed(1)}`,
+        `${sa.maxQueueLength}`,
+        `${sa.utilizationPct.toFixed(1)}%`,
+        `${sa.blockedPct.toFixed(1)}%`,
+      ];
+
+      let cx = isAr ? pw - 48 : 48;
+      vals.forEach((v, i) => {
+        const colW = tableW * weights[i];
+        targetCtx.fillStyle = i === 0 && sa.isBottleneck ? '#dc2626' : '#0f172a';
+        targetCtx.font = i === 0 && sa.isBottleneck ? `bold 15px ${FONT_STACK}` : `500 15px ${FONT_STACK}`;
+        if (isAr) {
+          targetCtx.textAlign = i === 0 ? 'right' : 'center';
+          targetCtx.fillText(v, i === 0 ? cx - 12 : cx - colW / 2, ry + rowH / 2, colW - 10);
+          cx -= colW;
+        } else {
+          targetCtx.textAlign = i === 0 ? 'left' : 'center';
+          targetCtx.fillText(v, i === 0 ? cx + 12 : cx + colW / 2, ry + rowH / 2, colW - 10);
+          cx += colW;
+        }
+      });
+    });
+
+    targetCtx.restore();
+  };
+
+  drawStageTableSlice(ctx, p1.w, y, rows.slice(0, firstPageRowsCap));
+  pages.push(p1.canvas);
+
+  let offset = firstPageRowsCap;
+  let pageIdx = 2;
+  while (offset < rows.length) {
+    const pN = createReportCanvas(opts.orientation);
+    const startY = drawReportChrome(pN.ctx, pN.w, pN.h, project, title, isAr, pageIdx, totalPages);
+    drawStageTableSlice(pN.ctx, pN.w, startY + 12, rows.slice(offset, offset + nextPageRowsCap));
+    pages.push(pN.canvas);
+    offset += nextPageRowsCap;
+    pageIdx++;
+  }
+
+  appendCanvasPagesToPdf(pages, opts, `${sanitizeFilename(project.name)}_kpi_report.pdf`);
+}
+
+export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOptions): void {
+  const { isAr } = opts;
+  const { canvas, ctx, w, h } = createReportCanvas(opts.orientation);
+  const title = isAr ? 'تقرير مقارنة السيناريوهات التشغيلية' : 'What-If Scenario Comparison Report';
+  const startY = drawReportChrome(ctx, w, h, project, title, isAr, 1, 1);
+
+  ctx.save();
+  ctx.direction = isAr ? 'rtl' : 'ltr';
+  const tableW = w - 96;
+  const weights = [0.26, 0.08, 0.1, 0.11, 0.11, 0.11, 0.1, 0.13];
+  const headers = isAr
+    ? ['السيناريو', 'العمال', 'السير م/ث', 'سليم', 'التحقق%', 'زمن التسليم', 'استغلال%', 'الاختناق']
+    : ['Scenario', 'Workers', 'Belt m/s', 'Good', 'Attain %', 'Lead Time', 'Worker %', 'Bottleneck'];
+
+  const rowH = 48;
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(48, startY, tableW, rowH);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `bold 16px ${FONT_STACK}`;
+  ctx.textBaseline = 'middle';
+
+  let cursorX = isAr ? w - 48 : 48;
+  headers.forEach((hdr, i) => {
+    const colW = tableW * weights[i];
+    if (isAr) {
+      ctx.textAlign = i === 0 ? 'right' : 'center';
+      ctx.fillText(hdr, i === 0 ? cursorX - 12 : cursorX - colW / 2, startY + rowH / 2, colW - 10);
+      cursorX -= colW;
+    } else {
+      ctx.textAlign = i === 0 ? 'left' : 'center';
+      ctx.fillText(hdr, i === 0 ? cursorX + 12 : cursorX + colW / 2, startY + rowH / 2, colW - 10);
+      cursorX += colW;
+    }
+  });
+
+  project.scenarios.slice(0, 18).forEach((sc, idx) => {
+    const ry = startY + rowH * (idx + 1);
+    const k = sc.result?.kpis;
+    ctx.fillStyle = sc.isBaseline ? '#fef2f2' : idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+    ctx.fillRect(48, ry, tableW, rowH);
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(48, ry, tableW, rowH);
+
+    const vals = [
+      sc.name,
+      `${sc.overrides.workerCount}`,
+      sc.overrides.conveyorSpeedMps.toFixed(2),
+      k ? `${k.goodUnits}` : isAr ? 'لم يعمل' : 'Not Run',
+      k ? `${k.productionAttainmentPct.toFixed(1)}%` : '-',
+      k ? formatDuration(k.avgLeadTimeSec) : '-',
+      k ? `${k.workerUtilizationPct.toFixed(1)}%` : '-',
+      k?.bottleneckStageName || '-',
+    ];
+
+    let cx = isAr ? w - 48 : 48;
+    vals.forEach((v, i) => {
+      const colW = tableW * weights[i];
+      ctx.fillStyle = '#0f172a';
+      ctx.font = i === 0 ? `bold 15px ${FONT_STACK}` : `500 15px ${FONT_STACK}`;
+      if (isAr) {
+        ctx.textAlign = i === 0 ? 'right' : 'center';
+        ctx.fillText(v, i === 0 ? cx - 12 : cx - colW / 2, ry + rowH / 2, colW - 10);
+        cx -= colW;
+      } else {
+        ctx.textAlign = i === 0 ? 'left' : 'center';
+        ctx.fillText(v, i === 0 ? cx + 12 : cx + colW / 2, ry + rowH / 2, colW - 10);
+        cx += colW;
+      }
+    });
+  });
+
+  ctx.restore();
+  appendCanvasPagesToPdf([canvas], opts, `${sanitizeFilename(project.name)}_scenarios.pdf`);
+}

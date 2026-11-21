@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Boxes,
   CheckCircle2,
   Pencil,
   Play,
@@ -468,6 +469,23 @@ export const ProductsModule: React.FC = () => {
   );
 };
 
+const BULK_CATEGORY_SET = new Set<string>([
+  'pallet_wood_euro',
+  'pallet_wood_std',
+  'pallet_wood_heavy',
+  'pallet_plastic_euro',
+  'pallet_plastic_heavy',
+  'pallet_plastic_compact',
+  'packaging_machine',
+  'stretch_wrapper_turntable',
+  'stretch_wrapper_arm',
+  'shrink_tunnel',
+  'carton_sealer',
+  'strapping_machine',
+  'palletizer_robot',
+  'material_handling',
+]);
+
 export const ProcessesModule: React.FC = () => {
   const project = useAppStore((s) => s.project);
   const language = useAppStore((s) => s.language);
@@ -488,6 +506,24 @@ export const ProcessesModule: React.FC = () => {
   );
   const conveyors = project.layoutObjects.filter((o) => o.rendering.visible && o.kind === 'conveyor');
 
+  const isBulkOrPackingStage = (st: (typeof project.stages)[number]) => {
+    if ((st.batchSize ?? 1) > 1 || st.batchMode === 'collect_batch' || st.batchMode === 'unbatch') {
+      return true;
+    }
+    for (const oid of st.assignedObjectIds) {
+      const obj = project.layoutObjects.find((o) => o.id === oid);
+      if (obj && BULK_CATEGORY_SET.has(obj.category)) return true;
+    }
+    return /pack|pallet|wrap|shrink|strap|carton|تغليف|تعبئة|باليت|رص/i.test(st.name);
+  };
+
+  const bulkStages = project.stages.filter(isBulkOrPackingStage);
+  const nonBulkStages = project.stages.filter((st) => {
+    if (isBulkOrPackingStage(st)) return false;
+    const primaryObj = project.layoutObjects.find((o) => o.id === st.assignedObjectIds[0]);
+    return primaryObj?.kind !== 'conveyor';
+  });
+
   return (
     <div className="flex flex-col gap-4 p-3.5 text-xs w-full min-w-0 overflow-x-hidden">
       <button
@@ -498,6 +534,249 @@ export const ProcessesModule: React.FC = () => {
         <Workflow className="w-3.5 h-3.5 shrink-0" />
         <span className="truncate">{t.flowchart.openEditorBtn}</span>
       </button>
+
+      {/* Batching Controls Section */}
+      <section className="flex flex-col gap-2.5 rounded border border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/15 p-2.5 min-w-0">
+        <div className="flex items-center justify-between gap-1.5 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Boxes className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+            <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+              {t.processes.batchingControls} ({bulkStages.length})
+            </h3>
+          </div>
+        </div>
+        <p className="text-[10px] leading-snug text-neutral-600 dark:text-neutral-400">
+          {t.processes.batchingDesc}
+        </p>
+
+        {nonBulkStages.length > 0 && (
+          <label className="flex flex-col gap-1 min-w-0">
+            <span className="text-[10px] font-medium text-neutral-600 dark:text-neutral-400 truncate">
+              {t.processes.addBulkStage}
+            </span>
+            <select
+              value=""
+              onChange={(e) => {
+                const sid = e.target.value;
+                if (!sid) return;
+                const target = project.stages.find((s) => s.id === sid);
+                if (!target) return;
+                updateStage(sid, {
+                  batchSize: Math.max(4, target.batchSize ?? 4),
+                  batchMode: 'collect_batch',
+                });
+              }}
+              className="w-full min-w-0 rounded border border-amber-300 dark:border-amber-800 bg-white dark:bg-neutral-900 px-1.5 py-1 text-[11px]"
+            >
+              <option value="">{t.processes.selectStagePrompt}</option>
+              {nonBulkStages.map((st) => (
+                <option key={st.id} value={st.id}>
+                  {st.code} {st.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {bulkStages.length === 0 ? (
+          <div className="rounded border border-dashed border-amber-300/80 dark:border-amber-900/50 p-2 text-[10px] text-neutral-600 dark:text-neutral-400">
+            {t.processes.noBulkStages}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 min-w-0">
+            {bulkStages.map((st) => {
+              const primaryObj = project.layoutObjects.find((o) => o.id === st.assignedObjectIds[0]);
+              const batchSize = Math.max(1, Math.round(st.batchSize ?? primaryObj?.operations.batchSize ?? 1));
+              const batchMode = st.batchMode || (batchSize > 1 ? 'collect_batch' : 'single');
+              const parallelCap = Math.max(
+                1,
+                st.assignedObjectIds.reduce((sum, oid) => {
+                  const obj = project.layoutObjects.find((o) => o.id === oid);
+                  return sum + Math.max(1, Number(obj?.operations.capacity || 1));
+                }, 0) || 1
+              );
+              const totalStageCycle =
+                Math.max(0, st.processingTimeSec) +
+                Math.max(0, st.loadingTimeSec) +
+                Math.max(0, st.unloadingTimeSec);
+              const effUnitCycle = totalStageCycle / (parallelCap * batchSize);
+              const bulkHourlyRate = effUnitCycle > 0 ? 3600 / effUnitCycle : 0;
+
+              return (
+                <div
+                  key={`batch_ctrl_${st.id}`}
+                  className="flex flex-col gap-2 rounded border border-amber-300/70 dark:border-amber-900/50 bg-white dark:bg-neutral-900 p-2 min-w-0"
+                >
+                  <div className="flex items-center justify-between gap-1.5 min-w-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-[11px] text-neutral-900 dark:text-neutral-100 truncate">
+                        {st.code} {st.name}
+                      </div>
+                      {primaryObj && (
+                        <div className="text-[10px] text-neutral-500 truncate">
+                          {primaryObj.name}
+                        </div>
+                      )}
+                    </div>
+                    {(batchSize > 1 || batchMode !== 'single') && (
+                      <button
+                        type="button"
+                        onClick={() => updateStage(st.id, { batchSize: 1, batchMode: 'single' })}
+                        className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 font-mono-tabular text-[10px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 shrink-0"
+                        title={t.labels.batchSingle}
+                      >
+                        {t.processes.resetSingle}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Pallet / Batch Group Size */}
+                  <div className="grid grid-cols-2 gap-1.5 min-w-0">
+                    <label className="flex flex-col gap-0.5 min-w-0">
+                      <span className="text-[10px] text-neutral-500 truncate">
+                        {t.processes.palletGroupSize}
+                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={batchSize}
+                        onChange={(e) => {
+                          const next = Math.max(1, Math.min(200, Math.round(Number(e.target.value) || 1)));
+                          updateStage(st.id, {
+                            batchSize: next,
+                            batchMode:
+                              next > 1
+                                ? batchMode === 'unbatch'
+                                  ? 'collect_batch'
+                                  : batchMode === 'single'
+                                  ? 'collect_batch'
+                                  : batchMode
+                                : 'single',
+                          });
+                        }}
+                        className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-1.5 py-1 font-mono-tabular text-[11px]"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-0.5 min-w-0">
+                      <span className="text-[10px] text-neutral-500 truncate">
+                        {t.labels.batchMode}
+                      </span>
+                      <select
+                        value={batchMode}
+                        onChange={(e) => {
+                          const mode = e.target.value as 'single' | 'collect_batch' | 'unbatch';
+                          updateStage(st.id, {
+                            batchMode: mode,
+                            batchSize: mode === 'collect_batch' ? Math.max(2, batchSize) : 1,
+                          });
+                        }}
+                        className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1 py-1 text-[10px]"
+                      >
+                        <option value="collect_batch">{t.labels.batchCollect}</option>
+                        <option value="single">{t.labels.batchSingle}</option>
+                        <option value="unbatch">{t.labels.batchUnbatch}</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  {/* Quick Pallet Size Chips */}
+                  <div className="flex flex-wrap gap-1 min-w-0">
+                    {[1, 4, 6, 8, 12, 24].map((presetSize) => (
+                      <button
+                        key={presetSize}
+                        type="button"
+                        onClick={() =>
+                          updateStage(st.id, {
+                            batchSize: presetSize,
+                            batchMode: presetSize > 1 ? 'collect_batch' : 'single',
+                          })
+                        }
+                        className={`rounded border px-1.5 py-0.5 font-mono-tabular text-[10px] transition-colors ${
+                          batchSize === presetSize
+                            ? 'border-amber-600 bg-amber-600 text-white font-semibold'
+                            : 'border-neutral-300 dark:border-neutral-700 text-neutral-700 dark:text-neutral-300 hover:border-amber-500'
+                        }`}
+                      >
+                        ×{presetSize}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Packing Cycle Adjustment */}
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">
+                      {t.processes.packingCycleAdj}
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1 min-w-0">
+                      <input
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={st.processingTimeSec}
+                        onChange={(e) =>
+                          updateStage(st.id, { processingTimeSec: Math.max(0, Number(e.target.value) || 0) })
+                        }
+                        className="w-16 min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateStage(st.id, { processingTimeSec: Math.max(1, Math.round(st.processingTimeSec - 5)) })
+                        }
+                        className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 font-mono-tabular text-[10px] hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      >
+                        -5s
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateStage(st.id, { processingTimeSec: Math.max(1, Math.round(st.processingTimeSec + 5)) })
+                        }
+                        className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 font-mono-tabular text-[10px] hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      >
+                        +5s
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateStage(st.id, {
+                            processingTimeSec: Math.max(1, Number((st.processingTimeSec * 0.8).toFixed(1))),
+                          })
+                        }
+                        className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 font-mono-tabular text-[10px] hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      >
+                        ×0.8
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateStage(st.id, {
+                            processingTimeSec: Math.max(1, Number((st.processingTimeSec * 1.25).toFixed(1))),
+                          })
+                        }
+                        className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 font-mono-tabular text-[10px] hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      >
+                        ×1.25
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Effective Unit Amortization Readout */}
+                  <div className="flex items-center justify-between gap-2 rounded bg-amber-50/70 dark:bg-amber-950/30 px-2 py-1 text-[10px] font-mono-tabular text-amber-900 dark:text-amber-300">
+                    <span className="truncate">
+                      {t.processes.effectiveUnitCycle}: {effUnitCycle.toFixed(1)}s
+                    </span>
+                    <span className="shrink-0 font-semibold">
+                      {t.processes.bulkCapacity}: {bulkHourlyRate.toFixed(0)} {t.simInspector.unitsPerHour}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
@@ -521,7 +800,7 @@ export const ProcessesModule: React.FC = () => {
               requiredMachines: 1,
               inputQty: 1,
               outputQty: 1,
-              scrapRate: 0.005,
+              scrapRate: 0,
               reworkProbability: 0,
               bufferCapacity: 4,
               predecessorIds: prev ? [prev.id] : [],
@@ -551,6 +830,11 @@ export const ProcessesModule: React.FC = () => {
                   onChange={(e) => updateStage(st.id, { name: e.target.value })}
                   className="flex-1 min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-2 py-0.5 font-semibold"
                 />
+                {(st.batchSize ?? 1) > 1 && st.batchMode !== 'single' && (
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono-tabular text-[10px] font-semibold text-amber-700 dark:text-amber-400 shrink-0">
+                    ×{st.batchSize}
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() => setEditingStageId(isEditing ? null : st.id)}
@@ -643,6 +927,46 @@ export const ProcessesModule: React.FC = () => {
                           {c.name}
                         </option>
                       ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.batchSize}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={st.batchSize ?? 1}
+                      onChange={(e) => {
+                        const nextBatch = Math.max(1, Math.round(Number(e.target.value)));
+                        updateStage(st.id, {
+                          batchSize: nextBatch,
+                          batchMode:
+                            nextBatch > 1
+                              ? st.batchMode === 'unbatch'
+                                ? 'collect_batch'
+                                : st.batchMode || 'collect_batch'
+                              : 'single',
+                        });
+                      }}
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.batchMode}</span>
+                    <select
+                      value={st.batchMode || ((st.batchSize ?? 1) > 1 ? 'collect_batch' : 'single')}
+                      onChange={(e) => {
+                        const mode = e.target.value as 'single' | 'collect_batch' | 'unbatch';
+                        updateStage(st.id, {
+                          batchMode: mode,
+                          batchSize: mode === 'collect_batch' ? Math.max(2, st.batchSize ?? 4) : 1,
+                        });
+                      }}
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1 py-0.5 text-[10px]"
+                    >
+                      <option value="single">{t.labels.batchSingle}</option>
+                      <option value="collect_batch">{t.labels.batchCollect}</option>
+                      <option value="unbatch">{t.labels.batchUnbatch}</option>
                     </select>
                   </label>
                 </div>

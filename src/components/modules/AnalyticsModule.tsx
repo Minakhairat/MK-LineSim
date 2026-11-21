@@ -12,7 +12,7 @@ import {
   Legend,
   Filler,
 } from 'chart.js';
-import { Play } from 'lucide-react';
+import { Maximize2, Minimize2, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { formatDuration } from '../../utils/units';
 import { getT } from '../../i18n/translations';
@@ -37,6 +37,8 @@ export const AnalyticsModule: React.FC = () => {
   const simWorkerBusy = useAppStore((s) => s.simWorkerBusy);
   const theme = useAppStore((s) => s.theme);
   const language = useAppStore((s) => s.language);
+  const isFullscreen = useAppStore((s) => s.isFullscreen);
+  const toggleFullscreen = useAppStore((s) => s.toggleFullscreen);
 
   const t = getT(language);
   const isAr = language === 'ar';
@@ -201,14 +203,24 @@ export const AnalyticsModule: React.FC = () => {
         <p className="max-w-md text-xs text-neutral-600 dark:text-neutral-400">
           {t.analytics.noResultsDesc}
         </p>
-        <button
-          onClick={() => runFullShiftSimulation()}
-          disabled={simWorkerBusy}
-          className="flex items-center gap-2 rounded bg-red-600 px-4 py-2 text-xs font-medium text-white hover:bg-red-700"
-        >
-          <Play className="w-4 h-4" />
-          <span>{simWorkerBusy ? t.actions.computing : t.analytics.runShiftBtn}</span>
-        </button>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            onClick={() => runFullShiftSimulation()}
+            disabled={simWorkerBusy}
+            className="flex items-center gap-2 rounded bg-red-600 px-4 py-2 text-xs font-medium text-white hover:bg-red-700"
+          >
+            <Play className="w-4 h-4" />
+            <span>{simWorkerBusy ? t.actions.computing : t.analytics.runShiftBtn}</span>
+          </button>
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="flex items-center gap-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4 text-red-600" /> : <Maximize2 className="w-4 h-4" />}
+            <span>{isFullscreen ? t.actions.exitFullscreen : t.actions.fullscreen}</span>
+          </button>
+        </div>
       </div>
     );
   }
@@ -228,14 +240,29 @@ export const AnalyticsModule: React.FC = () => {
               {t.analytics.subtitleMid} {formatDuration(result.simTimeSec)} {t.analytics.subtitleSuffix}
             </p>
           </div>
-          <button
-            onClick={() => runFullShiftSimulation()}
-            disabled={simWorkerBusy}
-            className="flex items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
-          >
-            <Play className="w-3.5 h-3.5" />
-            <span>{simWorkerBusy ? t.actions.computing : t.analytics.rerunBtn}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => runFullShiftSimulation()}
+              disabled={simWorkerBusy}
+              className="flex items-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+            >
+              <Play className="w-3.5 h-3.5" />
+              <span>{simWorkerBusy ? t.actions.computing : t.analytics.rerunBtn}</span>
+            </button>
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? t.actions.exitFullscreen : t.actions.fullscreen}
+              className={`flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs font-medium ${
+                isFullscreen
+                  ? 'border-red-600 bg-red-600 text-white'
+                  : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+              }`}
+            >
+              {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{isFullscreen ? t.actions.exitFullscreen : t.actions.fullscreen}</span>
+            </button>
+          </div>
         </div>
 
         {/* Structured KPI Grid */}
