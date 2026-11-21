@@ -1,5 +1,6 @@
 import { ProjectData, ValidationIssue } from '../types/project';
 import { getRotatedBounds } from '../utils/units';
+import { runEngineeringValidations } from '../engineering/validationEngine';
 
 export function validateProject(project: ProjectData): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
@@ -111,7 +112,6 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
     for (let j = i + 1; j < activeObjects.length; j++) {
       const a = activeObjects[i];
       const b = activeObjects[j];
-      // Connected conveyors meet at transfer points; vehicles move in aisles
       if (a.kind === 'conveyor' && b.kind === 'conveyor') continue;
       if (a.kind === 'vehicle' || b.kind === 'vehicle') continue;
 
@@ -306,6 +306,9 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
       }
     }
   }
+
+  // 7. Shared engineering checks (shift/break overlaps, maintenance, conveyor fit, failure models)
+  issues.push(...runEngineeringValidations(project));
 
   return issues;
 }

@@ -165,18 +165,30 @@ export const SimulationInspectorModule: React.FC = () => {
             <span className="truncate">{t.simStatus.running}</span>
           </div>
           <div className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm bg-sky-600 shrink-0" />
+            <span className="truncate">{t.simStatus.setup}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-sm bg-slate-500 shrink-0" />
             <span className="truncate">{t.simStatus.idle}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm bg-yellow-600 shrink-0" />
+            <span className="truncate">{t.simStatus.starved}</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-sm bg-amber-600 shrink-0" />
             <span className="truncate">{t.simStatus.blocked}</span>
           </div>
           <div className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm bg-violet-600 shrink-0" />
+            <span className="truncate">{t.simStatus.maintenance}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-sm bg-red-600 shrink-0" />
             <span className="truncate">{t.simStatus.down}</span>
           </div>
-          <div className="flex items-center gap-1.5 col-span-2">
+          <div className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-sm bg-blue-600 shrink-0" />
             <span className="truncate">{t.simStatus.inProcess}</span>
           </div>

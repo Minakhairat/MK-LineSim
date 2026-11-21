@@ -13,7 +13,8 @@ export type WorkspaceModuleId =
   | 'simulation'
   | 'analytics'
   | 'scenarios'
-  | 'reports';
+  | 'reports'
+  | 'validation';
 
 export type ViewportMode = '2d' | '3d' | 'split' | 'flowchart' | 'simulation';
 export type CameraPreset = 'perspective' | 'top' | 'front' | 'side';
@@ -168,6 +169,17 @@ export interface GeometricProps {
   clearanceM: number;  // maintenance & safety clearance around object
 }
 
+export type FailureDistributionType = 'exponential' | 'fixed' | 'weibull';
+export type RepairDistributionType = 'exponential' | 'fixed' | 'triangular';
+
+export interface PlannedMaintenanceWindow {
+  id: string;
+  name: string;
+  objectId?: string; // undefined = plant-wide planned maintenance
+  startSec: number;
+  durationSec: number;
+}
+
 export interface OperationalProps {
   processingTimeSec: number;
   setupTimeSec: number;
@@ -181,7 +193,14 @@ export interface OperationalProps {
   direction?: 1 | -1; // +1 forward local X, -1 reverse
   mtbfSec?: number; // mean time between failures (optional)
   mttrSec?: number; // mean time to repair
+  failureModel?: FailureDistributionType;
+  weibullShape?: number; // k parameter for Weibull failure model (default ~1.5)
+  weibullScaleSec?: number; // lambda scale parameter for Weibull
+  repairModel?: RepairDistributionType;
   operatingSchedule?: string;
+  shiftId?: string; // optional explicit shift ID for this equipment
+  runDuringBreaks?: boolean; // automatic equipment can run through worker breaks when true
+  plannedMaintenance?: PlannedMaintenanceWindow[];
   batchSize?: number; // number of items grouped per machine/pallet cycle (>=1)
   batchMode?: 'single' | 'collect_batch' | 'unbatch';
 }
@@ -321,6 +340,7 @@ export interface SimulationConfig {
   enableBreakdowns: boolean;
   randomSeed: number;
   shifts: ShiftDefinition[];
+  maintenanceWindows?: PlannedMaintenanceWindow[];
 }
 
 // ============================================================================
@@ -343,6 +363,10 @@ export type SimEventType =
   | 'ShiftEnded'
   | 'BreakdownStarted'
   | 'RepairCompleted'
+  | 'PlannedMaintenanceStarted'
+  | 'PlannedMaintenanceCompleted'
+  | 'SetupStarted'
+  | 'SetupCompleted'
   | 'ProductScrapped'
   | 'ProductCompleted';
 
@@ -357,8 +381,16 @@ export interface SimEvent {
   details: string;
 }
 
-export type MachineRuntimeStatus = 'running' | 'idle' | 'blocked' | 'starved' | 'down';
-export type WorkerRuntimeStatus = 'idle' | 'walking' | 'busy' | 'break';
+export type MachineRuntimeStatus =
+  | 'running'
+  | 'idle'
+  | 'blocked'
+  | 'starved'
+  | 'setup'
+  | 'down'
+  | 'maintenance';
+export type WorkerRuntimeStatus = 'idle' | 'walking' | 'busy' | 'break' | 'unavailable';
+export type ConveyorRuntimeStatus = 'moving' | 'stopped' | 'blocked';
 
 export interface ProductEntityState {
   id: string;
@@ -386,6 +418,7 @@ export interface ProductEntityState {
 export interface ObjectRuntimeState {
   objectId: string;
   status: MachineRuntimeStatus;
+  conveyorStatus?: ConveyorRuntimeStatus;
   busyUnitIds: string[];
   queueUnitIds: string[];
   processedCount: number;
@@ -394,7 +427,11 @@ export interface ObjectRuntimeState {
   idleTimeSec: number;
   blockedTimeSec: number;
   starvedTimeSec: number;
+  setupTimeSec?: number;
   downTimeSec: number;
+  maintenanceTimeSec?: number;
+  movingTimeSec?: number;
+  stoppedTimeSec?: number;
   lastStateChangeTime: number;
 }
 
@@ -411,6 +448,8 @@ export interface WorkerRuntimeState {
   busyTimeSec: number;
   walkingTimeSec: number;
   idleTimeSec: number;
+  breakTimeSec?: number;
+  unavailableTimeSec?: number;
   tasksCompleted: number;
   lastStateChangeTime: number;
 }
@@ -429,8 +468,15 @@ export interface StageAnalytics {
   utilizationPct: number;
   blockedPct: number;
   starvedPct: number;
+  idlePct?: number;
+  setupPct?: number;
   downPct: number;
+  maintenancePct?: number;
   isBottleneck: boolean;
+  availabilityPct?: number;
+  performancePct?: number;
+  qualityPct?: number;
+  oeePct?: number;
   batchesCompleted?: number;
   batchSize?: number;
   configuredCycleTimeSec?: number;
@@ -500,6 +546,17 @@ export interface SimulationKPIs {
   avgBufferOccupancyPct: number;
   totalStarvedTimeSec: number;
   totalBlockedTimeSec: number;
+  totalIdleTimeSec?: number;
+  setupTimeSec?: number;
+  calendarTimeSec?: number;
+  scheduledProductionTimeSec?: number;
+  plannedDowntimeSec?: number;
+  unplannedDowntimeSec?: number;
+  operatingTimeSec?: number;
+  availabilityPct?: number;
+  performancePct?: number;
+  qualityPct?: number;
+  oeePct?: number;
   theoreticalThroughputPerHour?: number;
   throughputVariancePct?: number;
   theoreticalBottleneckStageId?: string;
@@ -589,3 +646,40 @@ export interface ProjectData {
   lastSimulationResult?: SimulationResult;
   scenarios: ScenarioRecord[];
 }
+
+export interface BenchmarkMetricComparison {
+  metric: string;
+  metricAr?: string;
+  unit: string;
+  expected: number;
+  actual: number;
+  absError: number;
+  pctError: number;
+  toleranceAbs: number;
+  tolerancePct?: number;
+  passed: boolean;
+}
+
+export interface BenchmarkCaseResult {
+  id: string;
+  name: string;
+  nameAr: string;
+  category: string;
+  categoryAr: string;
+  description: string;
+  descriptionAr: string;
+  passed: boolean;
+  executionMs: number;
+  metrics: BenchmarkMetricComparison[];
+  failureReason?: string;
+}
+
+export interface BenchmarkSuiteSummary {
+  ranAt: string;
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  totalExecutionMs: number;
+  results: BenchmarkCaseResult[];
+}
+

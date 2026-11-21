@@ -5,6 +5,7 @@ import {
   Box,
   Camera,
   ChevronDown,
+  ClipboardCheck,
   ClipboardCopy,
   ClipboardPaste,
   Columns2,
@@ -58,6 +59,7 @@ import { SimulationInspectorModule } from './components/modules/SimulationInspec
 import { AnalyticsModule } from './components/modules/AnalyticsModule';
 import { ScenariosModule } from './components/modules/ScenariosModule';
 import { ReportsModule } from './components/modules/ReportsModule';
+import { EngineeringValidationCenterModule } from './components/modules/EngineeringValidationCenterModule';
 import { HelpGuideModal } from './components/modals/HelpGuideModal';
 import {
   captureViewportPng,
@@ -228,10 +230,14 @@ export default function App() {
     { id: 'analytics', label: t.modules.analytics, icon: BarChart3 },
     { id: 'scenarios', label: t.modules.scenarios, icon: GitBranch },
     { id: 'reports', label: t.modules.reports, icon: FileText },
+    { id: 'validation', label: t.modules.validation, icon: ClipboardCheck },
   ];
 
   const isFullPageModule =
-    activeModule === 'analytics' || activeModule === 'scenarios' || activeModule === 'reports';
+    activeModule === 'analytics' ||
+    activeModule === 'scenarios' ||
+    activeModule === 'reports' ||
+    activeModule === 'validation';
 
   const handleQuickExportJson = () => {
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
@@ -586,6 +592,7 @@ export default function App() {
               {activeModule === 'analytics' && <AnalyticsModule />}
               {activeModule === 'scenarios' && <ScenariosModule />}
               {activeModule === 'reports' && <ReportsModule />}
+              {activeModule === 'validation' && <EngineeringValidationCenterModule />}
             </div>
           ) : (
             <>

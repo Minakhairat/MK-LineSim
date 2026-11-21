@@ -158,23 +158,36 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
     stages: Array.isArray(obj.stages) ? obj.stages : [],
     routes: Array.isArray(obj.routes) ? obj.routes : [],
     workers: Array.isArray(obj.workers) ? obj.workers : [],
-    simulationConfig: (obj.simulationConfig as ProjectData['simulationConfig']) || {
-      durationSec: 28800,
-      arrivalIntervalSec: 35,
-      maxPlannedUnits: 500,
-      speedMultiplier: 30,
-      enableBreakdowns: false,
-      randomSeed: 4219,
-      shifts: [
-        {
-          id: 'shift_day',
-          name: 'Day Shift',
-          startSec: 0,
-          durationSec: 28800,
-          breaks: [],
-        },
-      ],
-    },
+    simulationConfig: (() => {
+      const sc = (obj.simulationConfig as ProjectData['simulationConfig']) || {
+        durationSec: 28800,
+        arrivalIntervalSec: 35,
+        maxPlannedUnits: 500,
+        speedMultiplier: 30,
+        enableBreakdowns: false,
+        randomSeed: 4219,
+        shifts: [
+          {
+            id: 'shift_day',
+            name: 'Day Shift',
+            startSec: 0,
+            durationSec: 28800,
+            breaks: [],
+          },
+        ],
+        maintenanceWindows: [],
+      };
+      return {
+        ...sc,
+        shifts: Array.isArray(sc.shifts)
+          ? sc.shifts.map((sh) => ({
+              ...sh,
+              breaks: Array.isArray(sh.breaks) ? sh.breaks : [],
+            }))
+          : [],
+        maintenanceWindows: Array.isArray(sc.maintenanceWindows) ? sc.maintenanceWindows : [],
+      };
+    })(),
     lastSimulationResult: obj.lastSimulationResult as ProjectData['lastSimulationResult'],
     scenarios: Array.isArray(obj.scenarios) ? obj.scenarios : [],
   };

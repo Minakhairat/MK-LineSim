@@ -23,7 +23,9 @@ const STATUS_COLORS: Record<MachineRuntimeStatus, number> = {
   idle: 0x64748b,
   blocked: 0xd97706,
   starved: 0xca8a04,
+  setup: 0x0284c7,
   down: 0xdc2626,
+  maintenance: 0x7c3aed,
 };
 
 const WORKER_STATUS_COLORS: Record<WorkerRuntimeStatus, number> = {
@@ -31,6 +33,7 @@ const WORKER_STATUS_COLORS: Record<WorkerRuntimeStatus, number> = {
   walking: 0x2563eb,
   idle: 0x1d4ed8,
   break: 0x64748b,
+  unavailable: 0x475569,
 };
 
 const isSoftwareGl = (() => {

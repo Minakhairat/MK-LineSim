@@ -1,4 +1,5 @@
 import {
+  Dimensions3D,
   LayoutObject,
   ProductDefinition,
   ProductionStage,
@@ -9,6 +10,22 @@ import {
   Vec3,
   WorkerDefinition,
 } from '../types/project';
+import {
+  computeConveyorPathTimeSec as physicsConveyorPathTimeSec,
+  ConveyorMetrics,
+  evaluateConveyorPhysics,
+} from '../engineering/conveyorPhysics';
+import {
+  computeStageCapacityProfile,
+  resolveStageBatchConfig,
+  StageBatchConfig,
+} from '../engineering/capacityEngine';
+import { computeOeeMetrics } from '../engineering/oeeEngine';
+import { ResourceCalendarEngine } from './resourceCalendar';
+import { FailureModelParams, resolveObjectFailureParams } from './failureModels';
+
+export type { ConveyorMetrics, FailureModelParams, StageBatchConfig };
+export { resolveStageBatchConfig, resolveObjectFailureParams };
 
 export interface ShiftWindowAudit {
   simTimeSec: number;
@@ -16,33 +33,11 @@ export interface ShiftWindowAudit {
   activeSimTimeSec: number;
   totalShiftBreakSec: number;
   fullShiftNetSec: number;
+  plannedDowntimeSec: number;
+  plantMaintenanceDowntimeSec: number;
   arrivalIntervalSec: number;
   plannedUnits: number;
   plannedUnitsCap: number; // Infinity when continuous unlimited over shift
-}
-
-export interface ConveyorMetrics {
-  beltLengthM: number;
-  speedMps: number;
-  productLengthM: number;
-  productSpacingM: number;
-  pitchM: number;
-  minHeadwaySec: number;
-  physicalCapacity: number;
-  traversalTimeSec: number;
-}
-
-export interface FailureModelParams {
-  enabled: boolean;
-  mtbfSec: number;
-  mttrSec: number;
-  availability: number;
-}
-
-export interface StageBatchConfig {
-  batchSize: number;
-  batchMode: 'single' | 'collect_batch' | 'unbatch';
-  containerKind: 'pallet' | 'carton' | 'pack';
 }
 
 export interface StageTimingSummary {
@@ -78,41 +73,6 @@ export function distance2D(a: Vec3, b: Vec3): number {
 }
 
 /**
- * Resolves batch grouping behavior and container kind from stage + assigned floor equipment.
- */
-export function resolveStageBatchConfig(
-  stage: ProductionStage,
-  assignedObjects: LayoutObject[]
-): StageBatchConfig {
-  const primaryObj = assignedObjects[0];
-  const rawMode = stage.batchMode ?? primaryObj?.operations.batchMode;
-  const rawSize = Math.max(
-    1,
-    Math.round(Number(stage.batchSize ?? primaryObj?.operations.batchSize ?? 1) || 1)
-  );
-
-  const cat = primaryObj?.category || '';
-  const containerKind: StageBatchConfig['containerKind'] =
-    cat.includes('pallet') || cat.includes('stretch_wrapper') || cat === 'material_handling'
-      ? 'pallet'
-      : cat.includes('shrink') || cat.includes('strapping')
-      ? 'pack'
-      : 'carton';
-
-  if (rawMode === 'unbatch') {
-    return { batchSize: 1, batchMode: 'unbatch', containerKind };
-  }
-  if (rawMode === 'single' || rawSize <= 1 || primaryObj?.kind === 'conveyor') {
-    return { batchSize: 1, batchMode: 'single', containerKind };
-  }
-  return {
-    batchSize: rawSize,
-    batchMode: 'collect_batch',
-    containerKind,
-  };
-}
-
-/**
  * Strictly honors user-defined arrivalIntervalSec with zero artificial 1s floor clamping.
  */
 export function resolveArrivalIntervalSec(config: SimulationConfig): number {
@@ -122,30 +82,30 @@ export function resolveArrivalIntervalSec(config: SimulationConfig): number {
 }
 
 /**
- * Computes active shift window excluding only actual scheduled breaks elapsed up to simTimeSec.
+ * Computes active shift window using ResourceCalendarEngine clipped to [0, clockSec],
+ * properly supporting multiple shifts, gaps, planned maintenance, and break overlaps.
  */
 export function computeShiftWindowAudit(
   config: SimulationConfig,
   primaryProduct: ProductDefinition | undefined,
-  clockSec: number
+  clockSec: number,
+  objects: LayoutObject[] = []
 ): ShiftWindowAudit {
-  const simTimeSec = Math.max(1e-6, clockSec || config.durationSec || 1e-6);
-  const fullDurationSec = Math.max(1e-6, config.durationSec || simTimeSec);
+  const fullDurationSec = Math.max(1e-6, config.durationSec || clockSec || 1e-6);
+  const simTimeSec = Math.max(1e-6, clockSec || fullDurationSec);
 
-  let elapsedBreakSec = 0;
-  let totalShiftBreakSec = 0;
-  for (const sh of config.shifts) {
-    for (const brk of sh.breaks) {
-      const dur = Math.max(0, brk.durationSec || 0);
-      totalShiftBreakSec += dur;
-      const bStart = Math.max(0, brk.startSec || 0);
-      const bEnd = Math.min(simTimeSec, bStart + dur);
-      if (bEnd > bStart) elapsedBreakSec += bEnd - bStart;
-    }
-  }
+  const calFull = new ResourceCalendarEngine(config, fullDurationSec);
+  const fullPlant = calFull.getPlantCalendarMetrics(objects, fullDurationSec);
 
-  const activeSimTimeSec = Math.max(1e-6, simTimeSec - elapsedBreakSec);
-  const fullShiftNetSec = Math.max(1e-6, fullDurationSec - totalShiftBreakSec);
+  const calElapsed = new ResourceCalendarEngine(config, Math.max(fullDurationSec, simTimeSec));
+  const elapsedPlant = calElapsed.getPlantCalendarMetrics(objects, simTimeSec);
+
+  const elapsedBreakSec = elapsedPlant.breakDowntimeSec;
+  const activeSimTimeSec = Math.max(1e-6, elapsedPlant.scheduledProductionTimeSec);
+  const totalShiftBreakSec = fullPlant.breakDowntimeSec;
+  const fullShiftNetSec = Math.max(1e-6, fullPlant.scheduledProductionTimeSec);
+  const plannedDowntimeSec = elapsedPlant.plannedDowntimeSec;
+  const plantMaintenanceDowntimeSec = elapsedPlant.maintenanceDowntimeSec;
   const arrivalIntervalSec = resolveArrivalIntervalSec(config);
 
   const userMaxPlanned = Number(config.maxPlannedUnits);
@@ -161,7 +121,6 @@ export function computeShiftWindowAudit(
     plannedUnitsCap = productTarget;
     plannedUnits = productTarget;
   } else {
-    // Pure rate-driven continuous shift: target matches exact units scheduled over net shift window
     plannedUnits = Math.max(1, Math.floor(fullShiftNetSec / arrivalIntervalSec));
   }
 
@@ -171,6 +130,8 @@ export function computeShiftWindowAudit(
     activeSimTimeSec,
     totalShiftBreakSec,
     fullShiftNetSec,
+    plannedDowntimeSec,
+    plantMaintenanceDowntimeSec,
     arrivalIntervalSec,
     plannedUnits,
     plannedUnitsCap,
@@ -178,46 +139,29 @@ export function computeShiftWindowAudit(
 }
 
 /**
- * Derives conveyor traversal metrics dynamically from object geometry, belt speed,
- * declared capacity, product/carrier dimensions, and spacing.
+ * Delegates conveyor physics evaluation to engineering/conveyorPhysics.ts.
  */
 export function computeConveyorMetrics(
   conv: LayoutObject,
   prod?: ProductDefinition,
-  overrideEntityLengthM?: number
+  overrideEntityLengthM?: number,
+  overrideDims?: Partial<Dimensions3D>
 ): ConveyorMetrics {
-  const beltLengthM = Math.max(0.05, Number(conv.geometry.dimensions.length) || 0.05);
-  const speedMps = Math.max(0.001, Number(conv.operations.speedMps) || 0.001);
-  const productLengthM = Math.max(
-    0.05,
-    overrideEntityLengthM ?? (Number(prod?.dimensions.length) || 0.5)
-  );
-  const productSpacingM = Math.max(0, Number(conv.operations.productSpacingM ?? 0.15));
-  const pitchM = Math.max(0.05, productLengthM + productSpacingM);
-
-  const physicalFitCount = Math.max(1, Math.floor(beltLengthM / pitchM));
-  const declaredCap = Number(conv.operations.capacity || 0);
-  const physicalCapacity =
-    declaredCap > 0 ? Math.max(1, Math.min(declaredCap, physicalFitCount)) : physicalFitCount;
-
-  return {
-    beltLengthM,
-    speedMps,
-    productLengthM,
-    productSpacingM,
-    pitchM,
-    minHeadwaySec: pitchM / speedMps,
-    physicalCapacity,
-    traversalTimeSec: beltLengthM / speedMps,
-  };
+  const mergedOverride: Partial<Dimensions3D> | undefined =
+    overrideEntityLengthM !== undefined || overrideDims
+      ? {
+          ...overrideDims,
+          ...(overrideEntityLengthM !== undefined ? { length: overrideEntityLengthM } : {}),
+        }
+      : undefined;
+  return evaluateConveyorPhysics(conv, prod, mergedOverride);
 }
 
 /**
  * Computes exact conveyor transit time between measured path waypoints.
  */
 export function computeConveyorPathTimeSec(totalDistanceM: number, speedMps: number): number {
-  if (totalDistanceM <= 0) return 0;
-  return totalDistanceM / Math.max(0.001, speedMps);
+  return physicsConveyorPathTimeSec(totalDistanceM, speedMps);
 }
 
 /**
@@ -244,33 +188,21 @@ export function canAdmitToStageBuffer(
 }
 
 /**
- * Resolves exact stochastic failure parameters from explicit mtbfSec / mttrSec or machine availability (0..1).
+ * Computes setup duration adjusted by operator efficiency when setup is required.
  */
-export function resolveObjectFailureParams(
-  obj: LayoutObject,
-  config: SimulationConfig
-): FailureModelParams {
-  if (!config.enableBreakdowns || (obj.kind !== 'machine' && obj.kind !== 'workstation')) {
-    return { enabled: false, mtbfSec: 0, mttrSec: 0, availability: 1 };
+export function computeStageSetupDurationSec(
+  stage: ProductionStage,
+  stationObj: LayoutObject | undefined,
+  workers: WorkerDefinition[]
+): number {
+  const setup = Math.max(0, Number(stage.setupTimeSec ?? stationObj?.operations.setupTimeSec ?? 0));
+  if (setup <= 0) return 0;
+  let effSum = 0;
+  for (const w of workers) {
+    effSum += Math.max(0.1, Number(w.efficiencyFactor || 1));
   }
-
-  const avail = Math.min(1, Math.max(0.01, Number(obj.operations.availability ?? 1)));
-  const rawMtbf = Number(obj.operations.mtbfSec || 0);
-  const rawMttr = Number(obj.operations.mttrSec || 0);
-
-  if (rawMtbf > 0 && rawMttr > 0) {
-    return { enabled: true, mtbfSec: rawMtbf, mttrSec: rawMttr, availability: avail };
-  }
-
-  if (avail < 0.9999) {
-    const derivedMttr =
-      rawMttr > 0 ? rawMttr : Math.max(10, (obj.operations.processingTimeSec || 30) * 3);
-    const derivedMtbf =
-      rawMtbf > 0 ? rawMtbf : Math.max(1, (derivedMttr * avail) / Math.max(1e-4, 1 - avail));
-    return { enabled: true, mtbfSec: derivedMtbf, mttrSec: derivedMttr, availability: avail };
-  }
-
-  return { enabled: false, mtbfSec: 0, mttrSec: 0, availability: 1 };
+  const meanEff = workers.length > 0 ? effSum / workers.length : 1;
+  return Math.max(0, setup / meanEff);
 }
 
 /**
@@ -337,14 +269,14 @@ export function computeWorkerTravelAudit(
 }
 
 /**
- * Centralized industrial engineering audit of theoretical cycle times, batch amortization,
- * line balance efficiency, takt time, and bottleneck stage directly from project definitions.
+ * Centralized industrial engineering audit delegating stage capacity math to capacityEngine.ts.
  */
 export function auditProjectTiming(project: ProjectData, simClockSec?: number): ProjectTimingAudit {
   const shiftAudit = computeShiftWindowAudit(
     project.simulationConfig,
     project.products[0],
-    simClockSec ?? project.simulationConfig.durationSec
+    simClockSec ?? project.simulationConfig.durationSec,
+    project.layoutObjects
   );
   const objectsMap = new Map(project.layoutObjects.map((o) => [o.id, o]));
 
@@ -356,31 +288,17 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
   let bottleneckCycleSec = 0;
 
   for (const st of project.stages) {
-    const baseTaskTimeSec =
-      Math.max(0, Number(st.processingTimeSec || 0)) +
-      Math.max(0, Number(st.loadingTimeSec || 0)) +
-      Math.max(0, Number(st.unloadingTimeSec || 0));
+    const assignedObjs = st.assignedObjectIds
+      .map((oid) => objectsMap.get(oid))
+      .filter((o): o is LayoutObject => Boolean(o));
 
-    const assignedObjs: LayoutObject[] = [];
-    let parallelCapacity = 0;
-    for (const oid of st.assignedObjectIds) {
-      const obj = objectsMap.get(oid);
-      if (obj) {
-        assignedObjs.push(obj);
-        parallelCapacity += Math.max(1, Number(obj.operations.capacity || 1));
-      }
-    }
-    parallelCapacity = Math.max(1, parallelCapacity || st.requiredMachines || 1);
-    const batchCfg = resolveStageBatchConfig(st, assignedObjs);
+    const profile = computeStageCapacityProfile(st, assignedObjs);
+    totalTaskTimeSec += profile.baseTaskTimeSec / profile.batchSize;
 
-    // Effective unit cycle amortizes batch processing across batchSize items per machine cycle
-    const effectiveUnitCycleSec = baseTaskTimeSec / (parallelCapacity * batchCfg.batchSize);
-    totalTaskTimeSec += baseTaskTimeSec / batchCfg.batchSize;
-
-    if (baseTaskTimeSec > 0) {
-      effectiveCycles.push(effectiveUnitCycleSec);
-      if (effectiveUnitCycleSec > bottleneckCycleSec) {
-        bottleneckCycleSec = effectiveUnitCycleSec;
+    if (profile.baseTaskTimeSec > 0) {
+      effectiveCycles.push(profile.effectiveUnitCycleSec);
+      if (profile.effectiveUnitCycleSec > bottleneckCycleSec) {
+        bottleneckCycleSec = profile.effectiveUnitCycleSec;
         bottleneckStageId = st.id;
         bottleneckStageName = st.name;
       }
@@ -389,11 +307,11 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
     stages.push({
       stageId: st.id,
       stageName: st.name,
-      baseTaskTimeSec,
-      batchSize: batchCfg.batchSize,
-      parallelCapacity,
-      effectiveUnitCycleSec,
-      theoreticalCapacityPerHour: effectiveUnitCycleSec > 0 ? 3600 / effectiveUnitCycleSec : 0,
+      baseTaskTimeSec: profile.baseTaskTimeSec,
+      batchSize: profile.batchSize,
+      parallelCapacity: profile.parallelServers,
+      effectiveUnitCycleSec: profile.effectiveUnitCycleSec,
+      theoreticalCapacityPerHour: profile.theoreticalCapacityPerHour,
       requiredWorkers: st.requiredWorkers,
       bufferCapacity: Math.max(0, Number(st.bufferCapacity ?? 0)),
     });
@@ -444,8 +362,8 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
 }
 
 /**
- * Computes audited KPIs & enriches per-stage cycle deviation + root-cause bottleneck diagnostics
- * strictly from measured simulation runtime accumulators + centralized timing audit.
+ * Computes audited KPIs including OEE (Availability, Performance, Quality) and
+ * formal Calendar-to-Operating time hierarchy from measured runtime accumulators.
  */
 export function buildAuditedSimulationKPIs(params: {
   project: ProjectData;
@@ -460,6 +378,9 @@ export function buildAuditedSimulationKPIs(params: {
   totalDowntimeSec: number;
   totalBlockedTimeSec: number;
   totalStarvedTimeSec: number;
+  totalIdleTimeSec?: number;
+  totalSetupTimeSec?: number;
+  totalMaintenanceTimeSec?: number;
   workerUtilizationPct: number;
   machineUtilizationPct: number;
   avgWip: number;
@@ -486,12 +407,13 @@ export function buildAuditedSimulationKPIs(params: {
       ? ((throughputPerHour - theoreticalThroughputPerHour) / theoreticalThroughputPerHour) * 100
       : 0;
 
-  // Enrich each StageAnalytics entry with configured vs measured cycle deviation & root-cause insight
+  // Enrich each StageAnalytics entry with configured vs measured cycle deviation, OEE, and root-cause insight
   for (const sa of params.stageAnalytics) {
     const tStage = timingByStage.get(sa.stageId);
     const configuredCycleTimeSec = tStage?.baseTaskTimeSec ?? 0;
     const batchSize = Math.max(1, sa.batchSize ?? tStage?.batchSize ?? 1);
-    const effectiveTheoreticalUnitCycleSec = tStage?.effectiveUnitCycleSec ?? configuredCycleTimeSec / batchSize;
+    const effectiveTheoreticalUnitCycleSec =
+      tStage?.effectiveUnitCycleSec ?? configuredCycleTimeSec / batchSize;
     const theoreticalCapacityPerHour = tStage?.theoreticalCapacityPerHour ?? 0;
     const actualCapacityPerHour = sa.completedCount / totalHours;
 
@@ -501,6 +423,25 @@ export function buildAuditedSimulationKPIs(params: {
         : 0;
     const cycleDeviationPct =
       configuredCycleTimeSec > 0 ? (cycleDeviationSec / configuredCycleTimeSec) * 100 : 0;
+
+    // Stage OEE calculation
+    const stageSchedSec = shiftAudit.activeSimTimeSec;
+    const stageUnplannedDownSec = (sa.downPct / 100) * stageSchedSec;
+    const stageSetupSec = ((sa.setupPct ?? 0) / 100) * stageSchedSec;
+    const stageGood = Math.max(0, sa.completedCount - sa.scrapCount);
+    const stageOee = computeOeeMetrics({
+      calendarTimeSec: shiftAudit.simTimeSec,
+      plannedDowntimeSec: Math.max(0, shiftAudit.simTimeSec - stageSchedSec),
+      unplannedDowntimeSec: stageUnplannedDownSec,
+      setupTimeSec: stageSetupSec,
+      idealCycleTimeSec: effectiveTheoreticalUnitCycleSec,
+      totalUnitsProcessed: sa.completedCount,
+      goodUnitsProduced: stageGood,
+    });
+    sa.availabilityPct = stageOee.availabilityPct;
+    sa.performancePct = stageOee.performancePct;
+    sa.qualityPct = stageOee.qualityPct;
+    sa.oeePct = stageOee.oeePct;
 
     let reasonCode: NonNullable<StageAnalytics['bottleneckReasonCode']> = 'balanced';
     let detailEn = '';
@@ -526,7 +467,10 @@ export function buildAuditedSimulationKPIs(params: {
       reasonCode = 'worker_starvation';
       detailEn = `Units queued avg ${sa.avgWaitTimeSec.toFixed(1)}s waiting for shared/busy operator assignment.`;
       detailAr = `انتظرت المنتجات ${sa.avgWaitTimeSec.toFixed(1)}ث في المتوسط بانتظار توفر عامل متاح.`;
-    } else if (sa.isBottleneck || (effectiveTheoreticalUnitCycleSec >= shiftAudit.arrivalIntervalSec * 0.9 && sa.utilizationPct >= 75)) {
+    } else if (
+      sa.isBottleneck ||
+      (effectiveTheoreticalUnitCycleSec >= shiftAudit.arrivalIntervalSec * 0.9 && sa.utilizationPct >= 75)
+    ) {
       reasonCode = 'user_cycle_bottleneck';
       detailEn = `Pacing constraint at ${sa.utilizationPct.toFixed(1)}% util (${configuredCycleTimeSec.toFixed(1)}s cycle / ${effectiveTheoreticalUnitCycleSec.toFixed(1)}s per unit).`;
       detailAr = `نقطة اختناق تقود سرعة الخط عند استغلال ${sa.utilizationPct.toFixed(1)}% (دورة ${configuredCycleTimeSec.toFixed(1)}ث / ${effectiveTheoreticalUnitCycleSec.toFixed(1)}ث للوحدة).`;
@@ -556,6 +500,42 @@ export function buildAuditedSimulationKPIs(params: {
     sa.bottleneckReasonDetail = detailEn;
     sa.bottleneckReasonDetailAr = detailAr;
   }
+
+  // Line-level OEE anchored on the bottleneck pacing resource (or line throughput if purely conveyor/zero-cycle)
+  const bnAnalytics =
+    params.stageAnalytics.find((s) => s.stageId === (params.bottleneckStageId || timingAudit.bottleneckStageId)) ??
+    params.stageAnalytics[0];
+  const stageCount = Math.max(1, params.stageAnalytics.length);
+
+  const bnMaintSec = bnAnalytics
+    ? ((bnAnalytics.maintenancePct ?? 0) / 100) * shiftAudit.simTimeSec
+    : (params.totalMaintenanceTimeSec ?? 0) / stageCount;
+  const extraObjectMaintSec = Math.max(0, bnMaintSec - shiftAudit.plantMaintenanceDowntimeSec);
+  const linePlannedDowntimeSec = Math.min(
+    shiftAudit.simTimeSec,
+    shiftAudit.plannedDowntimeSec + extraObjectMaintSec
+  );
+  const lineScheduledSec = Math.max(1e-6, shiftAudit.simTimeSec - linePlannedDowntimeSec);
+
+  const lineUnplannedDownSec = bnAnalytics
+    ? (bnAnalytics.downPct / 100) * lineScheduledSec
+    : params.totalDowntimeSec / stageCount;
+  const lineSetupSec = bnAnalytics
+    ? ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec
+    : (params.totalSetupTimeSec ?? 0) / stageCount;
+
+  const lineOee = computeOeeMetrics({
+    calendarTimeSec: shiftAudit.simTimeSec,
+    plannedDowntimeSec: linePlannedDowntimeSec,
+    unplannedDowntimeSec: lineUnplannedDownSec,
+    setupTimeSec: lineSetupSec,
+    idealCycleTimeSec:
+      timingAudit.bottleneckCycleSec > 0
+        ? timingAudit.bottleneckCycleSec
+        : shiftAudit.arrivalIntervalSec,
+    totalUnitsProcessed: actualProduction,
+    goodUnitsProduced: goodUnits,
+  });
 
   const lineEfficiencyPct =
     timingAudit.stages.some((s) => s.baseTaskTimeSec > 0)
@@ -597,6 +577,17 @@ export function buildAuditedSimulationKPIs(params: {
     avgBufferOccupancyPct: params.avgBufferOccupancyPct,
     totalStarvedTimeSec: params.totalStarvedTimeSec,
     totalBlockedTimeSec: params.totalBlockedTimeSec,
+    totalIdleTimeSec: params.totalIdleTimeSec ?? 0,
+    setupTimeSec: params.totalSetupTimeSec ?? 0,
+    calendarTimeSec: lineOee.calendarTimeSec,
+    scheduledProductionTimeSec: lineOee.scheduledProductionTimeSec,
+    plannedDowntimeSec: lineOee.plannedDowntimeSec,
+    unplannedDowntimeSec: lineOee.unplannedDowntimeSec,
+    operatingTimeSec: lineOee.operatingTimeSec,
+    availabilityPct: lineOee.availabilityPct,
+    performancePct: lineOee.performancePct,
+    qualityPct: lineOee.qualityPct,
+    oeePct: lineOee.oeePct,
     theoreticalThroughputPerHour,
     throughputVariancePct,
     theoreticalBottleneckStageId: timingAudit.bottleneckStageId,

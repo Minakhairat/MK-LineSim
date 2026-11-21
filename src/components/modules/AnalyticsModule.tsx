@@ -135,14 +135,31 @@ export const AnalyticsModule: React.FC = () => {
                 backgroundColor: '#16A34A',
               },
               {
-                label: isAr ? 'حجب / انتظار %' : 'Blocked %',
+                label: isAr ? 'تجهيز %' : 'Setup %',
+                data: result.stageAnalytics.map((s) => Number((s.setupPct ?? 0).toFixed(1))),
+                backgroundColor: '#0284C7',
+              },
+              {
+                label: isAr ? 'حجب %' : 'Blocked %',
                 data: result.stageAnalytics.map((s) => Number(s.blockedPct.toFixed(1))),
                 backgroundColor: '#D97706',
               },
               {
-                label: isAr ? 'خمول / بدون تغذية %' : 'Starved / Idle %',
+                label: isAr ? 'نقص تغذية %' : 'Starved %',
                 data: result.stageAnalytics.map((s) => Number(s.starvedPct.toFixed(1))),
+                backgroundColor: '#CA8A04',
+              },
+              {
+                label: isAr ? 'خمول %' : 'Idle %',
+                data: result.stageAnalytics.map((s) => Number((s.idlePct ?? 0).toFixed(1))),
                 backgroundColor: '#64748B',
+              },
+              {
+                label: isAr ? 'عطل / صيانة %' : 'Down / Maint %',
+                data: result.stageAnalytics.map((s) =>
+                  Number((s.downPct + (s.maintenancePct ?? 0)).toFixed(1))
+                ),
+                backgroundColor: '#DC2626',
               },
             ],
           },
@@ -332,6 +349,86 @@ export const AnalyticsModule: React.FC = () => {
           ))}
         </div>
 
+        {/* OEE & Formal Time Accounting Hierarchy */}
+        <section className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 dark:border-neutral-800 pb-2.5 mb-3">
+            <h3 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+              {t.analytics.oeeSectionTitle}
+            </h3>
+            <span className="text-[11px] font-mono-tabular text-neutral-500">
+              {t.labels.oee}: {(k.oeePct ?? 0).toFixed(1)}% ={' '}
+              {(k.availabilityPct ?? 0).toFixed(1)}% × {(k.performancePct ?? 0).toFixed(1)}% ×{' '}
+              {(k.qualityPct ?? 100).toFixed(1)}%
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pb-3 border-b border-neutral-100 dark:border-neutral-800">
+            <div>
+              <div className="text-[11px] text-neutral-500">{t.labels.oee}</div>
+              <div className="text-base font-semibold font-mono-tabular text-red-600 dark:text-red-400">
+                {(k.oeePct ?? 0).toFixed(1)}%
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] text-neutral-500">{t.labels.availability}</div>
+              <div className="text-base font-semibold font-mono-tabular text-neutral-900 dark:text-neutral-100">
+                {(k.availabilityPct ?? 0).toFixed(1)}%
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] text-neutral-500">{t.labels.performance}</div>
+              <div className="text-base font-semibold font-mono-tabular text-neutral-900 dark:text-neutral-100">
+                {(k.performancePct ?? 0).toFixed(1)}%
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] text-neutral-500">{t.labels.quality}</div>
+              <div className="text-base font-semibold font-mono-tabular text-emerald-700 dark:text-emerald-400">
+                {(k.qualityPct ?? 100).toFixed(1)}%
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+            <div>
+              <div className="text-[10px] text-neutral-500">{t.labels.calendarTime}</div>
+              <div className="font-mono-tabular font-semibold text-neutral-800 dark:text-neutral-200">
+                {formatDuration(k.calendarTimeSec ?? result.simTimeSec)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-neutral-500">{t.labels.plannedDowntime}</div>
+              <div className="font-mono-tabular font-semibold text-neutral-800 dark:text-neutral-200">
+                {formatDuration(k.plannedDowntimeSec ?? 0)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-neutral-500">{t.labels.scheduledTime}</div>
+              <div className="font-mono-tabular font-semibold text-neutral-800 dark:text-neutral-200">
+                {formatDuration(k.scheduledProductionTimeSec ?? result.simTimeSec)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-neutral-500">{t.labels.unplannedDowntime}</div>
+              <div className="font-mono-tabular font-semibold text-red-600 dark:text-red-400">
+                {formatDuration(k.unplannedDowntimeSec ?? 0)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-neutral-500">{t.labels.setupTimeLabel}</div>
+              <div className="font-mono-tabular font-semibold text-sky-700 dark:text-sky-400">
+                {formatDuration(k.setupTimeSec ?? 0)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-neutral-500">{t.labels.operatingTime}</div>
+              <div className="font-mono-tabular font-semibold text-emerald-700 dark:text-emerald-400">
+                {formatDuration(k.operatingTimeSec ?? result.simTimeSec)}
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* Charts 2x2 Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
@@ -381,7 +478,12 @@ export const AnalyticsModule: React.FC = () => {
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgWait}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.maxQueue}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.util}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.setup}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.blocked}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.starved}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.idle}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.maint}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.oee}</th>
               </tr>
             </thead>
             <tbody>
@@ -405,7 +507,14 @@ export const AnalyticsModule: React.FC = () => {
                   <td className="px-3 py-2 text-end">{sa.avgWaitTimeSec.toFixed(1)}</td>
                   <td className="px-3 py-2 text-end">{sa.maxQueueLength}</td>
                   <td className="px-3 py-2 text-end">{sa.utilizationPct.toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end">{(sa.setupPct ?? 0).toFixed(1)}%</td>
                   <td className="px-3 py-2 text-end">{sa.blockedPct.toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end">{sa.starvedPct.toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end">{(sa.idlePct ?? 0).toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end">{(sa.maintenancePct ?? 0).toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end font-semibold text-neutral-900 dark:text-neutral-100">
+                    {(sa.oeePct ?? 0).toFixed(1)}%
+                  </td>
                 </tr>
               ))}
             </tbody>

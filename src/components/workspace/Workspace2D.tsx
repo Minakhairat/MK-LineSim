@@ -15,7 +15,9 @@ const STATUS_RING: Record<MachineRuntimeStatus, string> = {
   idle: '#64748B',
   blocked: '#D97706',
   starved: '#CA8A04',
+  setup: '#0284C7',
   down: '#DC2626',
+  maintenance: '#7C3AED',
 };
 
 type DragState =

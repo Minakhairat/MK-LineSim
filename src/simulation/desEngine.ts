@@ -30,6 +30,7 @@ import {
   computeConveyorPathTimeSec,
   computeShiftWindowAudit,
   computeStageProcessingTimeSec,
+  computeStageSetupDurationSec,
   computeWorkerTravelAudit,
   distance2D as auditDistance2D,
   resolveArrivalIntervalSec,
@@ -37,6 +38,9 @@ import {
   resolveStageBatchConfig,
   StageBatchConfig,
 } from './timeAuditService';
+import { ResourceCalendarEngine } from './resourceCalendar';
+import { ResourceStateTracker } from './resourceStateTracker';
+import { sampleRepairDurationSec, sampleTimeToFailureSec } from './failureModels';
 
 interface InternalEvent {
   seq: number;
@@ -66,6 +70,20 @@ interface HeldBatchItem {
   entityId: string;
   arrivedAt: number;
   units: number;
+}
+
+interface ActiveJobRecord {
+  token: number;
+  phase: 'setup' | 'processing';
+  entityId: string;
+  stageId: string;
+  objectId: string;
+  workerIds: string[];
+  startedAt: number;
+  expectedEndAt: number;
+  remainingSec: number;
+  totalProcSec: number;
+  isConveyorNode: boolean;
 }
 
 interface StageAcc {
@@ -103,11 +121,15 @@ export class DiscreteEventSimulationEngine {
   private rng: () => number;
   private queue = new MinPriorityQueue<InternalEvent>();
   private seqCounter = 0;
+  private jobTokenCounter = 0;
 
   public clockSec = 0;
   public status: SimulationSnapshot['status'] = 'idle';
   private shiftActive = true;
   private onBreak = false;
+
+  private calendarEngine!: ResourceCalendarEngine;
+  private stateTracker!: ResourceStateTracker;
 
   private objectsMap = new Map<string, LayoutObject>();
   private stagesMap = new Map<string, ProductionStage>();
@@ -119,18 +141,23 @@ export class DiscreteEventSimulationEngine {
   private workerAllocatedEntity = new Map<string, string | null>();
   private entities = new Map<string, ProductEntityState>();
 
-  private stageBuffers = new Map<string, string[]>(); // stageId -> queued entityIds ready for machine/station
-  private stageBatchHolders = new Map<string, HeldBatchItem[]>(); // stageId -> loose items accumulating into a batch/pallet
+  private activeJobs = new Map<string, ActiveJobRecord[]>(); // objectId -> active non-paused jobs
+  private pausedJobs = new Map<string, ActiveJobRecord[]>(); // objectId -> paused jobs during down/maint
+  private validJobTokens = new Set<number>();
+
+  private stageBuffers = new Map<string, string[]>();
+  private stageBatchHolders = new Map<string, HeldBatchItem[]>();
   private stageBatchConfigs = new Map<string, StageBatchConfig>();
   private stageUpstreamClosures = new Map<string, Set<string>>();
-  private stageInTransitCounts = new Map<string, number>(); // stageId -> units currently in transit toward this stage
+  private stageInTransitCounts = new Map<string, number>();
   private blockedOutbox = new Map<string, Array<{ entityId: string; objectId: string; nextStageId: string }>>();
-  private conveyorTransits = new Map<string, ConveyorTransit>(); // entityId -> active transit
-  private conveyorOccupancy = new Map<string, number>(); // conveyorId -> active carriers physically on belt
+  private conveyorTransits = new Map<string, ConveyorTransit>();
+  private conveyorOccupancy = new Map<string, number>();
   private conveyorLastEntryTime = new Map<string, number>();
   private setupDoneObjects = new Set<string>();
   private sourceWaiting: { waiting: boolean; productId: string; lastReleaseTime: number } | null = null;
   private sourceTimerScheduled = false;
+  private lastSourceReleaseTime = -Infinity;
 
   private stageAcc = new Map<string, StageAcc>();
   private entityCounter = 0;
@@ -144,12 +171,10 @@ export class DiscreteEventSimulationEngine {
   private wipSeries: WipTimePoint[] = [];
   private nextSampleTime = 0;
 
-  private hourlyGood = new Map<number, number>();
-  private hourlyScrap = new Map<number, number>();
-
   private eventLog: SimEvent[] = [];
   private totalEventsExecuted = 0;
-  private nextBreakdownAt = new Map<string, number>();
+  private hourlyGood = new Map<number, number>();
+  private hourlyScrap = new Map<number, number>();
 
   constructor(project: ProjectData) {
     this.project = this.ensureRoutingReady(structuredClone(project));
@@ -157,10 +182,6 @@ export class DiscreteEventSimulationEngine {
     this.initialize();
   }
 
-  /**
-   * Imports and binds a Flowchart project snapshot directly into the DES engine
-   * and re-initializes runtime buffers, machine specs, and routes.
-   */
   public importFlowchartRoutes(projectSnapshot?: ProjectData): void {
     const base = structuredClone(projectSnapshot || this.project);
     const { updated } = importFlowchartToSimulationData(base);
@@ -171,7 +192,6 @@ export class DiscreteEventSimulationEngine {
   private ensureRoutingReady(raw: ProjectData): ProjectData {
     const isManualFlow = raw.products.some((p) => p.routingMode === 'manual');
     if (isManualFlow) {
-      // Strictly preserve user-drawn Flowchart wires & bind every node to floor equipment
       return importFlowchartToSimulationData(raw).updated;
     }
 
@@ -210,10 +230,16 @@ export class DiscreteEventSimulationEngine {
     this.project = this.ensureRoutingReady(this.project);
     this.queue.clear();
     this.seqCounter = 0;
+    this.jobTokenCounter = 0;
     this.clockSec = 0;
     this.status = 'idle';
-    this.shiftActive = false;
-    this.onBreak = false;
+
+    const cfg = this.project.simulationConfig;
+    this.calendarEngine = new ResourceCalendarEngine(cfg, cfg.durationSec);
+    this.stateTracker = new ResourceStateTracker(cfg.durationSec, false);
+
+    this.shiftActive = this.calendarEngine.isPlantShiftActiveAt(0);
+    this.onBreak = this.calendarEngine.isPlantOnBreakAt(0);
 
     this.objectsMap.clear();
     this.stagesMap.clear();
@@ -223,6 +249,9 @@ export class DiscreteEventSimulationEngine {
     this.workerStates.clear();
     this.workerAllocatedEntity.clear();
     this.entities.clear();
+    this.activeJobs.clear();
+    this.pausedJobs.clear();
+    this.validJobTokens.clear();
     this.stageBuffers.clear();
     this.stageBatchHolders.clear();
     this.stageBatchConfigs.clear();
@@ -235,6 +264,7 @@ export class DiscreteEventSimulationEngine {
     this.setupDoneObjects.clear();
     this.sourceWaiting = null;
     this.sourceTimerScheduled = false;
+    this.lastSourceReleaseTime = -Infinity;
     this.stageAcc.clear();
     this.hourlyGood.clear();
     this.hourlyScrap.clear();
@@ -249,17 +279,27 @@ export class DiscreteEventSimulationEngine {
     this.totalArrived = 0;
     this.wipArea = 0;
     this.lastWipUpdate = 0;
-    this.nextBreakdownAt.clear();
-    this.rng = mulberry32(this.project.simulationConfig.randomSeed || 4219);
+    this.rng = mulberry32(cfg.randomSeed || 4219);
 
     for (const obj of this.project.layoutObjects) {
       this.objectsMap.set(obj.id, obj);
+      this.activeJobs.set(obj.id, []);
+      this.pausedJobs.set(obj.id, []);
       if (obj.kind === 'conveyor') {
         this.conveyorOccupancy.set(obj.id, 0);
       }
+
+      const initAvail = this.calendarEngine.getObjectAvailabilityAt(obj, 0);
+      const initStatus = initAvail.reason === 'maintenance' ? 'maintenance' : 'idle';
+      this.stateTracker.initMachine(obj.id, initStatus, 0);
+      if (obj.kind === 'conveyor') {
+        this.stateTracker.initConveyor(obj.id, 'stopped', 0);
+      }
+
       this.objectStates.set(obj.id, {
         objectId: obj.id,
-        status: 'idle',
+        status: initStatus,
+        ...(obj.kind === 'conveyor' ? { conveyorStatus: 'stopped' as const } : {}),
         busyUnitIds: [],
         queueUnitIds: [],
         processedCount: 0,
@@ -268,20 +308,29 @@ export class DiscreteEventSimulationEngine {
         idleTimeSec: 0,
         blockedTimeSec: 0,
         starvedTimeSec: 0,
+        setupTimeSec: 0,
         downTimeSec: 0,
+        maintenanceTimeSec: 0,
+        movingTimeSec: 0,
+        stoppedTimeSec: 0,
         lastStateChangeTime: 0,
       });
 
-      const failureParams = resolveObjectFailureParams(obj, this.project.simulationConfig);
+      const failureParams = resolveObjectFailureParams(obj, cfg);
       if (failureParams.enabled && failureParams.mtbfSec > 0) {
-        const firstFail = this.sampleExponential(failureParams.mtbfSec);
-        this.nextBreakdownAt.set(obj.id, firstFail);
+        const firstFail = sampleTimeToFailureSec(failureParams, this.rng);
+        if (firstFail < cfg.durationSec) {
+          this.schedule(firstFail, 'BreakdownStarted', {
+            objectId: obj.id,
+            stageId: obj.stageId,
+            details: `Scheduled stochastic failure (${failureParams.failureModel}) on ${obj.name}`,
+          });
+        }
       }
     }
 
     for (let idx = 0; idx < this.project.stages.length; idx++) {
       const st = this.project.stages[idx];
-      // Guarantee every stage (even virtual Flowchart-only stages) has an executable runtime slot
       st.assignedObjectIds = st.assignedObjectIds.filter((oid) => this.objectsMap.has(oid));
       if (st.assignedObjectIds.length === 0) {
         const virtId = `virt_${st.id}`;
@@ -312,6 +361,9 @@ export class DiscreteEventSimulationEngine {
         };
         st.assignedObjectIds = [virtId];
         this.objectsMap.set(virtId, virtObj);
+        this.activeJobs.set(virtId, []);
+        this.pausedJobs.set(virtId, []);
+        this.stateTracker.initMachine(virtId, 'idle', 0);
         this.objectStates.set(virtId, {
           objectId: virtId,
           status: 'idle',
@@ -323,7 +375,9 @@ export class DiscreteEventSimulationEngine {
           idleTimeSec: 0,
           blockedTimeSec: 0,
           starvedTimeSec: 0,
+          setupTimeSec: 0,
           downTimeSec: 0,
+          maintenanceTimeSec: 0,
           lastStateChangeTime: 0,
         });
       }
@@ -354,7 +408,7 @@ export class DiscreteEventSimulationEngine {
       });
     }
 
-    // Build transitive upstream closures for safe end-of-order partial batch flushing
+    // Build transitive upstream closures for safe partial batch flushing
     for (let idx = 0; idx < this.project.stages.length; idx++) {
       const st = this.project.stages[idx];
       const closure = new Set<string>();
@@ -375,9 +429,16 @@ export class DiscreteEventSimulationEngine {
     for (const w of this.project.workers) {
       this.workersMap.set(w.id, w);
       this.workerAllocatedEntity.set(w.id, null);
+      const wAvail = this.calendarEngine.getWorkerAvailabilityAt(w, 0);
+      const initWStatus = wAvail.available
+        ? 'idle'
+        : wAvail.reason === 'break'
+        ? 'break'
+        : 'unavailable';
+      this.stateTracker.initWorker(w.id, initWStatus, 0);
       this.workerStates.set(w.id, {
         workerId: w.id,
-        status: 'idle',
+        status: initWStatus,
         currentStationId: w.assignedStationId,
         position: { ...w.position },
         startPosition: { ...w.position },
@@ -387,6 +448,8 @@ export class DiscreteEventSimulationEngine {
         busyTimeSec: 0,
         walkingTimeSec: 0,
         idleTimeSec: 0,
+        breakTimeSec: 0,
+        unavailableTimeSec: 0,
         tasksCompleted: 0,
         lastStateChangeTime: 0,
       });
@@ -396,34 +459,43 @@ export class DiscreteEventSimulationEngine {
       this.productsMap.set(p.id, p);
     }
 
-    // Schedule shifts & breaks
-    const cfg = this.project.simulationConfig;
-    if (cfg.shifts.length === 0) {
-      this.schedule(0, 'ShiftStarted', { details: 'Default shift started' });
-      this.schedule(cfg.durationSec, 'ShiftEnded', { details: 'Default shift ended' });
-    } else {
-      for (const sh of cfg.shifts) {
-        this.schedule(sh.startSec, 'ShiftStarted', {
-          details: `Shift started: ${sh.name}`,
-          payload: { shiftId: sh.id },
+    // Schedule all clipped calendar transitions (shifts, breaks, planned maintenance)
+    const transitions = this.calendarEngine.getCalendarTransitions(
+      Array.from(this.objectsMap.values())
+    );
+    for (const tr of transitions) {
+      if (tr.kind === 'shift_start') {
+        this.schedule(tr.timestamp, 'ShiftStarted', {
+          details: `Shift started: ${tr.shiftName}`,
+          payload: { shiftId: tr.shiftId },
         });
-        this.schedule(Math.min(cfg.durationSec, sh.startSec + sh.durationSec), 'ShiftEnded', {
-          details: `Shift ended: ${sh.name}`,
-          payload: { shiftId: sh.id },
+      } else if (tr.kind === 'shift_end') {
+        this.schedule(tr.timestamp, 'ShiftEnded', {
+          details: `Shift ended: ${tr.shiftName}`,
+          payload: { shiftId: tr.shiftId },
         });
-        for (const brk of sh.breaks) {
-          if (brk.startSec < cfg.durationSec) {
-            this.schedule(brk.startSec, 'MachineStopped', {
-              details: `Break started: ${brk.name}`,
-              payload: { breakStart: true, breakName: brk.name },
-            });
-            const endBrk = Math.min(cfg.durationSec, brk.startSec + brk.durationSec);
-            this.schedule(endBrk, 'MachineStarted', {
-              details: `Break ended: ${brk.name}`,
-              payload: { breakEnd: true, breakName: brk.name },
-            });
-          }
-        }
+      } else if (tr.kind === 'break_start') {
+        this.schedule(tr.timestamp, 'MachineStopped', {
+          details: `Break started: ${tr.breakName}`,
+          payload: { breakStart: true, breakName: tr.breakName, shiftId: tr.shiftId },
+        });
+      } else if (tr.kind === 'break_end') {
+        this.schedule(tr.timestamp, 'MachineStarted', {
+          details: `Break ended: ${tr.breakName}`,
+          payload: { breakEnd: true, breakName: tr.breakName, shiftId: tr.shiftId },
+        });
+      } else if (tr.kind === 'maintenance_start') {
+        this.schedule(tr.timestamp, 'PlannedMaintenanceStarted', {
+          objectId: tr.targetObjectId,
+          details: `Planned maintenance started: ${tr.maintenanceName}`,
+          payload: { maintenanceId: tr.maintenanceId, targetObjectId: tr.targetObjectId },
+        });
+      } else if (tr.kind === 'maintenance_end') {
+        this.schedule(tr.timestamp, 'PlannedMaintenanceCompleted', {
+          objectId: tr.targetObjectId,
+          details: `Planned maintenance completed: ${tr.maintenanceName}`,
+          payload: { maintenanceId: tr.maintenanceId, targetObjectId: tr.targetObjectId },
+        });
       }
     }
 
@@ -446,12 +518,8 @@ export class DiscreteEventSimulationEngine {
       ent?.isBatchCarrier && ent.containerKind === 'pallet'
         ? Math.max(1.0, prod?.dimensions.length || 0.75)
         : undefined;
-    return computeConveyorMetrics(conv, prod, carrierLen).physicalCapacity;
-  }
-
-  private sampleExponential(mean: number): number {
-    const u = Math.max(1e-6, 1 - this.rng());
-    return -mean * Math.log(u);
+    const metrics = computeConveyorMetrics(conv, prod, carrierLen);
+    return metrics.canFit ? metrics.physicalCapacity : 0;
   }
 
   private schedule(
@@ -537,17 +605,79 @@ export class DiscreteEventSimulationEngine {
     return count;
   }
 
-  private setObjectStatus(objId: string, nextStatus: ObjectRuntimeState['status'], now: number): void {
+  private isSourceStillActive(now: number): boolean {
+    if (now >= this.project.simulationConfig.durationSec) return false;
+    const primaryProd = this.project.products[0];
+    const audit = computeShiftWindowAudit(
+      this.project.simulationConfig,
+      primaryProd,
+      now,
+      this.project.layoutObjects
+    );
+    if (Number.isFinite(audit.plannedUnitsCap) && this.totalArrived >= audit.plannedUnitsCap) {
+      return false;
+    }
+    return true;
+  }
+
+  private resolveIdleOrStarvedStatus(objId: string, now: number): ObjectRuntimeState['status'] {
+    const obj = this.objectsMap.get(objId);
+    if (!obj) return 'idle';
+    const avail = this.calendarEngine.getObjectAvailabilityAt(obj, now);
+    if (!avail.available) {
+      return avail.reason === 'maintenance' ? 'maintenance' : 'idle';
+    }
+    if (obj.kind === 'conveyor' || obj.kind === 'storage' || obj.kind === 'vehicle') {
+      return 'idle';
+    }
+    const stageId = obj.stageId;
+    const buf = stageId ? this.stageBuffers.get(stageId) : undefined;
+    if (buf && buf.length > 0) {
+      // Material is present in stage queue (e.g., waiting for operator) -> idle, not starved
+      return 'idle';
+    }
+    const stage = stageId ? this.stagesMap.get(stageId) : undefined;
+    const batchCfg = stageId ? this.stageBatchConfigs.get(stageId) : undefined;
+    const holder = stageId ? this.stageBatchHolders.get(stageId) : undefined;
+    // Wait for upstream feed or batch formation while line is active
+    const inTransit = stageId ? this.stageInTransitCounts.get(stageId) || 0 : 0;
+    if (inTransit > 0 || (holder && holder.length > 0 && batchCfg?.batchMode === 'collect_batch')) {
+      return 'starved';
+    }
+    const upstreamClosure = stageId ? this.stageUpstreamClosures.get(stageId) : undefined;
+    let upstreamHasWork = false;
+    if (upstreamClosure && upstreamClosure.size > 0) {
+      for (const ent of this.entities.values()) {
+        if (!ent.scrapped && ent.completedAt === undefined && !ent.absorbedIntoEntityId) {
+          if (ent.currentStageId && upstreamClosure.has(ent.currentStageId)) {
+            upstreamHasWork = true;
+            break;
+          }
+        }
+      }
+    }
+    if (upstreamHasWork || this.isSourceStillActive(now)) {
+      return stage ? 'starved' : 'idle';
+    }
+    return 'idle';
+  }
+
+  private setObjectStatus(
+    objId: string,
+    nextStatus: ObjectRuntimeState['status'],
+    now: number
+  ): void {
     const st = this.objectStates.get(objId);
+    const obj = this.objectsMap.get(objId);
     if (!st) return;
-    const dt = Math.max(0, now - st.lastStateChangeTime);
-    if (st.status === 'running') st.runningTimeSec += dt;
-    else if (st.status === 'idle') st.idleTimeSec += dt;
-    else if (st.status === 'blocked') st.blockedTimeSec += dt;
-    else if (st.status === 'starved') st.starvedTimeSec += dt;
-    else if (st.status === 'down') st.downTimeSec += dt;
-    st.status = nextStatus;
-    st.lastStateChangeTime = now;
+
+    this.stateTracker.transitionMachine(objId, nextStatus, now, st);
+
+    if (obj?.kind === 'conveyor') {
+      const convNext =
+        nextStatus === 'running' ? 'moving' : nextStatus === 'blocked' ? 'blocked' : 'stopped';
+      this.stateTracker.transitionConveyor(objId, convNext, now, st);
+    }
   }
 
   private setWorkerStatus(
@@ -557,12 +687,123 @@ export class DiscreteEventSimulationEngine {
   ): void {
     const ws = this.workerStates.get(workerId);
     if (!ws) return;
-    const dt = Math.max(0, now - ws.lastStateChangeTime);
-    if (ws.status === 'busy') ws.busyTimeSec += dt;
-    else if (ws.status === 'walking') ws.walkingTimeSec += dt;
-    else if (ws.status === 'idle') ws.idleTimeSec += dt;
-    ws.status = nextStatus;
-    ws.lastStateChangeTime = now;
+    this.stateTracker.transitionWorker(workerId, nextStatus, now, ws);
+  }
+
+  private syncResourcesToCalendar(now: number): void {
+    this.shiftActive = this.calendarEngine.isPlantShiftActiveAt(now);
+    this.onBreak = this.calendarEngine.isPlantOnBreakAt(now);
+
+    for (const w of this.project.workers) {
+      const ws = this.workerStates.get(w.id);
+      if (!ws) continue;
+      if (this.workerAllocatedEntity.get(w.id) !== null) continue;
+      const avail = this.calendarEngine.getWorkerAvailabilityAt(w, now);
+      if (avail.available) {
+        if (ws.status === 'break' || ws.status === 'unavailable') {
+          this.setWorkerStatus(w.id, 'idle', now);
+        }
+      } else {
+        const targetStatus = avail.reason === 'break' ? 'break' : 'unavailable';
+        if (ws.status === 'idle' || ws.status === 'break' || ws.status === 'unavailable') {
+          this.setWorkerStatus(w.id, targetStatus, now);
+        }
+      }
+    }
+
+    for (const obj of this.objectsMap.values()) {
+      const st = this.objectStates.get(obj.id);
+      if (!st) continue;
+      const avail = this.calendarEngine.getObjectAvailabilityAt(obj, now);
+
+      if (!avail.available && avail.reason === 'maintenance') {
+        if (st.status !== 'down' && st.status !== 'maintenance') {
+          this.preemptActiveJobs(obj.id, now);
+          this.setObjectStatus(obj.id, 'maintenance', now);
+        }
+      } else if (avail.available) {
+        if (st.status === 'maintenance') {
+          this.resumePausedJobs(obj.id, now);
+          const refreshed = this.objectStates.get(obj.id)!;
+          if (refreshed.busyUnitIds.length === 0 && (this.pausedJobs.get(obj.id)?.length || 0) === 0) {
+            this.setObjectStatus(obj.id, this.resolveIdleOrStarvedStatus(obj.id, now), now);
+          }
+        } else if (st.busyUnitIds.length === 0 && st.status !== 'down' && st.status !== 'blocked') {
+          this.setObjectStatus(obj.id, this.resolveIdleOrStarvedStatus(obj.id, now), now);
+        }
+      } else {
+        // Off-shift or non-continuous break
+        if (st.busyUnitIds.length === 0 && st.status !== 'down' && st.status !== 'blocked') {
+          this.setObjectStatus(obj.id, 'idle', now);
+        }
+      }
+    }
+  }
+
+  private preemptActiveJobs(objId: string, now: number): void {
+    const active = this.activeJobs.get(objId);
+    if (!active || active.length === 0) return;
+    const paused = this.pausedJobs.get(objId) || [];
+    while (active.length > 0) {
+      const job = active.shift()!;
+      this.validJobTokens.delete(job.token);
+      job.remainingSec = Math.max(0, job.expectedEndAt - now);
+      paused.push(job);
+    }
+    this.pausedJobs.set(objId, paused);
+  }
+
+  private resumePausedJobs(objId: string, now: number): void {
+    const obj = this.objectsMap.get(objId);
+    if (!obj) return;
+    const stState = this.objectStates.get(objId);
+    if (!stState || stState.status === 'down') return;
+    const avail = this.calendarEngine.getObjectAvailabilityAt(obj, now);
+    if (!avail.available && avail.reason === 'maintenance') return;
+
+    const paused = this.pausedJobs.get(objId);
+    if (!paused || paused.length === 0) return;
+    const active = this.activeJobs.get(objId) || [];
+
+    while (paused.length > 0) {
+      const job = paused.shift()!;
+      const newToken = ++this.jobTokenCounter;
+      job.token = newToken;
+      job.startedAt = now;
+      job.expectedEndAt = now + job.remainingSec;
+      this.validJobTokens.add(newToken);
+      active.push(job);
+
+      if (job.phase === 'setup') {
+        this.setObjectStatus(objId, 'setup', now);
+        this.schedule(job.expectedEndAt, 'SetupCompleted', {
+          entityId: job.entityId,
+          stageId: job.stageId,
+          objectId: job.objectId,
+          details: `${obj.name} resumed setup for ${job.entityId}`,
+          payload: {
+            token: newToken,
+            workerIds: job.workerIds,
+            procDuration: job.totalProcSec,
+            setupDuration: job.remainingSec,
+          },
+        });
+      } else {
+        this.setObjectStatus(objId, 'running', now);
+        this.schedule(job.expectedEndAt, 'ProcessingCompleted', {
+          entityId: job.entityId,
+          stageId: job.stageId,
+          objectId: job.objectId,
+          details: `${job.entityId} resumed and completed operation at ${job.stageId}`,
+          payload: {
+            token: newToken,
+            workerIds: job.workerIds,
+            procDuration: job.totalProcSec,
+          },
+        });
+      }
+    }
+    this.activeJobs.set(objId, active);
   }
 
   private updateQueueIntegral(stageId: string, now: number): void {
@@ -572,7 +813,7 @@ export class DiscreteEventSimulationEngine {
     const qUnits = this.getStageQueueUnitCount(stageId);
     acc.queueArea += qUnits * dt;
     acc.lastQueueTime = now;
-    if (qUnits > acc.maxQueue) acc.maxQueue = qUnits;
+    if (dt > 1e-9 && qUnits > acc.maxQueue) acc.maxQueue = qUnits;
   }
 
   public advanceTo(targetTimeSec: number): void {
@@ -618,14 +859,7 @@ export class DiscreteEventSimulationEngine {
   }
 
   private finalizeAt(endSec: number): void {
-    for (const objId of this.objectStates.keys()) {
-      const st = this.objectStates.get(objId)!;
-      this.setObjectStatus(objId, st.status, endSec);
-    }
-    for (const wid of this.workerStates.keys()) {
-      const ws = this.workerStates.get(wid)!;
-      this.setWorkerStatus(wid, ws.status, endSec);
-    }
+    this.stateTracker.finalizeAt(endSec, this.objectStates, this.workerStates);
     for (const stageId of this.stageAcc.keys()) {
       this.updateQueueIntegral(stageId, endSec);
     }
@@ -678,44 +912,40 @@ export class DiscreteEventSimulationEngine {
     }
   }
 
+  private resumeWaitingSourceIfReady(now: number): void {
+    if (this.sourceWaiting?.waiting && !this.sourceTimerScheduled) {
+      const interval = resolveArrivalIntervalSec(this.project.simulationConfig);
+      const readyAt = Math.max(now, this.sourceWaiting.lastReleaseTime + interval);
+      if (readyAt < this.project.simulationConfig.durationSec) {
+        this.sourceTimerScheduled = true;
+        this.schedule(readyAt, 'ProductCreated', {
+          details: 'Resumed unit release after calendar/buffer opened',
+          payload: { productId: this.sourceWaiting.productId },
+        });
+      }
+    }
+  }
+
   private processEvent(ev: InternalEvent): void {
     this.clockSec = ev.timestamp;
     this.updateWipIntegral(ev.timestamp);
     this.recordEvent(ev);
 
     switch (ev.type) {
-      case 'ShiftStarted': {
-        this.shiftActive = true;
-        this.onBreak = false;
-        this.tryDispatchAllStages(ev.timestamp);
-        break;
-      }
-      case 'ShiftEnded': {
-        this.shiftActive = false;
-        break;
-      }
-      case 'MachineStopped': {
-        if (ev.payload?.breakStart) {
-          this.onBreak = true;
-          for (const wid of this.workerStates.keys()) {
-            const ws = this.workerStates.get(wid)!;
-            if (ws.status === 'idle') {
-              this.setWorkerStatus(wid, 'break', ev.timestamp);
-            }
-          }
-        }
-        break;
-      }
-      case 'MachineStarted': {
-        if (ev.payload?.breakEnd) {
-          this.onBreak = false;
-          for (const wid of this.workerStates.keys()) {
-            const ws = this.workerStates.get(wid)!;
-            if (ws.status === 'break') {
-              this.setWorkerStatus(wid, 'idle', ev.timestamp);
-            }
-          }
+      case 'ShiftStarted':
+      case 'ShiftEnded':
+      case 'MachineStopped':
+      case 'MachineStarted':
+      case 'PlannedMaintenanceStarted':
+      case 'PlannedMaintenanceCompleted': {
+        this.syncResourcesToCalendar(ev.timestamp);
+        if (
+          ev.type === 'ShiftStarted' ||
+          ev.type === 'MachineStarted' ||
+          ev.type === 'PlannedMaintenanceCompleted'
+        ) {
           this.tryDispatchAllStages(ev.timestamp);
+          this.resumeWaitingSourceIfReady(ev.timestamp);
         }
         break;
       }
@@ -725,6 +955,14 @@ export class DiscreteEventSimulationEngine {
       }
       case 'ProductArrived': {
         this.handleProductArrived(ev);
+        break;
+      }
+      case 'SetupStarted': {
+        this.handleSetupStarted(ev);
+        break;
+      }
+      case 'SetupCompleted': {
+        this.handleSetupCompleted(ev);
         break;
       }
       case 'ProcessingStarted': {
@@ -744,17 +982,7 @@ export class DiscreteEventSimulationEngine {
           this.retryBlockedUpstreamForStage(ev.stageId, ev.timestamp);
           this.tryStartStage(ev.stageId, ev.timestamp);
         }
-        if (this.sourceWaiting?.waiting && !this.sourceTimerScheduled) {
-          const interval = resolveArrivalIntervalSec(this.project.simulationConfig);
-          const readyAt = Math.max(ev.timestamp, this.sourceWaiting.lastReleaseTime + interval);
-          if (readyAt < this.project.simulationConfig.durationSec) {
-            this.sourceTimerScheduled = true;
-            this.schedule(readyAt, 'ProductCreated', {
-              details: 'Resumed raw unit release after downstream slot opened',
-              payload: { productId: this.sourceWaiting.productId },
-            });
-          }
-        }
+        this.resumeWaitingSourceIfReady(ev.timestamp);
         break;
       }
       case 'BreakdownStarted': {
@@ -781,7 +1009,7 @@ export class DiscreteEventSimulationEngine {
       const st = this.stagesMap.get(sid)!;
       const buf = this.stageBuffers.get(sid) || [];
       const inTransit = this.stageInTransitCounts.get(sid) || 0;
-      const hasFreeStation = Boolean(this.findAvailableStation(st));
+      const hasFreeStation = Boolean(this.findAvailableStation(st, undefined, this.clockSec));
       const cap = Math.max(1, st.bufferCapacity);
       const fullness = (buf.length + inTransit) / cap;
       const score = (hasFreeStation ? 0 : 10) + fullness + (buf.length + inTransit) * 0.05;
@@ -793,6 +1021,21 @@ export class DiscreteEventSimulationEngine {
     return bestId;
   }
 
+  private canAcceptSourceRelease(firstStage: ProductionStage, now: number): boolean {
+    if (this.calendarEngine.isPlantShiftActiveAt(now)) {
+      if (!this.calendarEngine.isPlantOnBreakAt(now)) return true;
+      // Allow release during break only if entry station runs continuously through breaks
+      return firstStage.assignedObjectIds.some((oid) => {
+        const obj = this.objectsMap.get(oid);
+        return Boolean(obj && this.calendarEngine.getObjectAvailabilityAt(obj, now).available);
+      });
+    }
+    return firstStage.assignedObjectIds.some((oid) => {
+      const obj = this.objectsMap.get(oid);
+      return Boolean(obj && this.calendarEngine.getObjectAvailabilityAt(obj, now).available);
+    });
+  }
+
   private handleProductCreated(ev: InternalEvent): void {
     this.sourceTimerScheduled = false;
     const cfg = this.project.simulationConfig;
@@ -800,7 +1043,12 @@ export class DiscreteEventSimulationEngine {
       this.productsMap.get(String(ev.payload?.productId || '')) || this.project.products[0];
     if (!product) return;
 
-    const shiftAudit = computeShiftWindowAudit(cfg, product, ev.timestamp);
+    const shiftAudit = computeShiftWindowAudit(
+      cfg,
+      product,
+      ev.timestamp,
+      this.project.layoutObjects
+    );
     if (Number.isFinite(shiftAudit.plannedUnitsCap) && this.totalArrived >= shiftAudit.plannedUnitsCap) {
       this.sourceWaiting = null;
       return;
@@ -822,23 +1070,23 @@ export class DiscreteEventSimulationEngine {
     const firstStage = this.stagesMap.get(firstStageId);
     if (!firstStage) return;
 
-    // Respect finite buffer + in-transit capacity AND conveyor physical capacity dynamically
     const firstBuffer = this.stageBuffers.get(firstStageId)!;
     const firstBatchHolder = this.stageBatchHolders.get(firstStageId) || [];
     const firstBatchCfg = this.stageBatchConfigs.get(firstStageId);
     const inTransitToFirst = this.stageInTransitCounts.get(firstStageId) || 0;
     const firstObj = this.objectsMap.get(firstStage.assignedObjectIds[0]);
-    const freeFirstStation = this.findAvailableStation(firstStage, product);
+    const freeFirstStation = this.findAvailableStation(firstStage, product, ev.timestamp);
     const hasFreeFirstSlot =
       Boolean(freeFirstStation) &&
       (firstStage.requiredWorkers <= 0 ||
         Boolean(
           freeFirstStation &&
-            this.findAvailableWorkers(firstStage, freeFirstStation, firstStage.requiredWorkers)
+            this.findAvailableWorkers(firstStage, freeFirstStation, firstStage.requiredWorkers, ev.timestamp)
         ));
     const entryConveyorFull =
       firstObj?.kind === 'conveyor' &&
-      (this.conveyorOccupancy.get(firstObj.id) || 0) >= this.getConveyorPhysicalCapacity(firstObj, product);
+      (this.conveyorOccupancy.get(firstObj.id) || 0) >=
+        this.getConveyorPhysicalCapacity(firstObj, product);
 
     const firstStagingAllowance =
       firstBatchCfg?.batchMode === 'collect_batch' ? firstBatchCfg.batchSize : 1;
@@ -853,17 +1101,17 @@ export class DiscreteEventSimulationEngine {
       ) ||
       entryConveyorFull
     ) {
-      // Wait reactively for BufferReleased instead of polling & piling phantom WIP
       this.sourceWaiting = {
         waiting: true,
         productId: product.id,
-        lastReleaseTime: this.sourceWaiting?.lastReleaseTime ?? ev.timestamp,
+        lastReleaseTime: this.lastSourceReleaseTime,
       };
       return;
     }
 
-    if (this.shiftActive && !this.onBreak) {
+    if (this.canAcceptSourceRelease(firstStage, ev.timestamp)) {
       this.sourceWaiting = null;
+      this.lastSourceReleaseTime = ev.timestamp;
       this.entityCounter++;
       this.totalArrived++;
       const entId = `unit_${this.entityCounter}`;
@@ -917,8 +1165,9 @@ export class DiscreteEventSimulationEngine {
       this.sourceWaiting = {
         waiting: true,
         productId: product.id,
-        lastReleaseTime: ev.timestamp,
+        lastReleaseTime: this.lastSourceReleaseTime,
       };
+      return;
     }
 
     const nextInterval = shiftAudit.arrivalIntervalSec;
@@ -1018,9 +1267,14 @@ export class DiscreteEventSimulationEngine {
 
   private tryFlushPartialBatchesIfExhausted(now: number): void {
     const primaryProduct = this.project.products[0];
-    const shiftAudit = computeShiftWindowAudit(this.project.simulationConfig, primaryProduct, now);
+    const shiftAudit = computeShiftWindowAudit(
+      this.project.simulationConfig,
+      primaryProduct,
+      now,
+      this.project.layoutObjects
+    );
     const sourceDone =
-      !this.shiftActive ||
+      !this.calendarEngine.isPlantShiftActiveAt(now) ||
       (Number.isFinite(shiftAudit.plannedUnitsCap) && this.totalArrived >= shiftAudit.plannedUnitsCap);
     if (!sourceDone) return;
 
@@ -1080,13 +1334,11 @@ export class DiscreteEventSimulationEngine {
     ent.currentStageId = stageId;
     ent.locationKind = 'buffer';
 
-    // Only increment entered if this entity wasn't already counted via rework/batch creation at this stage
     const isReworkLoop = acc.stageEnterTimes.has(entId);
     if (!isReworkLoop) {
       acc.entered += incomingUnits;
     }
 
-    // Case 1: Unbatch carrier back into individual units
     if (!isReworkLoop && batchCfg?.batchMode === 'unbatch' && incomingUnits > 1) {
       ent.absorbedIntoEntityId = `${entId}_unbatched`;
       for (let i = 0; i < incomingUnits; i++) {
@@ -1122,7 +1374,6 @@ export class DiscreteEventSimulationEngine {
       return;
     }
 
-    // Case 2: Collect loose items into grouped pallet/carton/pack carrier
     if (
       !isReworkLoop &&
       batchCfg?.batchMode === 'collect_batch' &&
@@ -1159,7 +1410,6 @@ export class DiscreteEventSimulationEngine {
       return;
     }
 
-    // Case 3: Single-unit processing OR already-formed batch carrier >= stage targetBatchSize
     buf.push(entId);
     acc.waitingEnterTimes.set(entId, ev.timestamp);
     if (!acc.stageEnterTimes.has(entId)) {
@@ -1178,16 +1428,24 @@ export class DiscreteEventSimulationEngine {
     this.tryStartStage(stageId, ev.timestamp);
   }
 
-  private findAvailableStation(stage: ProductionStage, prod?: ProductDefinition): LayoutObject | undefined {
+  private findAvailableStation(
+    stage: ProductionStage,
+    prod?: ProductDefinition,
+    now = this.clockSec
+  ): LayoutObject | undefined {
     for (const objId of stage.assignedObjectIds) {
       const obj = this.objectsMap.get(objId);
       const st = this.objectStates.get(objId);
       if (!obj || !st) continue;
-      if (st.status === 'down' || st.status === 'blocked') continue;
+      if (st.status === 'down' || st.status === 'blocked' || st.status === 'maintenance') continue;
+      const avail = this.calendarEngine.getObjectAvailabilityAt(obj, now);
+      if (!avail.available) continue;
+
       const cap =
         obj.kind === 'conveyor'
           ? this.getConveyorPhysicalCapacity(obj, prod)
           : Math.max(1, obj.operations.capacity);
+      if (cap <= 0) continue;
       if (st.busyUnitIds.length < cap) {
         return obj;
       }
@@ -1195,7 +1453,12 @@ export class DiscreteEventSimulationEngine {
     return undefined;
   }
 
-  private findAvailableWorkers(stage: ProductionStage, stationObj: LayoutObject, count: number): WorkerDefinition[] | null {
+  private findAvailableWorkers(
+    stage: ProductionStage,
+    stationObj: LayoutObject,
+    count: number,
+    now = this.clockSec
+  ): WorkerDefinition[] | null {
     if (count <= 0) return [];
     const candidates: Array<{ worker: WorkerDefinition; dist: number; directMatch: boolean }> = [];
 
@@ -1203,6 +1466,7 @@ export class DiscreteEventSimulationEngine {
       const ws = this.workerStates.get(w.id);
       if (!ws || ws.status !== 'idle') continue;
       if (this.workerAllocatedEntity.get(w.id) !== null) continue;
+      if (!this.calendarEngine.getWorkerAvailabilityAt(w, now).available) continue;
 
       const assignedToStage =
         w.assignedStageIds.includes(stage.id) || w.assignedStationId === stationObj.id;
@@ -1227,7 +1491,6 @@ export class DiscreteEventSimulationEngine {
   }
 
   private tryStartStage(stageId: string, now: number): void {
-    if (!this.shiftActive || this.onBreak) return;
     const stage = this.stagesMap.get(stageId);
     const buf = this.stageBuffers.get(stageId);
     const acc = this.stageAcc.get(stageId);
@@ -1236,11 +1499,11 @@ export class DiscreteEventSimulationEngine {
     while (buf.length > 0) {
       const nextEnt = this.entities.get(buf[0]);
       const nextProd = nextEnt ? this.productsMap.get(nextEnt.productId) : undefined;
-      const stationObj = this.findAvailableStation(stage, nextProd);
+      const stationObj = this.findAvailableStation(stage, nextProd, now);
       if (!stationObj) break;
 
       const neededWorkers = stationObj.kind === 'conveyor' ? 0 : Math.max(0, stage.requiredWorkers);
-      const chosenWorkers = this.findAvailableWorkers(stage, stationObj, neededWorkers);
+      const chosenWorkers = this.findAvailableWorkers(stage, stationObj, neededWorkers, now);
       if (!chosenWorkers) break;
 
       this.updateQueueIntegral(stageId, now);
@@ -1256,13 +1519,12 @@ export class DiscreteEventSimulationEngine {
         acc.waitingEnterTimes.delete(entId);
       }
 
-      // Reserve machine/station capacity
       const stState = this.objectStates.get(stationObj.id)!;
       stState.busyUnitIds.push(entId);
-      this.setObjectStatus(stationObj.id, 'running', now);
 
       // Conveyor Flowchart Node: animate product gliding across the conveyor belt
       if (stationObj.kind === 'conveyor') {
+        this.setObjectStatus(stationObj.id, 'running', now);
         const rad = (stationObj.geometry.rotationDeg * Math.PI) / 180;
         const dir = stationObj.operations.direction === -1 ? -1 : 1;
         const ux = Math.cos(rad) * dir;
@@ -1335,7 +1597,6 @@ export class DiscreteEventSimulationEngine {
         z: stationObj.geometry.position.z,
       };
 
-      // Reserve workers & calculate deterministic walking time via timeAuditService
       let maxWalkTime = 0;
       const workerIds: string[] = [];
 
@@ -1375,17 +1636,29 @@ export class DiscreteEventSimulationEngine {
 
       const needsSetup = !this.setupDoneObjects.has(stationObj.id) && (stage.setupTimeSec || 0) > 0;
       if (needsSetup) this.setupDoneObjects.add(stationObj.id);
-      const setupSec = needsSetup ? (stage.setupTimeSec || 0) : 0;
-      const procBase = computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, needsSetup);
+      const setupSec = needsSetup ? computeStageSetupDurationSec(stage, stationObj, chosenWorkers) : 0;
+      const procBase = computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, false);
       const startAt = now + maxWalkTime;
 
-      this.schedule(startAt, 'ProcessingStarted', {
-        entityId: entId,
-        stageId,
-        objectId: stationObj.id,
-        details: `${stationObj.name} started processing ${entId}${setupSec > 0 ? ` (incl. ${setupSec}s setup)` : ''}`,
-        payload: { workerIds, procDuration: procBase },
-      });
+      if (setupSec > 0) {
+        this.setObjectStatus(stationObj.id, 'setup', now);
+        this.schedule(startAt, 'SetupStarted', {
+          entityId: entId,
+          stageId,
+          objectId: stationObj.id,
+          details: `${stationObj.name} setup started (${setupSec.toFixed(1)}s) for ${entId}`,
+          payload: { workerIds, setupDuration: setupSec, procDuration: procBase },
+        });
+      } else {
+        this.setObjectStatus(stationObj.id, 'running', now);
+        this.schedule(startAt, 'ProcessingStarted', {
+          entityId: entId,
+          stageId,
+          objectId: stationObj.id,
+          details: `${stationObj.name} started processing ${entId}`,
+          payload: { workerIds, procDuration: procBase },
+        });
+      }
 
       this.schedule(now, 'BufferReleased', {
         stageId,
@@ -1394,9 +1667,101 @@ export class DiscreteEventSimulationEngine {
     }
   }
 
+  private handleSetupStarted(ev: InternalEvent): void {
+    const objId = ev.objectId;
+    const stageId = ev.stageId;
+    const entityId = ev.entityId;
+    if (!objId || !stageId || !entityId) return;
+
+    const workerIds = (ev.payload?.workerIds as string[]) || [];
+    const setupDuration = Math.max(0, Number(ev.payload?.setupDuration ?? 0));
+    const procDuration = Math.max(0, Number(ev.payload?.procDuration ?? 0));
+
+    for (const wid of workerIds) {
+      const ws = this.workerStates.get(wid);
+      if (ws) {
+        ws.position = { ...ws.targetPosition };
+        ws.currentStationId = objId;
+        this.setWorkerStatus(wid, 'busy', ev.timestamp);
+      }
+    }
+
+    const stState = this.objectStates.get(objId);
+    if (stState && stState.status !== 'down' && stState.status !== 'maintenance') {
+      this.setObjectStatus(objId, 'setup', ev.timestamp);
+    }
+
+    const token = ++this.jobTokenCounter;
+    this.validJobTokens.add(token);
+    const job: ActiveJobRecord = {
+      token,
+      phase: 'setup',
+      entityId,
+      stageId,
+      objectId: objId,
+      workerIds,
+      startedAt: ev.timestamp,
+      expectedEndAt: ev.timestamp + setupDuration,
+      remainingSec: setupDuration,
+      totalProcSec: procDuration,
+      isConveyorNode: false,
+    };
+
+    if (stState && (stState.status === 'down' || stState.status === 'maintenance')) {
+      const paused = this.pausedJobs.get(objId) || [];
+      paused.push(job);
+      this.pausedJobs.set(objId, paused);
+      return;
+    }
+
+    const list = this.activeJobs.get(objId) || [];
+    list.push(job);
+    this.activeJobs.set(objId, list);
+
+    this.schedule(ev.timestamp + setupDuration, 'SetupCompleted', {
+      entityId,
+      stageId,
+      objectId: objId,
+      details: `${objId} setup completed (${setupDuration.toFixed(1)}s)`,
+      payload: { token, workerIds, procDuration, setupDuration },
+    });
+  }
+
+  private handleSetupCompleted(ev: InternalEvent): void {
+    const token = ev.payload?.token as number | undefined;
+    if (token !== undefined) {
+      if (!this.validJobTokens.has(token)) return;
+      this.validJobTokens.delete(token);
+    }
+    if (ev.objectId && token !== undefined) {
+      const list = this.activeJobs.get(ev.objectId) || [];
+      this.activeJobs.set(
+        ev.objectId,
+        list.filter((j) => j.token !== token)
+      );
+    }
+
+    const objId = ev.objectId;
+    if (objId) {
+      this.setObjectStatus(objId, 'running', ev.timestamp);
+    }
+    const workerIds = (ev.payload?.workerIds as string[]) || [];
+    const procDuration = Math.max(0, Number(ev.payload?.procDuration ?? 0));
+
+    this.schedule(ev.timestamp, 'ProcessingStarted', {
+      entityId: ev.entityId,
+      stageId: ev.stageId,
+      objectId: ev.objectId,
+      details: `${ev.objectId} started processing ${ev.entityId}`,
+      payload: { workerIds, procDuration },
+    });
+  }
+
   private handleProcessingStarted(ev: InternalEvent): void {
     const workerIds = (ev.payload?.workerIds as string[]) || [];
     const procDuration = Math.max(0, Number(ev.payload?.procDuration ?? 0));
+    const isConveyorNode = Boolean(ev.payload?.isConveyorNode);
+
     if (ev.entityId && ev.stageId) {
       const acc = this.stageAcc.get(ev.stageId);
       if (acc) {
@@ -1412,31 +1777,35 @@ export class DiscreteEventSimulationEngine {
       }
     }
 
-    if (ev.objectId) {
-      const nextFail = this.nextBreakdownAt.get(ev.objectId);
-      const obj = this.objectsMap.get(ev.objectId);
-      if (nextFail !== undefined && obj && ev.timestamp >= nextFail) {
-        const failureParams = resolveObjectFailureParams(obj, this.project.simulationConfig);
-        if (failureParams.enabled && failureParams.mttrSec > 0) {
-          const repairDur = Math.max(1, this.sampleExponential(failureParams.mttrSec));
-          this.schedule(ev.timestamp, 'BreakdownStarted', {
-            objectId: ev.objectId,
-            stageId: ev.stageId,
-            details: `Unplanned breakdown on ${obj.name} (est. repair ${repairDur.toFixed(1)}s)`,
-            payload: {
-              repairDur,
-              deferredCompletion: {
-                entityId: ev.entityId,
-                stageId: ev.stageId,
-                objectId: ev.objectId,
-                workerIds,
-                procDuration,
-              },
-            },
-          });
-          return;
-        }
+    const objId = ev.objectId;
+    const token = ++this.jobTokenCounter;
+    this.validJobTokens.add(token);
+
+    if (objId && ev.entityId && ev.stageId) {
+      const stState = this.objectStates.get(objId);
+      const job: ActiveJobRecord = {
+        token,
+        phase: 'processing',
+        entityId: ev.entityId,
+        stageId: ev.stageId,
+        objectId: objId,
+        workerIds,
+        startedAt: ev.timestamp,
+        expectedEndAt: ev.timestamp + procDuration,
+        remainingSec: procDuration,
+        totalProcSec: procDuration,
+        isConveyorNode,
+      };
+      if (stState && (stState.status === 'down' || stState.status === 'maintenance')) {
+        const paused = this.pausedJobs.get(objId) || [];
+        paused.push(job);
+        this.pausedJobs.set(objId, paused);
+        return;
       }
+      this.setObjectStatus(objId, 'running', ev.timestamp);
+      const list = this.activeJobs.get(objId) || [];
+      list.push(job);
+      this.activeJobs.set(objId, list);
     }
 
     this.schedule(ev.timestamp + procDuration, 'ProcessingCompleted', {
@@ -1444,7 +1813,7 @@ export class DiscreteEventSimulationEngine {
       stageId: ev.stageId,
       objectId: ev.objectId,
       details: `${ev.entityId} completed operation at ${ev.stageId}`,
-      payload: { workerIds, procDuration },
+      payload: { token, workerIds, procDuration },
     });
   }
 
@@ -1452,14 +1821,46 @@ export class DiscreteEventSimulationEngine {
     const objId = ev.objectId;
     if (!objId) return;
     const obj = this.objectsMap.get(objId);
-    this.setObjectStatus(objId, 'down', ev.timestamp);
-    const repairDur = Math.max(0, Number(ev.payload?.repairDur ?? obj?.operations.mttrSec ?? 0));
+    const stState = this.objectStates.get(objId);
+    if (!obj || !stState) return;
 
+    const failureParams = resolveObjectFailureParams(obj, this.project.simulationConfig);
+    if (!failureParams.enabled) return;
+
+    // Only breakdown during active shift/operating periods (not while in planned maintenance)
+    if (stState.status === 'maintenance') {
+      const retryAt = ev.timestamp + Math.max(10, sampleTimeToFailureSec(failureParams, this.rng));
+      if (retryAt < this.project.simulationConfig.durationSec) {
+        this.schedule(retryAt, 'BreakdownStarted', {
+          objectId: objId,
+          stageId: obj.stageId,
+          details: `Deferred stochastic failure check on ${obj.name}`,
+        });
+      }
+      return;
+    }
+
+    const avail = this.calendarEngine.getObjectAvailabilityAt(obj, ev.timestamp);
+    if (!avail.available) {
+      const nextTry = ev.timestamp + Math.max(60, sampleTimeToFailureSec(failureParams, this.rng));
+      if (nextTry < this.project.simulationConfig.durationSec) {
+        this.schedule(nextTry, 'BreakdownStarted', {
+          objectId: objId,
+          stageId: obj.stageId,
+          details: `Scheduled stochastic failure on ${obj.name}`,
+        });
+      }
+      return;
+    }
+
+    this.preemptActiveJobs(objId, ev.timestamp);
+    this.setObjectStatus(objId, 'down', ev.timestamp);
+
+    const repairDur = Math.max(0.5, sampleRepairDurationSec(failureParams, this.rng));
     this.schedule(ev.timestamp + repairDur, 'RepairCompleted', {
       objectId: objId,
-      stageId: ev.stageId,
-      details: `Repair completed on ${obj?.name || objId}`,
-      payload: ev.payload,
+      stageId: ev.stageId || obj.stageId,
+      details: `Repair completed on ${obj.name} after ${repairDur.toFixed(1)}s (${failureParams.repairModel})`,
     });
   }
 
@@ -1467,43 +1868,55 @@ export class DiscreteEventSimulationEngine {
     const objId = ev.objectId;
     if (!objId) return;
     const obj = this.objectsMap.get(objId);
+
     if (obj) {
       const failureParams = resolveObjectFailureParams(obj, this.project.simulationConfig);
       if (failureParams.enabled && failureParams.mtbfSec > 0) {
-        this.nextBreakdownAt.set(
-          objId,
-          ev.timestamp + this.sampleExponential(failureParams.mtbfSec)
+        const nextFail = ev.timestamp + sampleTimeToFailureSec(failureParams, this.rng);
+        if (nextFail < this.project.simulationConfig.durationSec) {
+          this.schedule(nextFail, 'BreakdownStarted', {
+            objectId: objId,
+            stageId: obj.stageId,
+            details: `Next scheduled stochastic failure on ${obj.name}`,
+          });
+        }
+      }
+    }
+
+    const stState = this.objectStates.get(objId);
+    if (stState) {
+      const avail = obj ? this.calendarEngine.getObjectAvailabilityAt(obj, ev.timestamp) : { available: true, reason: 'active' as const };
+      if (!avail.available && avail.reason === 'maintenance') {
+        this.setObjectStatus(objId, 'maintenance', ev.timestamp);
+        return;
+      }
+      this.setObjectStatus(objId, this.resolveIdleOrStarvedStatus(objId, ev.timestamp), ev.timestamp);
+      this.resumePausedJobs(objId, ev.timestamp);
+    }
+
+    const stgId = ev.stageId || obj?.stageId;
+    if (stgId) {
+      this.retryBlockedUpstreamForStage(stgId, ev.timestamp);
+      this.tryStartStage(stgId, ev.timestamp);
+    }
+    this.tryDispatchAllStages(ev.timestamp);
+    this.resumeWaitingSourceIfReady(ev.timestamp);
+  }
+
+  private handleProcessingCompleted(ev: InternalEvent): void {
+    const token = ev.payload?.token as number | undefined;
+    if (token !== undefined) {
+      if (!this.validJobTokens.has(token)) return;
+      this.validJobTokens.delete(token);
+      if (ev.objectId) {
+        const list = this.activeJobs.get(ev.objectId) || [];
+        this.activeJobs.set(
+          ev.objectId,
+          list.filter((j) => j.token !== token)
         );
       }
     }
 
-    const deferred = ev.payload?.deferredCompletion as
-      | {
-          entityId?: string;
-          stageId?: string;
-          objectId?: string;
-          workerIds?: string[];
-          procDuration?: number;
-        }
-      | undefined;
-
-    if (deferred && deferred.entityId) {
-      const resumedDur = Math.max(0, Number(deferred.procDuration ?? 0));
-      this.setObjectStatus(objId, 'running', ev.timestamp);
-      this.schedule(ev.timestamp + resumedDur, 'ProcessingCompleted', {
-        entityId: deferred.entityId,
-        stageId: deferred.stageId,
-        objectId: deferred.objectId,
-        details: `${deferred.entityId} resumed and completed after repair`,
-        payload: { workerIds: deferred.workerIds || [], procDuration: resumedDur },
-      });
-    } else {
-      this.setObjectStatus(objId, 'idle', ev.timestamp);
-      if (ev.stageId) this.tryStartStage(ev.stageId, ev.timestamp);
-    }
-  }
-
-  private handleProcessingCompleted(ev: InternalEvent): void {
     const entId = ev.entityId;
     const stageId = ev.stageId;
     const objId = ev.objectId;
@@ -1528,14 +1941,23 @@ export class DiscreteEventSimulationEngine {
       ent.processingTimeSec += procDuration;
     }
 
-    // Release workers immediately when processing finishes
+    // Release workers respecting each worker's individual shift/break calendar
     const workerIds = (ev.payload?.workerIds as string[]) || [];
     for (const wid of workerIds) {
       this.workerAllocatedEntity.set(wid, null);
       const ws = this.workerStates.get(wid);
+      const wDef = this.workersMap.get(wid);
       if (ws) {
         ws.tasksCompleted++;
-        this.setWorkerStatus(wid, this.onBreak ? 'break' : 'idle', ev.timestamp);
+        const wAvail = wDef
+          ? this.calendarEngine.getWorkerAvailabilityAt(wDef, ev.timestamp)
+          : { available: true, reason: 'active' as const };
+        const nextWStatus = wAvail.available
+          ? 'idle'
+          : wAvail.reason === 'break'
+          ? 'break'
+          : 'unavailable';
+        this.setWorkerStatus(wid, nextWStatus, ev.timestamp);
       }
       this.schedule(ev.timestamp, 'WorkerReleased', {
         entityId: entId,
@@ -1571,7 +1993,11 @@ export class DiscreteEventSimulationEngine {
       const hourBucket = Math.floor(ev.timestamp / 3600) + 1;
       this.hourlyScrap.set(hourBucket, (this.hourlyScrap.get(hourBucket) || 0) + unitCount);
 
-      this.setObjectStatus(objId, stState.busyUnitIds.length > 0 ? 'running' : 'idle', ev.timestamp);
+      this.setObjectStatus(
+        objId,
+        stState.busyUnitIds.length > 0 ? 'running' : this.resolveIdleOrStarvedStatus(objId, ev.timestamp),
+        ev.timestamp
+      );
       this.schedule(ev.timestamp, 'ProductScrapped', {
         entityId: entId,
         stageId,
@@ -1588,7 +2014,11 @@ export class DiscreteEventSimulationEngine {
       ent.reworkCount++;
       acc.reworked += unitCount;
       acc.stageEnterTimes.set(entId, ev.timestamp);
-      this.setObjectStatus(objId, stState.busyUnitIds.length > 0 ? 'running' : 'idle', ev.timestamp);
+      this.setObjectStatus(
+        objId,
+        stState.busyUnitIds.length > 0 ? 'running' : this.resolveIdleOrStarvedStatus(objId, ev.timestamp),
+        ev.timestamp
+      );
       this.schedule(ev.timestamp, 'ProductArrived', {
         entityId: entId,
         stageId,
@@ -1599,7 +2029,6 @@ export class DiscreteEventSimulationEngine {
       return;
     }
 
-    // Determine next stage strictly from user Flowchart DAG (or linear route in auto mode)
     const prod = this.productsMap.get(ent.productId);
     let nextStageId: string | undefined;
     if (prod?.routingMode === 'manual') {
@@ -1617,7 +2046,6 @@ export class DiscreteEventSimulationEngine {
     }
 
     if (!nextStageId) {
-      // Completed final stage!
       stState.busyUnitIds = stState.busyUnitIds.filter((id) => id !== entId);
       ent.completedAt = ev.timestamp;
       ent.locationKind = 'completed';
@@ -1626,7 +2054,11 @@ export class DiscreteEventSimulationEngine {
       const hourBucket = Math.floor(ev.timestamp / 3600) + 1;
       this.hourlyGood.set(hourBucket, (this.hourlyGood.get(hourBucket) || 0) + unitCount);
 
-      this.setObjectStatus(objId, stState.busyUnitIds.length > 0 ? 'running' : 'idle', ev.timestamp);
+      this.setObjectStatus(
+        objId,
+        stState.busyUnitIds.length > 0 ? 'running' : this.resolveIdleOrStarvedStatus(objId, ev.timestamp),
+        ev.timestamp
+      );
       this.schedule(ev.timestamp, 'ProductCompleted', {
         entityId: entId,
         stageId,
@@ -1641,7 +2073,6 @@ export class DiscreteEventSimulationEngine {
       return;
     }
 
-    // Attempt transfer to next stage (respecting user queue bufferCapacity >= 0!)
     const transferred = this.attemptTransferToNextStage(entId, stageId, objId, nextStageId, ev.timestamp);
     if (transferred) {
       this.retryBlockedUpstreamForStage(stageId, ev.timestamp);
@@ -1667,18 +2098,17 @@ export class DiscreteEventSimulationEngine {
     const effectiveBufferUsed = nextBuf.length + nextBatchHolder.length + pendingInTransit;
     const nextBufferCap = Math.max(0, Number(nextStage.bufferCapacity ?? 0));
 
-    // Also inspect if destination stage is an explicit conveyor or transfer conveyor that is saturated
     const fromObj = this.objectsMap.get(fromObjId);
     const toObj = this.objectsMap.get(nextStage.assignedObjectIds[0]);
     const ent = this.entities.get(entId);
     const prod = ent ? this.productsMap.get(ent.productId) : undefined;
-    const freeDestStation = this.findAvailableStation(nextStage, prod);
+    const freeDestStation = this.findAvailableStation(nextStage, prod, now);
     const hasFreeDestSlot =
       Boolean(freeDestStation) &&
       (nextStage.requiredWorkers <= 0 ||
         Boolean(
           freeDestStation &&
-            this.findAvailableWorkers(nextStage, freeDestStation, nextStage.requiredWorkers)
+            this.findAvailableWorkers(nextStage, freeDestStation, nextStage.requiredWorkers, now)
         ));
     const nextConvFull =
       toObj?.kind === 'conveyor' &&
@@ -1695,15 +2125,15 @@ export class DiscreteEventSimulationEngine {
     );
     const transferConvCandidate = explicitConveyorStage
       ? undefined
-      : (fromStage?.conveyorObjectId
-          ? this.objectsMap.get(fromStage.conveyorObjectId)
-          : allConveyors.reduce<LayoutObject | undefined>((best, c) => {
-              if (!best) return c;
-              return distance2D(rawStartCheck, c.geometry.position) <
-                distance2D(rawStartCheck, best.geometry.position)
-                ? c
-                : best;
-            }, undefined));
+      : fromStage?.conveyorObjectId
+      ? this.objectsMap.get(fromStage.conveyorObjectId)
+      : allConveyors.reduce<LayoutObject | undefined>((best, c) => {
+          if (!best) return c;
+          return distance2D(rawStartCheck, c.geometry.position) <
+            distance2D(rawStartCheck, best.geometry.position)
+            ? c
+            : best;
+        }, undefined);
 
     const transferConvFull =
       transferConvCandidate?.kind === 'conveyor' &&
@@ -1739,14 +2169,12 @@ export class DiscreteEventSimulationEngine {
       return false;
     }
 
-    // Reserve transit slot in destination stage so simultaneous upstream units can't overfill buffer
     this.stageInTransitCounts.set(nextStageId, pendingInTransit + 1);
 
-    // Free upstream station
     fromState.busyUnitIds = fromState.busyUnitIds.filter((id) => id !== entId);
     this.setObjectStatus(
       fromObjId,
-      fromState.busyUnitIds.length > 0 ? 'running' : 'idle',
+      fromState.busyUnitIds.length > 0 ? 'running' : this.resolveIdleOrStarvedStatus(fromObjId, now),
       now
     );
 
@@ -1818,7 +2246,6 @@ export class DiscreteEventSimulationEngine {
 
     let transportTime = 1.6;
     if (fromConv && fromConv.operations.speedMps && fromConv.operations.speedMps > 0) {
-      const speed = fromConv.operations.speedMps;
       const pStart = projectOntoConveyor(rawStart, fromConv);
       const pEnd = toConv ? projectOntoConveyor(rawEnd, toConv) : projectOntoConveyor(rawEnd, fromConv);
 
@@ -1892,6 +2319,7 @@ export class DiscreteEventSimulationEngine {
       ent.currentObjectId = fromConv.id;
       ent.transportTimeSec += transportTime + entryDelay;
       this.conveyorOccupancy.set(fromConv.id, (this.conveyorOccupancy.get(fromConv.id) || 0) + 1);
+      this.stateTracker.transitionConveyor(fromConv.id, 'moving', now, this.objectStates.get(fromConv.id));
       this.conveyorTransits.set(entId, {
         entityId: entId,
         conveyorId: fromConv.id,
@@ -1914,7 +2342,6 @@ export class DiscreteEventSimulationEngine {
       return true;
     }
 
-    // Direct zero-assumption stage-to-stage handoff when no physical conveyor bridges the stages
     ent.locationKind = 'station';
     ent.currentObjectId = fromObjId;
     this.schedule(now, 'ProductTransferred', {
@@ -1931,10 +2358,14 @@ export class DiscreteEventSimulationEngine {
     this.stageInTransitCounts.set(ev.stageId, Math.max(0, prevTransitCount - 1));
     const transferConvId = ev.payload?.transferConveyorId as string | undefined;
     if (transferConvId) {
-      this.conveyorOccupancy.set(
-        transferConvId,
-        Math.max(0, (this.conveyorOccupancy.get(transferConvId) || 1) - 1)
-      );
+      const nextOcc = Math.max(0, (this.conveyorOccupancy.get(transferConvId) || 1) - 1);
+      this.conveyorOccupancy.set(transferConvId, nextOcc);
+      if (nextOcc === 0) {
+        const cState = this.objectStates.get(transferConvId);
+        if (cState && cState.busyUnitIds.length === 0) {
+          this.stateTracker.transitionConveyor(transferConvId, 'stopped', ev.timestamp, cState);
+        }
+      }
       this.schedule(ev.timestamp, 'BufferReleased', {
         stageId: ev.stageId,
         details: `Transfer conveyor slot freed`,
@@ -1963,11 +2394,11 @@ export class DiscreteEventSimulationEngine {
 
     while (outbox.length > 0) {
       const inTransit = this.stageInTransitCounts.get(stageId) || 0;
-      const freeSt = this.findAvailableStation(stage);
+      const freeSt = this.findAvailableStation(stage, undefined, now);
       const hasFreeSlot =
         Boolean(freeSt) &&
         (stage.requiredWorkers <= 0 ||
-          Boolean(freeSt && this.findAvailableWorkers(stage, freeSt, stage.requiredWorkers)));
+          Boolean(freeSt && this.findAvailableWorkers(stage, freeSt, stage.requiredWorkers, now)));
       const stagingAllowance =
         batchCfg?.batchMode === 'collect_batch' ? batchCfg.batchSize : 1;
       if (
@@ -2007,11 +2438,42 @@ export class DiscreteEventSimulationEngine {
     this.updateInterpolatedPositions(this.clockSec);
     const objects: Record<string, ObjectRuntimeState> = {};
     for (const [k, v] of this.objectStates.entries()) {
-      objects[k] = { ...v, busyUnitIds: [...v.busyUnitIds], queueUnitIds: [...v.queueUnitIds] };
+      const totals = this.stateTracker.getMachineTotals(k, this.clockSec);
+      const convTotals =
+        this.objectsMap.get(k)?.kind === 'conveyor'
+          ? this.stateTracker.getConveyorTotals(k, this.clockSec)
+          : undefined;
+      objects[k] = {
+        ...v,
+        runningTimeSec: totals.running,
+        idleTimeSec: totals.idle,
+        blockedTimeSec: totals.blocked,
+        starvedTimeSec: totals.starved,
+        setupTimeSec: totals.setup,
+        downTimeSec: totals.down,
+        maintenanceTimeSec: totals.maintenance,
+        ...(convTotals
+          ? {
+              movingTimeSec: convTotals.moving,
+              stoppedTimeSec: convTotals.stopped,
+            }
+          : {}),
+        busyUnitIds: [...v.busyUnitIds],
+        queueUnitIds: [...v.queueUnitIds],
+      };
     }
     const workers: Record<string, WorkerRuntimeState> = {};
     for (const [k, v] of this.workerStates.entries()) {
-      workers[k] = { ...v, position: { ...v.position } };
+      const wt = this.stateTracker.getWorkerTotals(k, this.clockSec);
+      workers[k] = {
+        ...v,
+        busyTimeSec: wt.busy,
+        walkingTimeSec: wt.walking,
+        idleTimeSec: wt.idle,
+        breakTimeSec: wt.break,
+        unavailableTimeSec: wt.unavailable,
+        position: { ...v.position },
+      };
     }
     const products: ProductEntityState[] = [];
     for (const ent of this.entities.values()) {
@@ -2060,16 +2522,15 @@ export class DiscreteEventSimulationEngine {
     const shiftAudit = computeShiftWindowAudit(
       this.project.simulationConfig,
       this.project.products[0],
-      this.clockSec || this.project.simulationConfig.durationSec
+      this.clockSec || this.project.simulationConfig.durationSec,
+      this.project.layoutObjects
     );
     const simTime = shiftAudit.simTimeSec;
-    const activeSimTime = shiftAudit.activeSimTimeSec;
     const planned = shiftAudit.plannedUnits;
 
     const good = this.completedCount;
     const scrap = this.scrappedCount;
 
-    // Lead, wait, processing, transport averages weighted across completed unit equivalents
     let leadSum = 0;
     let waitSum = 0;
     let procSum = 0;
@@ -2091,7 +2552,6 @@ export class DiscreteEventSimulationEngine {
     const avgProcessingTimeSec = finishedCount > 0 ? procSum / finishedCount : 0;
     const avgTransportTimeSec = finishedCount > 0 ? transSum / finishedCount : 0;
 
-    // Stage analytics & bottleneck detection
     const stageAnalytics: StageAnalytics[] = [];
     let bottleneckStageId: string | undefined;
     let bottleneckStageName: string | undefined;
@@ -2099,7 +2559,10 @@ export class DiscreteEventSimulationEngine {
 
     let totalBlocked = 0;
     let totalStarved = 0;
+    let totalIdle = 0;
+    let totalSetup = 0;
     let totalDowntime = 0;
+    let totalMaintenance = 0;
     let sumBufferOcc = 0;
 
     for (const st of this.project.stages) {
@@ -2107,33 +2570,51 @@ export class DiscreteEventSimulationEngine {
       const objIds = st.assignedObjectIds;
       let runT = 0;
       let blkT = 0;
-      let downT = 0;
+      let starvedT = 0;
       let idleT = 0;
+      let setupT = 0;
+      let downT = 0;
+      let maintT = 0;
+      let stageScheduledDenom = 0;
+
       for (const oid of objIds) {
-        const os = this.objectStates.get(oid);
-        if (!os) continue;
-        const dtLast = Math.max(0, simTime - os.lastStateChangeTime);
-        runT += os.runningTimeSec + (os.status === 'running' ? dtLast : 0);
-        blkT += os.blockedTimeSec + (os.status === 'blocked' ? dtLast : 0);
-        downT += os.downTimeSec + (os.status === 'down' ? dtLast : 0);
-        idleT += os.idleTimeSec + (os.status === 'idle' ? dtLast : 0);
+        const totals = this.stateTracker.getMachineTotals(oid, simTime);
+        const obj = this.objectsMap.get(oid);
+        runT += totals.running;
+        blkT += totals.blocked;
+        starvedT += totals.starved;
+        idleT += totals.idle;
+        setupT += totals.setup;
+        downT += totals.down;
+        maintT += totals.maintenance;
+
+        const calSched = obj
+          ? this.calendarEngine.getObjectCalendarMetrics(obj, simTime).scheduledProductionTimeSec
+          : shiftAudit.activeSimTimeSec;
+        stageScheduledDenom += Math.max(1e-6, calSched);
       }
-      const denom = Math.max(1e-6, objIds.length * activeSimTime);
+
+      const denom = Math.max(1e-6, stageScheduledDenom || objIds.length * shiftAudit.activeSimTimeSec);
       const utilPct = Math.min(100, (runT / denom) * 100);
       const blkPct = Math.min(100, (blkT / denom) * 100);
+      const starvedPct = Math.min(100, (starvedT / denom) * 100);
+      const idlePct = Math.min(100, (idleT / denom) * 100);
+      const setupPct = Math.min(100, (setupT / denom) * 100);
       const downPct = Math.min(100, (downT / denom) * 100);
-      const starvedPct = Math.max(0, Math.min(100, (idleT / denom) * 100));
+      const maintenancePct = Math.min(100, (maintT / Math.max(1e-6, objIds.length * simTime)) * 100);
 
       totalBlocked += blkT;
+      totalStarved += starvedT;
+      totalIdle += idleT;
+      totalSetup += setupT;
       totalDowntime += downT;
-      totalStarved += idleT;
+      totalMaintenance += maintT;
 
       const dtQ = Math.max(0, simTime - acc.lastQueueTime);
       const curQ = this.getStageQueueUnitCount(st.id);
       const avgQueue = (acc.queueArea + curQ * dtQ) / simTime;
       sumBufferOcc += st.bufferCapacity > 0 ? Math.min(100, (avgQueue / st.bufferCapacity) * 100) : 0;
 
-      // Average measured cycle duration per batch/operation cycle so it aligns 1:1 with configuredCycleTimeSec
       const avgStageCycle = acc.batchesCompleted > 0 ? acc.cycleTimeSum / acc.batchesCompleted : 0;
       const avgStageWait = acc.entered > 0 ? acc.waitTimeSum / acc.entered : 0;
 
@@ -2163,7 +2644,10 @@ export class DiscreteEventSimulationEngine {
         utilizationPct: utilPct,
         blockedPct: blkPct,
         starvedPct,
+        idlePct,
+        setupPct,
         downPct,
+        maintenancePct,
         isBottleneck: false,
         batchesCompleted: acc.batchesCompleted,
         batchSize: bCfg?.batchSize ?? 1,
@@ -2174,19 +2658,17 @@ export class DiscreteEventSimulationEngine {
       if (sa.stageId === bottleneckStageId) sa.isBottleneck = true;
     }
 
-    // Worker utilization across active shift time
-    let workerBusySum = 0;
-    let workerWalkSum = 0;
-    for (const ws of this.workerStates.values()) {
-      const dtLast = Math.max(0, simTime - ws.lastStateChangeTime);
-      workerBusySum += ws.busyTimeSec + (ws.status === 'busy' ? dtLast : 0);
-      workerWalkSum += ws.walkingTimeSec + (ws.status === 'walking' ? dtLast : 0);
+    // Worker utilization across each worker's individual scheduled calendar window
+    let workerActiveRatioSum = 0;
+    for (const w of this.project.workers) {
+      const wt = this.stateTracker.getWorkerTotals(w.id, simTime);
+      const wSched = Math.max(1e-6, wt.busy + wt.walking + wt.idle);
+      workerActiveRatioSum += Math.min(1, (wt.busy + wt.walking) / wSched);
     }
-    const workerCount = Math.max(1, this.project.workers.length);
-    const workerUtilizationPct = Math.min(
-      100,
-      ((workerBusySum + workerWalkSum) / (workerCount * activeSimTime)) * 100
-    );
+    const workerUtilizationPct =
+      this.project.workers.length > 0
+        ? Math.min(100, (workerActiveRatioSum / this.project.workers.length) * 100)
+        : 0;
 
     const machineUtilizationPct =
       stageAnalytics.length > 0
@@ -2201,7 +2683,6 @@ export class DiscreteEventSimulationEngine {
     const avgBufferOccupancyPct =
       stageAnalytics.length > 0 ? sumBufferOcc / stageAnalytics.length : 0;
 
-    // Hourly series
     const totalHourCount = Math.max(1, Math.ceil(simTime / 3600));
     const hourlySeries: HourlyProductionPoint[] = [];
     let cumActual = 0;
@@ -2236,6 +2717,9 @@ export class DiscreteEventSimulationEngine {
       totalDowntimeSec: totalDowntime,
       totalBlockedTimeSec: totalBlocked,
       totalStarvedTimeSec: totalStarved,
+      totalIdleTimeSec: totalIdle,
+      totalSetupTimeSec: totalSetup,
+      totalMaintenanceTimeSec: totalMaintenance,
       workerUtilizationPct,
       machineUtilizationPct,
       avgWip,
