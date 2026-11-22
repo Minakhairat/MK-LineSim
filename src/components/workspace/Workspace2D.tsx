@@ -71,11 +71,15 @@ export const Workspace2D: React.FC = () => {
   });
   const [cursorMeters, setCursorMeters] = useState<{ x: number; z: number } | null>(null);
 
+  const pointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchStartRef = useRef<{ dist: number; scale: number; midX: number; midY: number; panX: number; panY: number } | null>(null);
+
   const fitView = () => {
     const el = containerRef.current;
     if (!el) return;
-    const cw = el.clientWidth - 80;
-    const ch = el.clientHeight - 80;
+    const pad = el.clientWidth < 640 ? 28 : 80;
+    const cw = Math.max(80, el.clientWidth - pad);
+    const ch = Math.max(80, el.clientHeight - pad);
     const scale = Math.max(8, Math.min(80, Math.min(cw / project.factory.lengthM, ch / project.factory.widthM)));
     setPxPerM(scale);
     setPan({
@@ -118,6 +122,21 @@ export const Workspace2D: React.FC = () => {
   };
 
   const handleSvgPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pointersRef.current.size === 2) {
+      const pts = Array.from(pointersRef.current.values());
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (rect) {
+        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        const midX = (pts[0].x + pts[1].x) / 2 - rect.left;
+        const midY = (pts[0].y + pts[1].y) / 2 - rect.top;
+        pinchStartRef.current = { dist: Math.max(10, dist), scale: pxPerM, midX, midY, panX: pan.x, panY: pan.y };
+        setDrag(null);
+      }
+      return;
+    }
+
     const world = clientToWorld(e.clientX, e.clientY);
 
     if (measureMode) {
@@ -144,6 +163,29 @@ export const Workspace2D: React.FC = () => {
   };
 
   const handlePointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    if (pointersRef.current.has(e.pointerId)) {
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+
+    if (pointersRef.current.size === 2 && pinchStartRef.current) {
+      const pts = Array.from(pointersRef.current.values());
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (rect) {
+        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
+        const midX = (pts[0].x + pts[1].x) / 2 - rect.left;
+        const midY = (pts[0].y + pts[1].y) / 2 - rect.top;
+        const factor = dist / pinchStartRef.current.dist;
+        const nextScale = Math.max(6, Math.min(120, pinchStartRef.current.scale * factor));
+        const ratio = nextScale / pinchStartRef.current.scale;
+        setPan({
+          x: midX - (pinchStartRef.current.midX - pinchStartRef.current.panX) * ratio,
+          y: midY - (pinchStartRef.current.midY - pinchStartRef.current.panY) * ratio,
+        });
+        setPxPerM(nextScale);
+      }
+      return;
+    }
+
     const world = clientToWorld(e.clientX, e.clientY);
     setCursorMeters(world);
 
@@ -215,7 +257,15 @@ export const Workspace2D: React.FC = () => {
     }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e?: React.PointerEvent<SVGSVGElement>) => {
+    if (e) {
+      pointersRef.current.delete(e.pointerId);
+    } else {
+      pointersRef.current.clear();
+    }
+    if (pointersRef.current.size < 2) {
+      pinchStartRef.current = null;
+    }
     setDragHoverConv(null);
     if (drag && drag.mode !== 'pan') {
       saveCurrentProject();
@@ -767,6 +817,7 @@ export const Workspace2D: React.FC = () => {
         onPointerDown={handleSvgPointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
         onDragOver={(e) => {
           if (
             !e.dataTransfer.types.includes('application/x-linesim-worker') &&

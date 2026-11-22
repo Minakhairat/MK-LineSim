@@ -12,6 +12,9 @@
     width: 100%;
     margin: 0;
     padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
     font-family: var(--font-sans);
   }
 
@@ -22,6 +25,14 @@
   .font-mono-tabular {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
+  }
+
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
 

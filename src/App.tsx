@@ -53,8 +53,8 @@ import { EquipmentModule, LayoutModule } from './components/modules/LayoutEquipm
 import {
   ProcessesModule,
   ProductsModule,
-  WorkforceModule,
 } from './components/modules/ProductProcessWorkforceModule';
+import { WorkforceModule } from './components/modules/WorkforceModule';
 import { SimulationInspectorModule } from './components/modules/SimulationInspectorModule';
 import { AnalyticsModule } from './components/modules/AnalyticsModule';
 import { ScenariosModule } from './components/modules/ScenariosModule';
@@ -68,6 +68,8 @@ import {
   sanitizeFilename,
   ViewportVideoRecorder,
 } from './utils/mediaCapture';
+import { PWAInstallButton } from './components/pwa/PWAInstallButton';
+import { OfflineIndicator } from './components/pwa/OfflineIndicator';
 
 export default function App() {
   const initialized = useAppStore((s) => s.initialized);
@@ -314,49 +316,50 @@ export default function App() {
     <div className="flex h-[100dvh] w-screen flex-col overflow-hidden bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100">
       {/* Top Engineering Toolbar (hidden in Fullscreen mode) */}
       {!isFullscreen && (
-        <header className="flex h-12 shrink-0 items-center justify-between gap-2 sm:gap-4 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2.5 sm:px-3">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            {!isFullPageModule && (
-              <button
-                onClick={() => setSidebarDrawerOpen((v) => !v)}
-                className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 md:hidden"
-                title={isAr ? 'فتح/إغلاق القائمة' : 'Toggle Sidebar'}
-              >
-                <Menu className="w-4 h-4" />
-              </button>
-            )}
+        <header className="pt-safe flex min-h-12 shrink-0 items-center justify-between gap-1.5 sm:gap-4 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 sm:px-3">
+          <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setSidebarDrawerOpen((v) => !v)}
+              className="p-2 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 md:hidden shrink-0"
+              title={isAr ? 'فتح/إغلاق القائمة' : 'Toggle Menu'}
+              aria-label={isAr ? 'فتح/إغلاق القائمة' : 'Toggle Menu'}
+            >
+              <Menu className="w-4 h-4" />
+            </button>
             <a
               href="#top"
               onClick={(e) => {
                 e.preventDefault();
                 setActiveModule('layout');
               }}
-              className="flex items-center gap-2 whitespace-nowrap shrink-0 group"
+              className="flex items-center gap-1.5 sm:gap-2 whitespace-nowrap shrink-0 group"
               title={`${t.brand} — ${t.appName}`}
             >
               <img
-                src="./favicon.svg"
+                src="/favicon.svg"
                 alt="MK LineSim"
                 className="h-7 w-7 rounded shadow-xs shrink-0 transition-transform group-hover:scale-105"
               />
-              <span className="text-sm font-bold tracking-tight text-neutral-950 dark:text-white" dir="ltr">
+              <span className="text-xs sm:text-sm font-bold tracking-tight text-neutral-950 dark:text-white" dir="ltr">
                 {t.appName}
               </span>
             </a>
-            <span className="hidden sm:inline text-neutral-300 dark:text-neutral-700">|</span>
-            <span className="hidden md:inline truncate text-xs font-medium text-neutral-700 dark:text-neutral-300 max-w-[200px]">
+            <span className="hidden md:inline text-neutral-300 dark:text-neutral-700">|</span>
+            <span className="hidden lg:inline truncate text-xs font-medium text-neutral-700 dark:text-neutral-300 max-w-[200px]">
               {project.name}
             </span>
           </div>
 
           {/* Engineering Edit & IO Actions */}
-          <div className="flex items-center gap-1 sm:gap-1.5">
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
             <button
               onClick={() => saveCurrentProject()}
+              title={t.actions.save}
               className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 px-2 sm:px-2.5 py-1 text-xs font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
             >
               <Save className="w-3.5 h-3.5 text-red-600" />
-              <span className="hidden xs:inline sm:inline">
+              <span className="hidden sm:inline">
                 {saveStatus === 'saving' ? t.actions.saving : saveStatus === 'saved' ? t.actions.saved : t.actions.save}
               </span>
             </button>
@@ -365,7 +368,7 @@ export default function App() {
               onClick={undo}
               disabled={undoCount === 0}
               title={`${t.actions.undo} (Ctrl+Z)`}
-              className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-35 shrink-0"
+              className="hidden sm:inline-flex p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-35 shrink-0"
             >
               <Undo2 className="w-3.5 h-3.5" />
             </button>
@@ -373,7 +376,7 @@ export default function App() {
               onClick={redo}
               disabled={redoCount === 0}
               title={`${t.actions.redo} (Ctrl+Y)`}
-              className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-35 shrink-0"
+              className="hidden sm:inline-flex p-1.5 rounded border border-neutral-200 dark:border-neutral-800 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-35 shrink-0"
             >
               <Redo2 className="w-3.5 h-3.5" />
             </button>
@@ -395,10 +398,10 @@ export default function App() {
             <button
               onClick={() => importInputRef.current?.click()}
               title={t.actions.importJson}
-              className="hidden sm:flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+              className="hidden md:flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
             >
               <Upload className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">{t.actions.importJson}</span>
+              <span className="hidden xl:inline">{t.actions.importJson}</span>
             </button>
             <input
               ref={importInputRef}
@@ -415,10 +418,10 @@ export default function App() {
             <button
               onClick={handleQuickExportJson}
               title={t.actions.exportJson}
-              className="hidden sm:flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+              className="hidden md:flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
             >
               <Download className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">{t.actions.exportJson}</span>
+              <span className="hidden xl:inline">{t.actions.exportJson}</span>
             </button>
 
             {/* Top Toolbar CAD Export Button & Menu (DXF, STEP, STL, OBJ) */}
@@ -439,7 +442,7 @@ export default function App() {
               </button>
 
               {cadMenuOpen && (
-                <div className="absolute end-0 top-full mt-1.5 z-50 w-64 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1">
+                <div className="absolute end-0 top-full mt-1.5 z-50 w-64 max-w-[90vw] rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg py-1">
                   <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-neutral-500 border-b border-neutral-100 dark:border-neutral-800">
                     {t.actions.cadMenuTitle}
                   </div>
@@ -470,13 +473,16 @@ export default function App() {
               )}
             </div>
 
+            {/* In-App PWA Install Button (Desktop / Android / iPhone) */}
+            <PWAInstallButton />
+
             <button
               onClick={() => setGuideOpen(true)}
               title={t.actions.guide}
-              className="flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
+              className="hidden sm:flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 px-2 py-1 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 whitespace-nowrap shrink-0"
             >
               <HelpCircle className="w-3.5 h-3.5 text-red-600" />
-              <span className="hidden md:inline">{t.actions.guide}</span>
+              <span className="hidden lg:inline">{t.actions.guide}</span>
             </button>
 
             <button
@@ -498,9 +504,9 @@ export default function App() {
 
       {/* Main Engineering Body */}
       <div className="relative flex flex-1 min-h-0 overflow-hidden">
-        {/* Left Compact Module Rail (hidden in Fullscreen) */}
+        {/* Desktop Module Rail (docked md+) */}
         {!isFullscreen && (
-          <nav className="flex w-13 sm:w-16 shrink-0 flex-col items-center gap-1 border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 py-2 overflow-y-auto z-30">
+          <nav className="hidden md:flex w-16 shrink-0 flex-col items-center gap-1 border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 py-2 overflow-y-auto z-30">
             {navItems.map((item) => {
               const Icon = item.icon;
               const active = activeModule === item.id;
@@ -516,7 +522,7 @@ export default function App() {
                       setSidebarDrawerOpen(true);
                     }
                   }}
-                  className={`flex w-11 sm:w-14 flex-col items-center gap-0.5 rounded py-1.5 px-0.5 sm:px-1 text-[9px] sm:text-[10px] font-medium transition-colors ${
+                  className={`flex w-14 flex-col items-center gap-0.5 rounded py-1.5 px-1 text-[10px] font-medium transition-colors ${
                     active
                       ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400'
                       : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'
@@ -530,11 +536,11 @@ export default function App() {
           </nav>
         )}
 
-        {/* Mobile backdrop when contextual drawer or mobile properties drawer is open */}
-        {!isFullscreen && !isFullPageModule && sidebarDrawerOpen && (
+        {/* Mobile / Tablet Backdrops */}
+        {!isFullscreen && sidebarDrawerOpen && (
           <div
             onClick={() => setSidebarDrawerOpen(false)}
-            className="fixed inset-0 top-12 z-20 bg-black/30 md:hidden"
+            className="fixed inset-0 top-12 z-30 bg-black/35 md:hidden"
           />
         )}
         {!isFullscreen && !isFullPageModule && mobilePropsOpen && (
@@ -544,34 +550,135 @@ export default function App() {
           />
         )}
 
-        {/* Left Contextual Tool Drawer (Slide-over on mobile, docked on md+) */}
+        {/* Mobile Full-Navigation Slide-over (Rail + Contextual Panel) */}
+        {!isFullscreen && sidebarDrawerOpen && (
+          <div className="fixed inset-y-0 top-12 start-0 z-40 flex max-w-[94vw] shadow-2xl md:hidden">
+            <nav className="flex w-16 shrink-0 flex-col items-center gap-1 border-e border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 py-2 overflow-y-auto">
+              {navItems.map((item) => {
+                const Icon = item.icon;
+                const active = activeModule === item.id;
+                const targetIsFull =
+                  item.id === 'analytics' ||
+                  item.id === 'scenarios' ||
+                  item.id === 'reports' ||
+                  item.id === 'validation';
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setActiveModule(item.id);
+                      if (item.id === 'simulation') setViewportMode('simulation');
+                      if (targetIsFull) setSidebarDrawerOpen(false);
+                    }}
+                    className={`flex w-14 min-h-[44px] flex-col items-center justify-center gap-0.5 rounded py-1.5 px-1 text-[10px] font-medium transition-colors ${
+                      active
+                        ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400'
+                        : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate w-full text-center">{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+
+            <aside className="flex flex-col w-[min(18rem,calc(94vw-4rem))] border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 px-3 py-2">
+                <h2 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100 truncate">
+                  {navItems.find((n) => n.id === activeModule)?.label}
+                </h2>
+                <button
+                  onClick={() => setSidebarDrawerOpen(false)}
+                  className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  title={t.actions.close}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Quick mobile utilities bar inside drawer (Undo, Redo, Import, Export JSON, Guide) */}
+              <div className="flex items-center justify-between gap-1 border-b border-neutral-200 dark:border-neutral-800 px-2.5 py-1.5 bg-neutral-50/70 dark:bg-neutral-950/50">
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={undo}
+                    disabled={undoCount === 0}
+                    title={t.actions.undo}
+                    className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 disabled:opacity-35"
+                  >
+                    <Undo2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={redo}
+                    disabled={redoCount === 0}
+                    title={t.actions.redo}
+                    className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 disabled:opacity-35"
+                  >
+                    <Redo2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => importInputRef.current?.click()}
+                    title={t.actions.importJson}
+                    className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={handleQuickExportJson}
+                    title={t.actions.exportJson}
+                    className="p-1.5 rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <button
+                  onClick={() => {
+                    setGuideOpen(true);
+                    setSidebarDrawerOpen(false);
+                  }}
+                  title={t.actions.guide}
+                  className="flex items-center gap-1 rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2 py-1 text-[11px] font-medium"
+                >
+                  <HelpCircle className="w-3.5 h-3.5 text-red-600" />
+                  <span>{t.actions.guide}</span>
+                </button>
+              </div>
+
+              {!isFullPageModule && (
+                <>
+                  {activeModule === 'projects' && <ProjectsModule />}
+                  {activeModule === 'factory' && <FactoryModule />}
+                  {activeModule === 'layout' && <LayoutModule />}
+                  {activeModule === 'equipment' && <EquipmentModule />}
+                  {activeModule === 'products' && <ProductsModule />}
+                  {activeModule === 'processes' && <ProcessesModule />}
+                  {activeModule === 'workforce' && <WorkforceModule />}
+                  {activeModule === 'simulation' && <SimulationInspectorModule />}
+                </>
+              )}
+            </aside>
+          </div>
+        )}
+
+        {/* Desktop Left Contextual Tool Drawer (docked on md+) */}
         {!isFullscreen && !isFullPageModule && sidebarDrawerOpen && (
-          <aside className="fixed inset-y-12 start-13 z-30 w-72 max-w-[80vw] shadow-2xl md:static md:inset-auto md:z-auto md:shadow-none shrink-0 border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-y-auto">
+          <aside className="hidden md:block w-72 shrink-0 border-e border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-y-auto">
             <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5">
               <h2 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
                 {navItems.find((n) => n.id === activeModule)?.label}
               </h2>
-              <div className="flex items-center gap-2">
-                {validationIssues.length > 0 && (
-                  <button
-                    onClick={() => {
-                      clearSelection();
-                      if (window.innerWidth < 1024) setMobilePropsOpen(true);
-                    }}
-                    title={t.labels.validation}
-                    className="text-[10px] font-mono-tabular text-amber-600 dark:text-amber-400 hover:underline"
-                  >
-                    {validationIssues.length} {t.labels.alertsCount}
-                  </button>
-                )}
+              {validationIssues.length > 0 && (
                 <button
-                  onClick={() => setSidebarDrawerOpen(false)}
-                  className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 md:hidden"
-                  title={t.actions.close}
+                  onClick={() => {
+                    clearSelection();
+                    if (window.innerWidth < 1024) setMobilePropsOpen(true);
+                  }}
+                  title={t.labels.validation}
+                  className="text-[10px] font-mono-tabular text-amber-600 dark:text-amber-400 hover:underline"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  {validationIssues.length} {t.labels.alertsCount}
                 </button>
-              </div>
+              )}
             </div>
 
             {activeModule === 'projects' && <ProjectsModule />}
@@ -788,10 +895,10 @@ export default function App() {
 
       {/* Prominent Copyright & Contact Footer Bar (hidden in Fullscreen) */}
       {!isFullscreen && (
-        <footer className="flex flex-wrap min-h-9 shrink-0 items-center justify-between gap-2 sm:gap-3 border-t-2 border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2.5 sm:px-4 py-1 text-[11px] sm:text-xs">
+        <footer className="pb-safe flex flex-wrap min-h-9 shrink-0 items-center justify-between gap-2 sm:gap-3 border-t-2 border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2.5 sm:px-4 py-1 text-[10px] sm:text-xs">
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
             <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-600 shrink-0" />
-            <span className="font-semibold text-neutral-900 dark:text-white leading-snug">
+            <span className="font-semibold text-neutral-900 dark:text-white leading-snug truncate max-w-[58vw] sm:max-w-none">
               {t.copyright}
             </span>
           </div>
@@ -816,6 +923,8 @@ export default function App() {
       )}
 
       <HelpGuideModal open={guideOpen} onClose={() => setGuideOpen(false)} />
+
+      <OfflineIndicator />
 
       {/* Transient Engineering Toast Feedback */}
       {toastMessage && (

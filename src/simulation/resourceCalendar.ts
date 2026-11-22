@@ -504,6 +504,23 @@ export class ResourceCalendarEngine {
     if (containsTimestamp(breaks, tSec)) {
       return { available: false, reason: 'break' };
     }
+    const plantMaint = mergeIntervals(
+      clipIntervals(
+        this.globalMaintWindows
+          .filter((mw) => !mw.objectId && mw.durationSec > 0)
+          .map((mw) => ({
+            startSec: mw.startSec,
+            endSec: mw.startSec + mw.durationSec,
+            id: mw.id,
+            label: mw.name,
+          })),
+        0,
+        this.simDurationSec
+      )
+    );
+    if (containsTimestamp(plantMaint, tSec)) {
+      return { available: false, reason: 'maintenance' };
+    }
     return { available: true, reason: 'active' };
   }
 

@@ -16,6 +16,7 @@ import {
   StageAnalytics,
   Vec3,
   WipTimePoint,
+  WorkerAnalytics,
   WorkerDefinition,
   WorkerRuntimeState,
   ObjectRuntimeState,
@@ -99,6 +100,8 @@ interface ActiveJobRecord {
   remainingSec: number;
   totalProcSec: number;
   isConveyorNode: boolean;
+  workDurationSec?: number;
+  workerReleaseToken?: number;
 }
 
 interface StageAcc {
@@ -567,6 +570,7 @@ export class DiscreteEventSimulationEngine {
   }
 
   private recordEvent(ev: InternalEvent): void {
+    if (ev.payload?.silent === true) return;
     this.totalEventsExecuted++;
     if (this.eventLog.length < 25000) {
       this.eventLog.push({
@@ -771,7 +775,28 @@ export class DiscreteEventSimulationEngine {
     while (active.length > 0) {
       const job = active.shift()!;
       this.validJobTokens.delete(job.token);
+      if (job.workerReleaseToken !== undefined) {
+        this.validJobTokens.delete(job.workerReleaseToken);
+        job.workerReleaseToken = undefined;
+      }
+      const elapsed = Math.max(0, now - job.startedAt);
       job.remainingSec = Math.max(0, job.expectedEndAt - now);
+      if (job.workDurationSec !== undefined) {
+        job.workDurationSec = Math.max(0, job.workDurationSec - elapsed);
+      }
+      for (const wid of job.workerIds) {
+        if (this.workerAllocatedEntity.get(wid) !== job.entityId) continue;
+        const wDef = this.workersMap.get(wid);
+        const wAvail = wDef
+          ? this.calendarEngine.getWorkerAvailabilityAt(wDef, now)
+          : { available: true, reason: 'active' as const };
+        const pausedStatus = wAvail.available
+          ? 'idle'
+          : wAvail.reason === 'break'
+          ? 'break'
+          : 'unavailable';
+        this.setWorkerStatus(wid, pausedStatus, now);
+      }
       paused.push(job);
     }
     this.pausedJobs.set(objId, paused);
@@ -796,6 +821,14 @@ export class DiscreteEventSimulationEngine {
       job.startedAt = now;
       job.expectedEndAt = now + job.remainingSec;
       this.validJobTokens.add(newToken);
+
+      const activeWorkerIds: string[] = [];
+      for (const wid of job.workerIds) {
+        if (this.workerAllocatedEntity.get(wid) !== job.entityId) continue;
+        activeWorkerIds.push(wid);
+        this.setWorkerStatus(wid, 'busy', now);
+      }
+      job.workerIds = activeWorkerIds;
       active.push(job);
 
       if (job.phase === 'setup') {
@@ -807,13 +840,36 @@ export class DiscreteEventSimulationEngine {
           details: `${obj.name} resumed setup for ${job.entityId}`,
           payload: {
             token: newToken,
-            workerIds: job.workerIds,
+            workerIds: activeWorkerIds,
             procDuration: job.totalProcSec,
             setupDuration: job.remainingSec,
           },
         });
       } else {
         this.setObjectStatus(objId, 'running', now);
+        let completionWorkerIds = activeWorkerIds;
+        if (
+          job.isConveyorNode &&
+          activeWorkerIds.length > 0 &&
+          job.workDurationSec !== undefined &&
+          job.workDurationSec < job.remainingSec - 1e-6
+        ) {
+          const releaseToken = ++this.jobTokenCounter;
+          this.validJobTokens.add(releaseToken);
+          job.workerReleaseToken = releaseToken;
+          completionWorkerIds = [];
+          this.schedule(now + job.workDurationSec, 'WorkerReleased', {
+            entityId: job.entityId,
+            stageId: job.stageId,
+            objectId: job.objectId,
+            details: `Conveyor manual work resumed & completed at ${job.stageId}`,
+            payload: {
+              token: releaseToken,
+              earlyRelease: true,
+              workerIds: activeWorkerIds,
+            },
+          });
+        }
         this.schedule(job.expectedEndAt, 'ProcessingCompleted', {
           entityId: job.entityId,
           stageId: job.stageId,
@@ -821,7 +877,7 @@ export class DiscreteEventSimulationEngine {
           details: `${job.entityId} resumed and completed operation at ${job.stageId}`,
           payload: {
             token: newToken,
-            workerIds: job.workerIds,
+            workerIds: completionWorkerIds,
             procDuration: job.totalProcSec,
           },
         });
@@ -1015,6 +1071,51 @@ export class DiscreteEventSimulationEngine {
       }
       case 'RepairCompleted': {
         this.handleRepairCompleted(ev);
+        break;
+      }
+      case 'WorkerAssigned': {
+        if (ev.payload?.walkCompletedOnly === true && ev.workerId) {
+          const ws = this.workerStates.get(ev.workerId);
+          if (
+            ws &&
+            ws.status === 'walking' &&
+            (!ev.entityId || this.workerAllocatedEntity.get(ev.workerId) === ev.entityId)
+          ) {
+            ws.position = { ...ws.targetPosition };
+            ws.currentStationId = ev.objectId;
+            ws.targetStationId = undefined;
+            const wDef = this.workersMap.get(ev.workerId);
+            const wAvail = wDef
+              ? this.calendarEngine.getWorkerAvailabilityAt(wDef, ev.timestamp)
+              : { available: true, reason: 'active' as const };
+            this.setWorkerStatus(
+              ev.workerId,
+              wAvail.available ? 'idle' : wAvail.reason === 'break' ? 'break' : 'unavailable',
+              ev.timestamp
+            );
+          }
+        }
+        break;
+      }
+      case 'WorkerReleased': {
+        if (ev.payload?.earlyRelease === true) {
+          const token = ev.payload?.token as number | undefined;
+          if (token !== undefined) {
+            if (!this.validJobTokens.has(token)) break;
+            this.validJobTokens.delete(token);
+          }
+          const workerIds = (ev.payload?.workerIds as string[]) || [];
+          const stageName = (ev.stageId && this.stagesMap.get(ev.stageId)?.name) || ev.stageId || '';
+          this.releaseAllocatedWorkers(
+            workerIds,
+            ev.entityId,
+            ev.stageId,
+            ev.objectId,
+            stageName,
+            ev.timestamp,
+            false
+          );
+        }
         break;
       }
       default:
@@ -1575,43 +1676,16 @@ export class DiscreteEventSimulationEngine {
 
       // Conveyor Flowchart Node: animate product gliding across the conveyor belt (+ optional manual work/workers on belt)
       if (stationObj.kind === 'conveyor') {
-        let maxWalkTime = 0;
-        const workerIds: string[] = [];
-        for (const w of chosenWorkers) {
-          workerIds.push(w.id);
-          this.workerAllocatedEntity.set(w.id, entId);
-          const ws = this.workerStates.get(w.id)!;
-          const { walkTimeSec, targetPos } = computeWorkerTravelAudit(
-            w,
-            ws.position,
-            ws.currentStationId,
-            stationObj
-          );
-          if (walkTimeSec > maxWalkTime) maxWalkTime = walkTimeSec;
+        const needsSetup =
+          hasConveyorWork &&
+          !this.setupDoneObjects.has(stationObj.id) &&
+          (stage.setupTimeSec || 0) > 0;
+        if (needsSetup) this.setupDoneObjects.add(stationObj.id);
+        const convWorkSec = hasConveyorWork
+          ? computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, needsSetup)
+          : 0;
+        const activeWorkers = convWorkSec > 0 ? chosenWorkers : [];
 
-          if (walkTimeSec > 0) {
-            ws.startPosition = { ...ws.position };
-            ws.targetPosition = targetPos;
-            ws.moveStartTime = now;
-            ws.moveEndTime = now + walkTimeSec;
-            ws.targetStationId = stationObj.id;
-            this.setWorkerStatus(w.id, 'walking', now);
-          } else {
-            ws.targetPosition = { ...ws.position };
-            ws.currentStationId = stationObj.id;
-            this.setWorkerStatus(w.id, 'busy', now);
-          }
-
-          this.schedule(now, 'WorkerAssigned', {
-            entityId: entId,
-            stageId,
-            objectId: stationObj.id,
-            workerId: w.id,
-            details: `${w.label} assigned to conveyor stage ${stage.name}${walkTimeSec > 0 ? ` (walk ${walkTimeSec.toFixed(1)}s)` : ''}`,
-          });
-        }
-
-        this.setObjectStatus(stationObj.id, 'running', now);
         const rad = (stationObj.geometry.rotationDeg * Math.PI) / 180;
         const dir = stationObj.operations.direction === -1 ? -1 : 1;
         const ux = Math.cos(rad) * dir;
@@ -1625,14 +1699,6 @@ export class DiscreteEventSimulationEngine {
         const beltLen = convMetrics.beltLengthM;
         const speed = convMetrics.speedMps;
         const beltTime = convMetrics.traversalTimeSec;
-        const needsSetup =
-          hasConveyorWork &&
-          !this.setupDoneObjects.has(stationObj.id) &&
-          (stage.setupTimeSec || 0) > 0;
-        if (needsSetup) this.setupDoneObjects.add(stationObj.id);
-        const convWorkSec = hasConveyorWork
-          ? computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, needsSetup)
-          : 0;
         const totalConvNodeSec = beltTime + convWorkSec;
         const minGapSec = convMetrics.minHeadwaySec;
         const halfL = Math.max(0.05, beltLen / 2 - Math.min(0.15, beltLen * 0.2));
@@ -1647,10 +1713,65 @@ export class DiscreteEventSimulationEngine {
           z: stationObj.geometry.position.z + uz * halfL,
         };
 
+        let maxWalkTime = 0;
+        const workerIds: string[] = [];
+        const walkByWorker = new Map<string, number>();
+        for (const w of activeWorkers) {
+          workerIds.push(w.id);
+          this.workerAllocatedEntity.set(w.id, entId);
+          const ws = this.workerStates.get(w.id)!;
+          const { walkTimeSec, targetPos } = computeWorkerTravelAudit(
+            w,
+            ws.position,
+            ws.currentStationId,
+            stationObj
+          );
+          walkByWorker.set(w.id, walkTimeSec);
+          if (walkTimeSec > maxWalkTime) maxWalkTime = walkTimeSec;
+
+          if (walkTimeSec > 0) {
+            ws.startPosition = { ...ws.position };
+            ws.targetPosition = targetPos;
+            ws.moveStartTime = now;
+            ws.moveEndTime = now + walkTimeSec;
+            ws.targetStationId = stationObj.id;
+            this.setWorkerStatus(w.id, 'walking', now);
+          } else {
+            ws.targetPosition = { ...ws.position };
+            ws.currentStationId = stationObj.id;
+          }
+
+          this.schedule(now, 'WorkerAssigned', {
+            entityId: entId,
+            stageId,
+            objectId: stationObj.id,
+            workerId: w.id,
+            details: `${w.label} assigned to conveyor stage ${stage.name}${walkTimeSec > 0 ? ` (walk ${walkTimeSec.toFixed(1)}s)` : ''}`,
+          });
+        }
+
         const lastEntry = this.conveyorLastEntryTime.get(stationObj.id) ?? -Infinity;
         const entryDelay = Math.max(0, lastEntry + minGapSec - now);
         const dispatchDelay = Math.max(entryDelay, maxWalkTime);
         this.conveyorLastEntryTime.set(stationObj.id, now + dispatchDelay);
+
+        for (const w of activeWorkers) {
+          const wt = walkByWorker.get(w.id) ?? 0;
+          if (wt > 0 && wt < dispatchDelay - 1e-6) {
+            this.schedule(now + wt, 'WorkerAssigned', {
+              entityId: entId,
+              stageId,
+              objectId: stationObj.id,
+              workerId: w.id,
+              details: `${w.label} arrived at conveyor`,
+              payload: { walkCompletedOnly: true, silent: true },
+            });
+          } else if (wt <= 0 && dispatchDelay <= 1e-6) {
+            this.setWorkerStatus(w.id, 'busy', now);
+          }
+        }
+
+        this.setObjectStatus(stationObj.id, 'running', now);
 
         const startAt = now + dispatchDelay;
         const endAt = startAt + totalConvNodeSec;
@@ -1701,6 +1822,7 @@ export class DiscreteEventSimulationEngine {
 
       let maxWalkTime = 0;
       const workerIds: string[] = [];
+      const walkByWorker = new Map<string, number>();
 
       for (const w of chosenWorkers) {
         workerIds.push(w.id);
@@ -1712,6 +1834,7 @@ export class DiscreteEventSimulationEngine {
           ws.currentStationId,
           stationObj
         );
+        walkByWorker.set(w.id, walkTimeSec);
         if (walkTimeSec > maxWalkTime) maxWalkTime = walkTimeSec;
 
         if (walkTimeSec > 0) {
@@ -1724,7 +1847,6 @@ export class DiscreteEventSimulationEngine {
         } else {
           ws.targetPosition = { ...ws.position };
           ws.currentStationId = stationObj.id;
-          this.setWorkerStatus(w.id, 'busy', now);
         }
 
         this.schedule(now, 'WorkerAssigned', {
@@ -1734,6 +1856,22 @@ export class DiscreteEventSimulationEngine {
           workerId: w.id,
           details: `${w.label} assigned to ${stage.name}${walkTimeSec > 0 ? ` (walk ${walkTimeSec.toFixed(1)}s)` : ''}`,
         });
+      }
+
+      for (const w of chosenWorkers) {
+        const wt = walkByWorker.get(w.id) ?? 0;
+        if (wt > 0 && wt < maxWalkTime - 1e-6) {
+          this.schedule(now + wt, 'WorkerAssigned', {
+            entityId: entId,
+            stageId,
+            objectId: stationObj.id,
+            workerId: w.id,
+            details: `${w.label} arrived at ${stage.name}`,
+            payload: { walkCompletedOnly: true, silent: true },
+          });
+        } else if (wt <= 0 && maxWalkTime <= 1e-6) {
+          this.setWorkerStatus(w.id, 'busy', now);
+        }
       }
 
       const needsSetup = !this.setupDoneObjects.has(stationObj.id) && (stage.setupTimeSec || 0) > 0;
@@ -1863,6 +2001,7 @@ export class DiscreteEventSimulationEngine {
     const workerIds = (ev.payload?.workerIds as string[]) || [];
     const procDuration = Math.max(0, Number(ev.payload?.procDuration ?? 0));
     const isConveyorNode = Boolean(ev.payload?.isConveyorNode);
+    const workDuration = Math.max(0, Number(ev.payload?.workDuration ?? procDuration));
 
     if (ev.entityId && ev.stageId) {
       const acc = this.stageAcc.get(ev.stageId);
@@ -1883,6 +2022,17 @@ export class DiscreteEventSimulationEngine {
     const token = ++this.jobTokenCounter;
     this.validJobTokens.add(token);
 
+    let completionWorkerIds = workerIds;
+    let workerReleaseToken: number | undefined;
+    const hasEarlyConveyorRelease =
+      isConveyorNode && workerIds.length > 0 && workDuration < procDuration - 1e-6;
+
+    if (hasEarlyConveyorRelease) {
+      workerReleaseToken = ++this.jobTokenCounter;
+      this.validJobTokens.add(workerReleaseToken);
+      completionWorkerIds = [];
+    }
+
     if (objId && ev.entityId && ev.stageId) {
       const stState = this.objectStates.get(objId);
       const job: ActiveJobRecord = {
@@ -1897,6 +2047,7 @@ export class DiscreteEventSimulationEngine {
         remainingSec: procDuration,
         totalProcSec: procDuration,
         isConveyorNode,
+        ...(isConveyorNode ? { workDurationSec: workDuration, workerReleaseToken } : {}),
       };
       if (stState && (stState.status === 'down' || stState.status === 'maintenance')) {
         const paused = this.pausedJobs.get(objId) || [];
@@ -1910,6 +2061,20 @@ export class DiscreteEventSimulationEngine {
       this.activeJobs.set(objId, list);
     }
 
+    if (hasEarlyConveyorRelease && workerReleaseToken !== undefined) {
+      this.schedule(ev.timestamp + workDuration, 'WorkerReleased', {
+        entityId: ev.entityId,
+        stageId: ev.stageId,
+        objectId: ev.objectId,
+        details: `Conveyor manual work completed at ${ev.stageId}`,
+        payload: {
+          token: workerReleaseToken,
+          earlyRelease: true,
+          workerIds,
+        },
+      });
+    }
+
     this.schedule(ev.timestamp + procDuration, 'ProcessingCompleted', {
       entityId: ev.entityId,
       stageId: ev.stageId,
@@ -1917,11 +2082,49 @@ export class DiscreteEventSimulationEngine {
       details: `${ev.entityId} completed operation at ${ev.stageId}`,
       payload: {
         token,
-        workerIds,
+        workerIds: completionWorkerIds,
         procDuration,
         workDuration: ev.payload?.workDuration,
       },
     });
+  }
+
+  private releaseAllocatedWorkers(
+    workerIds: string[],
+    entityId: string | undefined,
+    stageId: string | undefined,
+    objectId: string | undefined,
+    stageName: string,
+    timestamp: number,
+    emitReleaseEvent: boolean
+  ): void {
+    for (const wid of workerIds) {
+      if (entityId && this.workerAllocatedEntity.get(wid) !== entityId) continue;
+      this.workerAllocatedEntity.set(wid, null);
+      const ws = this.workerStates.get(wid);
+      const wDef = this.workersMap.get(wid);
+      if (ws) {
+        ws.tasksCompleted++;
+        const wAvail = wDef
+          ? this.calendarEngine.getWorkerAvailabilityAt(wDef, timestamp)
+          : { available: true, reason: 'active' as const };
+        const nextWStatus = wAvail.available
+          ? 'idle'
+          : wAvail.reason === 'break'
+          ? 'break'
+          : 'unavailable';
+        this.setWorkerStatus(wid, nextWStatus, timestamp);
+      }
+      if (emitReleaseEvent) {
+        this.schedule(timestamp, 'WorkerReleased', {
+          entityId,
+          stageId,
+          objectId,
+          workerId: wid,
+          details: `Worker ${wid} released from ${stageName}`,
+        });
+      }
+    }
   }
 
   private handleBreakdownStarted(ev: InternalEvent): void {
@@ -2054,30 +2257,15 @@ export class DiscreteEventSimulationEngine {
 
     // Release workers respecting each worker's individual shift/break calendar
     const workerIds = (ev.payload?.workerIds as string[]) || [];
-    for (const wid of workerIds) {
-      this.workerAllocatedEntity.set(wid, null);
-      const ws = this.workerStates.get(wid);
-      const wDef = this.workersMap.get(wid);
-      if (ws) {
-        ws.tasksCompleted++;
-        const wAvail = wDef
-          ? this.calendarEngine.getWorkerAvailabilityAt(wDef, ev.timestamp)
-          : { available: true, reason: 'active' as const };
-        const nextWStatus = wAvail.available
-          ? 'idle'
-          : wAvail.reason === 'break'
-          ? 'break'
-          : 'unavailable';
-        this.setWorkerStatus(wid, nextWStatus, ev.timestamp);
-      }
-      this.schedule(ev.timestamp, 'WorkerReleased', {
-        entityId: entId,
-        stageId,
-        objectId: objId,
-        workerId: wid,
-        details: `Worker ${wid} released from ${stage.name}`,
-      });
-    }
+    this.releaseAllocatedWorkers(
+      workerIds,
+      entId,
+      stageId,
+      objId,
+      stage.name,
+      ev.timestamp,
+      true
+    );
 
     const unitCount = Math.max(1, ent.batchCount ?? 1);
     stState.processedCount += unitCount;
@@ -2902,12 +3090,42 @@ export class DiscreteEventSimulationEngine {
       });
     }
 
-    // Worker utilization across each worker's individual scheduled calendar window
+    // Worker utilization & per-worker assignedTo analysis across each worker's individual scheduled calendar window
     let workerActiveRatioSum = 0;
+    const workerAnalytics: WorkerAnalytics[] = [];
     for (const w of this.project.workers) {
       const wt = this.stateTracker.getWorkerTotals(w.id, simTime);
-      const wSched = Math.max(1e-6, wt.busy + wt.walking + wt.idle);
-      workerActiveRatioSum += Math.min(1, (wt.busy + wt.walking) / wSched);
+      const ws = this.workerStates.get(w.id);
+      const wSched = Math.max(0, wt.busy + wt.walking + wt.idle);
+      const utilRatio = wSched > 1e-6 ? Math.min(1, (wt.busy + wt.walking) / wSched) : 0;
+      const workUtilRatio = wSched > 1e-6 ? Math.min(1, wt.busy / wSched) : 0;
+      workerActiveRatioSum += utilRatio;
+
+      const assignedTo = w.assignedTo || w.assignedStationId;
+      const targetObj = assignedTo ? this.objectsMap.get(assignedTo) : undefined;
+      const segIdx =
+        targetObj?.kind === 'conveyor' && w.assignedConveyorSegment?.objectId === targetObj.id
+          ? w.assignedConveyorSegment.segmentIndex
+          : undefined;
+
+      workerAnalytics.push({
+        workerId: w.id,
+        workerLabel: w.label,
+        workerName: w.name,
+        assignedTo,
+        assignedToName: targetObj?.name,
+        assignedToKind: targetObj?.kind,
+        assignedConveyorSegmentIndex: segIdx,
+        shiftId: w.shiftId,
+        tasksCompleted: ws?.tasksCompleted ?? 0,
+        busyTimeSec: wt.busy,
+        walkingTimeSec: wt.walking,
+        idleTimeSec: wt.idle,
+        unavailableTimeSec: wt.unavailable + wt.break,
+        scheduledTimeSec: wSched,
+        workUtilizationPct: workUtilRatio * 100,
+        utilizationPct: utilRatio * 100,
+      });
     }
     const workerUtilizationPct =
       this.project.workers.length > 0
@@ -2986,6 +3204,7 @@ export class DiscreteEventSimulationEngine {
       kpis,
       stageAnalytics,
       resourceAnalytics,
+      workerAnalytics,
       hourlySeries,
       wipSeries: this.wipSeries,
       recentEvents: this.eventLog.slice(-150),

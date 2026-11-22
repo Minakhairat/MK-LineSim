@@ -1260,7 +1260,7 @@ export const FlowchartRoutingCanvas: React.FC = () => {
             <div
               dir={isAr ? 'rtl' : 'ltr'}
               onClick={(e) => e.stopPropagation()}
-              className="fixed bottom-12 right-8 z-30 w-80 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-3.5 shadow-2xl text-xs"
+              className="fixed bottom-14 end-3 sm:end-8 z-30 w-[calc(100vw-1.5rem)] max-w-80 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-3.5 shadow-2xl text-xs"
             >
               <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 pb-2 mb-2.5">
                 <span className="font-bold text-neutral-900 dark:text-white">

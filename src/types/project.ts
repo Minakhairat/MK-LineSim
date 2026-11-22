@@ -550,6 +550,25 @@ export interface ResourceOeeAnalytics {
   idealCycleTimeSec: number;
 }
 
+export interface WorkerAnalytics {
+  workerId: string;
+  workerLabel: string;
+  workerName: string;
+  assignedTo?: string;
+  assignedToName?: string;
+  assignedToKind?: LayoutObjectKind;
+  assignedConveyorSegmentIndex?: number;
+  shiftId?: string;
+  tasksCompleted: number;
+  busyTimeSec: number;
+  walkingTimeSec: number;
+  idleTimeSec: number;
+  unavailableTimeSec: number;
+  scheduledTimeSec?: number;
+  workUtilizationPct?: number;
+  utilizationPct: number;
+}
+
 export interface HourlyProductionPoint {
   hourIndex: number; // 1..N
   label: string;
@@ -624,6 +643,7 @@ export interface SimulationResult {
   kpis: SimulationKPIs;
   stageAnalytics: StageAnalytics[];
   resourceAnalytics?: ResourceOeeAnalytics[];
+  workerAnalytics?: WorkerAnalytics[];
   hourlySeries: HourlyProductionPoint[];
   wipSeries: WipTimePoint[];
   recentEvents: SimEvent[];

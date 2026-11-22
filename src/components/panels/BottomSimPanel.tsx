@@ -73,7 +73,7 @@ export const BottomSimPanel: React.FC = () => {
               <option value="ProductCompleted">ProductCompleted</option>
             </select>
           </div>
-          <div className="flex-1 overflow-y-auto px-4 py-1 font-mono-tabular text-[11px]">
+          <div className="flex-1 overflow-auto px-3 sm:px-4 py-1 font-mono-tabular text-[11px]">
             {filteredEvents.length === 0 ? (
               <div className="py-6 text-center text-neutral-500">
                 {t.labels.noEventsYet}
@@ -82,7 +82,7 @@ export const BottomSimPanel: React.FC = () => {
               [...filteredEvents].reverse().map((ev) => (
                 <div
                   key={ev.seq}
-                  className="grid grid-cols-[75px_150px_1fr] gap-3 py-0.5 border-b border-neutral-200/50 dark:border-neutral-800/50 text-neutral-700 dark:text-neutral-300"
+                  className="grid min-w-[440px] grid-cols-[70px_145px_1fr] gap-3 py-0.5 border-b border-neutral-200/50 dark:border-neutral-800/50 text-neutral-700 dark:text-neutral-300"
                 >
                   <span className="text-neutral-500">{formatDuration(ev.timestamp)}</span>
                   <span className="font-semibold text-neutral-900 dark:text-neutral-100">{ev.type}</span>

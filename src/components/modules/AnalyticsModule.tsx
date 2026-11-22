@@ -591,6 +591,79 @@ export const AnalyticsModule: React.FC = () => {
             </table>
           </div>
         )}
+
+        {/* Workforce & Conveyor Assignment Analysis (assignedTo) */}
+        {result.workerAnalytics && result.workerAnalytics.length > 0 && (
+          <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-x-auto">
+            <div className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+              {t.analytics.table.workerAnalyticsTitle}
+            </div>
+            <table className="w-full text-start text-xs font-mono-tabular">
+              <thead className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-[11px] text-neutral-500">
+                <tr>
+                  <th className="px-4 py-2.5 font-medium text-start">{t.analytics.table.workerCol}</th>
+                  <th className="px-3 py-2.5 font-medium text-start">{t.analytics.table.assignedToCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.tasksCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.busyCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.walkingCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.idleCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.scheduledCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.utilizationCol}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.workerAnalytics.map((wa) => {
+                  const isConv = wa.assignedToKind === 'conveyor';
+                  const schedSec =
+                    wa.scheduledTimeSec ??
+                    wa.busyTimeSec + wa.walkingTimeSec + wa.idleTimeSec;
+                  return (
+                    <tr
+                      key={wa.workerId}
+                      className="border-b border-neutral-100 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+                    >
+                      <td className="px-4 py-2 font-sans font-medium text-neutral-900 dark:text-neutral-100">
+                        {wa.workerLabel} · {wa.workerName}
+                      </td>
+                      <td className="px-3 py-2 font-sans text-[11px]">
+                        {wa.assignedToName ? (
+                          <span className="inline-flex items-center gap-1.5">
+                            {isConv && (
+                              <span className="rounded bg-blue-600/15 px-1.5 py-0.2 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
+                                {t.analytics.table.conveyorTag}
+                                {wa.assignedConveyorSegmentIndex !== undefined
+                                  ? ` S${wa.assignedConveyorSegmentIndex + 1}`
+                                  : ''}
+                              </span>
+                            )}
+                            <span className="text-neutral-800 dark:text-neutral-200">{wa.assignedToName}</span>
+                          </span>
+                        ) : (
+                          <span className="text-neutral-400">{t.analytics.table.unassignedLabel}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-end">{wa.tasksCompleted}</td>
+                      <td className="px-3 py-2 text-end">{formatDuration(wa.busyTimeSec)}</td>
+                      <td className="px-3 py-2 text-end">{formatDuration(wa.walkingTimeSec)}</td>
+                      <td className="px-3 py-2 text-end text-neutral-500">
+                        {formatDuration(wa.idleTimeSec)}
+                      </td>
+                      <td className="px-3 py-2 text-end text-neutral-600 dark:text-neutral-400">
+                        {formatDuration(schedSec)}
+                      </td>
+                      <td className="px-3 py-2 text-end font-semibold text-emerald-700 dark:text-emerald-400">
+                        {wa.utilizationPct.toFixed(1)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="border-t border-neutral-100 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/60 px-4 py-2 text-[10px] text-neutral-500 leading-relaxed">
+              {t.analytics.table.workerMetricsNote}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

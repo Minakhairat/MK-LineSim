@@ -265,16 +265,13 @@ export function computeWorkerTravelAudit(
     };
   }
 
+  const dist = distance2D(currentPos, targetPos);
   const isAtDedicatedHomeStation =
     assignedTargetId === targetStation.id &&
-    (!currentStationId || currentStationId === targetStation.id);
+    (!currentStationId || currentStationId === targetStation.id) &&
+    dist <= 0.85;
 
-  if (isAtDedicatedHomeStation) {
-    return { walkTimeSec: 0, targetPos: { ...currentPos } };
-  }
-
-  const dist = distance2D(currentPos, targetPos);
-  if (dist <= 0.1) {
+  if (isAtDedicatedHomeStation || dist <= 0.1) {
     return { walkTimeSec: 0, targetPos: { ...currentPos } };
   }
 

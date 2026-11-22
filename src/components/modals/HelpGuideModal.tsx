@@ -37,15 +37,15 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ open, onClose })
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2 sm:p-4 backdrop-blur-xs">
       <div
-        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl"
+        className="flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl"
         dir={isAr ? 'rtl' : 'ltr'}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 px-5 py-3.5">
+        <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 px-4 sm:px-5 py-3.5">
           <div className="flex items-center gap-2.5">
-            <img src="./favicon.svg" alt="MK LineSim" className="h-6 w-6 rounded" />
+            <img src="/favicon.svg" alt="MK LineSim" className="h-6 w-6 rounded" />
             <div>
               <h2 className="text-sm font-bold text-neutral-950 dark:text-white">
                 {isAr ? `دليل استخدام ${t.appName}` : `${t.appName} Engineering User Guide`}
