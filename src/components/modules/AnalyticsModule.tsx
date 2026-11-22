@@ -161,6 +161,11 @@ export const AnalyticsModule: React.FC = () => {
                 ),
                 backgroundColor: '#DC2626',
               },
+              {
+                label: isAr ? 'خارج الوردية %' : 'Unavailable %',
+                data: result.stageAnalytics.map((s) => Number((s.unavailablePct ?? 0).toFixed(1))),
+                backgroundColor: '#94A3B8',
+              },
             ],
           },
           options: {
@@ -332,8 +337,8 @@ export const AnalyticsModule: React.FC = () => {
               label: t.analytics.cards.machineUtil,
               val: `${k.machineUtilizationPct.toFixed(1)}%`,
               sub: isAr
-                ? `حجب: ${formatDuration(k.totalBlockedTimeSec)} · أعطال: ${formatDuration(k.totalDowntimeSec)}`
-                : `Blocked: ${formatDuration(k.totalBlockedTimeSec)} · Down: ${formatDuration(k.totalDowntimeSec)}`,
+                ? `تقويمي: ${(k.calendarUtilizationPct ?? k.machineUtilizationPct).toFixed(1)}% · حجب: ${formatDuration(k.totalBlockedTimeSec)}`
+                : `Cal: ${(k.calendarUtilizationPct ?? k.machineUtilizationPct).toFixed(1)}% · Blk: ${formatDuration(k.totalBlockedTimeSec)}`,
             },
           ].map((item, idx) => (
             <div
@@ -477,12 +482,14 @@ export const AnalyticsModule: React.FC = () => {
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgCycle}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgWait}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.maxQueue}</th>
-                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.util}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.schedUtil}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.calUtil}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.setup}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.blocked}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.starved}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.idle}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.maint}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.unavail}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.oee}</th>
               </tr>
             </thead>
@@ -506,12 +513,20 @@ export const AnalyticsModule: React.FC = () => {
                   <td className="px-3 py-2 text-end">{sa.avgCycleTimeSec.toFixed(1)}</td>
                   <td className="px-3 py-2 text-end">{sa.avgWaitTimeSec.toFixed(1)}</td>
                   <td className="px-3 py-2 text-end">{sa.maxQueueLength}</td>
-                  <td className="px-3 py-2 text-end">{sa.utilizationPct.toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end font-semibold text-emerald-700 dark:text-emerald-400">
+                    {(sa.scheduledUtilizationPct ?? sa.utilizationPct).toFixed(1)}%
+                  </td>
+                  <td className="px-3 py-2 text-end">
+                    {(sa.calendarUtilizationPct ?? sa.utilizationPct).toFixed(1)}%
+                  </td>
                   <td className="px-3 py-2 text-end">{(sa.setupPct ?? 0).toFixed(1)}%</td>
                   <td className="px-3 py-2 text-end">{sa.blockedPct.toFixed(1)}%</td>
                   <td className="px-3 py-2 text-end">{sa.starvedPct.toFixed(1)}%</td>
                   <td className="px-3 py-2 text-end">{(sa.idlePct ?? 0).toFixed(1)}%</td>
                   <td className="px-3 py-2 text-end">{(sa.maintenancePct ?? 0).toFixed(1)}%</td>
+                  <td className="px-3 py-2 text-end text-neutral-500">
+                    {(sa.unavailablePct ?? 0).toFixed(1)}%
+                  </td>
                   <td className="px-3 py-2 text-end font-semibold text-neutral-900 dark:text-neutral-100">
                     {(sa.oeePct ?? 0).toFixed(1)}%
                   </td>
@@ -520,6 +535,62 @@ export const AnalyticsModule: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Resource-Level OEE & Calendar Accounting Breakdown */}
+        {result.resourceAnalytics && result.resourceAnalytics.length > 0 && (
+          <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-x-auto">
+            <div className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+              {t.analytics.table.resourceOeeTitle}
+            </div>
+            <table className="w-full text-start text-xs font-mono-tabular">
+              <thead className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-[11px] text-neutral-500">
+                <tr>
+                  <th className="px-4 py-2.5 font-medium text-start">{t.analytics.table.resourceCol}</th>
+                  <th className="px-3 py-2.5 font-medium text-start">{t.analytics.table.shiftCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.labels.scheduledTime}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.labels.operatingTime}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.labels.unavailableTime}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.schedUtil}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.calUtil}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avail}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.perf}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.qual}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.oee}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.resourceAnalytics.map((ra) => (
+                  <tr
+                    key={ra.objectId}
+                    className="border-b border-neutral-100 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+                  >
+                    <td className="px-4 py-2 font-sans font-medium text-neutral-900 dark:text-neutral-100">
+                      {ra.objectName}
+                    </td>
+                    <td className="px-3 py-2 font-sans text-[11px] text-neutral-500">
+                      {ra.shiftId || t.labels.plantDefaultShift}
+                    </td>
+                    <td className="px-3 py-2 text-end">{formatDuration(ra.scheduledProductionTimeSec)}</td>
+                    <td className="px-3 py-2 text-end">{formatDuration(ra.operatingTimeSec)}</td>
+                    <td className="px-3 py-2 text-end text-neutral-500">
+                      {formatDuration(ra.unavailableTimeSec)}
+                    </td>
+                    <td className="px-3 py-2 text-end font-semibold text-emerald-700 dark:text-emerald-400">
+                      {ra.scheduledUtilizationPct.toFixed(1)}%
+                    </td>
+                    <td className="px-3 py-2 text-end">{ra.calendarUtilizationPct.toFixed(1)}%</td>
+                    <td className="px-3 py-2 text-end">{ra.availabilityPct.toFixed(1)}%</td>
+                    <td className="px-3 py-2 text-end">{ra.performancePct.toFixed(1)}%</td>
+                    <td className="px-3 py-2 text-end">{ra.qualityPct.toFixed(1)}%</td>
+                    <td className="px-3 py-2 text-end font-semibold text-red-600 dark:text-red-400">
+                      {ra.oeePct.toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

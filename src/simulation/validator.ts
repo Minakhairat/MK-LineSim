@@ -195,7 +195,7 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
     const eligibleWorkers = workers.filter(
       (w) =>
         w.assignedStageIds.includes(stage.id) ||
-        stage.assignedObjectIds.includes(w.assignedStationId || '')
+        stage.assignedObjectIds.includes(w.assignedTo || w.assignedStationId || '')
     );
     if (stage.requiredWorkers > 0 && eligibleWorkers.length < stage.requiredWorkers) {
       issues.push({

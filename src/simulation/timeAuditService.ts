@@ -4,6 +4,7 @@ import {
   ProductDefinition,
   ProductionStage,
   ProjectData,
+  ResourceOeeAnalytics,
   SimulationConfig,
   SimulationKPIs,
   StageAnalytics,
@@ -20,6 +21,7 @@ import {
   resolveStageBatchConfig,
   StageBatchConfig,
 } from '../engineering/capacityEngine';
+import { computeConveyorSegmentPlacement } from '../engineering/conveyorWorkerAssignment';
 import { computeOeeMetrics } from '../engineering/oeeEngine';
 import { ResourceCalendarEngine } from './resourceCalendar';
 import { FailureModelParams, resolveObjectFailureParams } from './failureModels';
@@ -240,16 +242,31 @@ export function computeWorkerTravelAudit(
   currentStationId: string | undefined,
   targetStation: LayoutObject
 ): { walkTimeSec: number; targetPos: Vec3 } {
-  const sideOffset = targetStation.geometry.dimensions.width / 2 + 0.45;
-  const approachNorth = currentPos.z < targetStation.geometry.position.z;
-  const targetPos: Vec3 = {
-    x: targetStation.geometry.position.x,
-    y: 0,
-    z: targetStation.geometry.position.z + (approachNorth ? -sideOffset : sideOffset),
-  };
+  const assignedTargetId = worker.assignedTo || worker.assignedStationId;
+  let targetPos: Vec3;
+
+  if (
+    targetStation.kind === 'conveyor' &&
+    worker.assignedConveyorSegment?.objectId === targetStation.id
+  ) {
+    const placement = computeConveyorSegmentPlacement(
+      targetStation,
+      worker.assignedConveyorSegment.segmentIndex,
+      worker.assignedConveyorSegment.segmentCount
+    );
+    targetPos = placement.position;
+  } else {
+    const sideOffset = targetStation.geometry.dimensions.width / 2 + 0.45;
+    const approachNorth = currentPos.z < targetStation.geometry.position.z;
+    targetPos = {
+      x: targetStation.geometry.position.x,
+      y: 0,
+      z: targetStation.geometry.position.z + (approachNorth ? -sideOffset : sideOffset),
+    };
+  }
 
   const isAtDedicatedHomeStation =
-    worker.assignedStationId === targetStation.id &&
+    assignedTargetId === targetStation.id &&
     (!currentStationId || currentStationId === targetStation.id);
 
   if (isAtDedicatedHomeStation) {
@@ -383,11 +400,13 @@ export function buildAuditedSimulationKPIs(params: {
   totalMaintenanceTimeSec?: number;
   workerUtilizationPct: number;
   machineUtilizationPct: number;
+  calendarUtilizationPct?: number;
   avgWip: number;
   currentWip: number;
   avgQueueLength: number;
   avgBufferOccupancyPct: number;
   stageAnalytics: StageAnalytics[];
+  resourceAnalytics?: ResourceOeeAnalytics[];
   bottleneckStageId?: string;
   bottleneckStageName?: string;
 }): SimulationKPIs {
@@ -407,7 +426,7 @@ export function buildAuditedSimulationKPIs(params: {
       ? ((throughputPerHour - theoreticalThroughputPerHour) / theoreticalThroughputPerHour) * 100
       : 0;
 
-  // Enrich each StageAnalytics entry with configured vs measured cycle deviation, OEE, and root-cause insight
+  // Enrich each StageAnalytics entry with configured vs measured cycle deviation, resource-specific OEE, and root-cause insight
   for (const sa of params.stageAnalytics) {
     const tStage = timingByStage.get(sa.stageId);
     const configuredCycleTimeSec = tStage?.baseTaskTimeSec ?? 0;
@@ -415,7 +434,13 @@ export function buildAuditedSimulationKPIs(params: {
     const effectiveTheoreticalUnitCycleSec =
       tStage?.effectiveUnitCycleSec ?? configuredCycleTimeSec / batchSize;
     const theoreticalCapacityPerHour = tStage?.theoreticalCapacityPerHour ?? 0;
-    const actualCapacityPerHour = sa.completedCount / totalHours;
+
+    const stageCalSec = sa.calendarTimeSec ?? shiftAudit.simTimeSec;
+    const stageSchedSec = sa.scheduledTimeSec ?? shiftAudit.activeSimTimeSec;
+    const stagePlannedDownSec =
+      sa.plannedDowntimeSec ?? Math.max(0, stageCalSec - stageSchedSec);
+    const stageHours = Math.max(1e-6, stageSchedSec / 3600);
+    const actualCapacityPerHour = sa.completedCount / stageHours;
 
     const cycleDeviationSec =
       sa.avgCycleTimeSec > 0 || configuredCycleTimeSec > 0
@@ -424,14 +449,12 @@ export function buildAuditedSimulationKPIs(params: {
     const cycleDeviationPct =
       configuredCycleTimeSec > 0 ? (cycleDeviationSec / configuredCycleTimeSec) * 100 : 0;
 
-    // Stage OEE calculation
-    const stageSchedSec = shiftAudit.activeSimTimeSec;
     const stageUnplannedDownSec = (sa.downPct / 100) * stageSchedSec;
     const stageSetupSec = ((sa.setupPct ?? 0) / 100) * stageSchedSec;
     const stageGood = Math.max(0, sa.completedCount - sa.scrapCount);
     const stageOee = computeOeeMetrics({
-      calendarTimeSec: shiftAudit.simTimeSec,
-      plannedDowntimeSec: Math.max(0, shiftAudit.simTimeSec - stageSchedSec),
+      calendarTimeSec: stageCalSec,
+      plannedDowntimeSec: stagePlannedDownSec,
       unplannedDowntimeSec: stageUnplannedDownSec,
       setupTimeSec: stageSetupSec,
       idealCycleTimeSec: effectiveTheoreticalUnitCycleSec,
@@ -442,6 +465,13 @@ export function buildAuditedSimulationKPIs(params: {
     sa.performancePct = stageOee.performancePct;
     sa.qualityPct = stageOee.qualityPct;
     sa.oeePct = stageOee.oeePct;
+    sa.operatingTimeSec = stageOee.operatingTimeSec;
+    sa.scheduledUtilizationPct = sa.scheduledUtilizationPct ?? sa.utilizationPct;
+    sa.calendarUtilizationPct =
+      sa.calendarUtilizationPct ??
+      (stageCalSec > 1e-6
+        ? Math.min(100, ((sa.utilizationPct / 100) * stageSchedSec * 100) / stageCalSec)
+        : 0);
 
     let reasonCode: NonNullable<StageAnalytics['bottleneckReasonCode']> = 'balanced';
     let detailEn = '';
@@ -501,41 +531,97 @@ export function buildAuditedSimulationKPIs(params: {
     sa.bottleneckReasonDetailAr = detailAr;
   }
 
-  // Line-level OEE anchored on the bottleneck pacing resource (or line throughput if purely conveyor/zero-cycle)
-  const bnAnalytics =
-    params.stageAnalytics.find((s) => s.stageId === (params.bottleneckStageId || timingAudit.bottleneckStageId)) ??
-    params.stageAnalytics[0];
-  const stageCount = Math.max(1, params.stageAnalytics.length);
+  // Plant-level OEE: check if active resources have resource-specific or heterogeneous shifts
+  const resourceList = params.resourceAnalytics || [];
+  const processingResources = resourceList.filter((r) => r.kind !== 'conveyor' || r.idealCycleTimeSec > 0 || r.processedCount > 0);
+  const activeRes = processingResources.length > 0 ? processingResources : resourceList;
 
-  const bnMaintSec = bnAnalytics
-    ? ((bnAnalytics.maintenancePct ?? 0) / 100) * shiftAudit.simTimeSec
-    : (params.totalMaintenanceTimeSec ?? 0) / stageCount;
-  const extraObjectMaintSec = Math.max(0, bnMaintSec - shiftAudit.plantMaintenanceDowntimeSec);
-  const linePlannedDowntimeSec = Math.min(
-    shiftAudit.simTimeSec,
-    shiftAudit.plannedDowntimeSec + extraObjectMaintSec
-  );
-  const lineScheduledSec = Math.max(1e-6, shiftAudit.simTimeSec - linePlannedDowntimeSec);
+  const hasCustomOrHeterogeneousShifts =
+    activeRes.length > 0 &&
+    (activeRes.some(
+      (r) =>
+        Math.abs(r.scheduledProductionTimeSec - shiftAudit.activeSimTimeSec) > 1e-1 ||
+        Math.abs(r.plannedDowntimeSec - shiftAudit.plannedDowntimeSec) > 1e-1
+    ) ||
+      activeRes.some((r) => Boolean(r.shiftId)));
 
-  const lineUnplannedDownSec = bnAnalytics
-    ? (bnAnalytics.downPct / 100) * lineScheduledSec
-    : params.totalDowntimeSec / stageCount;
-  const lineSetupSec = bnAnalytics
-    ? ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec
-    : (params.totalSetupTimeSec ?? 0) / stageCount;
+  let lineOee: ReturnType<typeof computeOeeMetrics>;
 
-  const lineOee = computeOeeMetrics({
-    calendarTimeSec: shiftAudit.simTimeSec,
-    plannedDowntimeSec: linePlannedDowntimeSec,
-    unplannedDowntimeSec: lineUnplannedDownSec,
-    setupTimeSec: lineSetupSec,
-    idealCycleTimeSec:
-      timingAudit.bottleneckCycleSec > 0
-        ? timingAudit.bottleneckCycleSec
-        : shiftAudit.arrivalIntervalSec,
-    totalUnitsProcessed: actualProduction,
-    goodUnitsProduced: goodUnits,
-  });
+  if (hasCustomOrHeterogeneousShifts) {
+    const n = activeRes.length;
+    const sumCT = activeRes.reduce((s, r) => s + r.calendarTimeSec, 0);
+    const sumPDT = activeRes.reduce((s, r) => s + r.plannedDowntimeSec, 0);
+    const sumSPT = activeRes.reduce((s, r) => s + r.scheduledProductionTimeSec, 0);
+    const sumUDT = activeRes.reduce((s, r) => s + r.unplannedDowntimeSec, 0);
+    const sumSET = activeRes.reduce((s, r) => s + r.setupTimeSec, 0);
+    const sumOT = activeRes.reduce((s, r) => s + r.operatingTimeSec, 0);
+    const sumIdealTime = activeRes.reduce(
+      (s, r) => s + (r.idealCycleTimeSec > 0 ? r.idealCycleTimeSec * r.processedCount : 0),
+      0
+    );
+    const sumTotalUnits = activeRes.reduce((s, r) => s + r.processedCount, 0);
+    const sumGoodUnits = activeRes.reduce((s, r) => s + r.goodCount, 0);
+
+    const availPct = sumSPT > 1e-6 ? Math.min(100, Math.max(0, (sumOT / sumSPT) * 100)) : 0;
+    const perfPct =
+      sumOT > 1e-6
+        ? sumIdealTime > 0
+          ? Math.min(100, Math.max(0, (sumIdealTime / sumOT) * 100))
+          : sumTotalUnits > 0
+          ? 100
+          : 0
+        : 0;
+    const qualPct = sumTotalUnits > 0 ? Math.min(100, Math.max(0, (sumGoodUnits / sumTotalUnits) * 100)) : 100;
+    const oeePct = sumSPT > 1e-6 ? (availPct / 100) * (perfPct / 100) * (qualPct / 100) * 100 : 0;
+
+    lineOee = {
+      calendarTimeSec: sumCT / n,
+      plannedDowntimeSec: sumPDT / n,
+      scheduledProductionTimeSec: sumSPT / n,
+      unplannedDowntimeSec: sumUDT / n,
+      setupTimeSec: sumSET / n,
+      operatingTimeSec: sumOT / n,
+      availabilityPct: availPct,
+      performancePct: perfPct,
+      qualityPct: qualPct,
+      oeePct,
+    };
+  } else {
+    const bnAnalytics =
+      params.stageAnalytics.find((s) => s.stageId === (params.bottleneckStageId || timingAudit.bottleneckStageId)) ??
+      params.stageAnalytics[0];
+    const stageCount = Math.max(1, params.stageAnalytics.length);
+
+    const bnMaintSec = bnAnalytics
+      ? ((bnAnalytics.maintenancePct ?? 0) / 100) * shiftAudit.simTimeSec
+      : (params.totalMaintenanceTimeSec ?? 0) / stageCount;
+    const extraObjectMaintSec = Math.max(0, bnMaintSec - shiftAudit.plantMaintenanceDowntimeSec);
+    const linePlannedDowntimeSec = Math.min(
+      shiftAudit.simTimeSec,
+      shiftAudit.plannedDowntimeSec + extraObjectMaintSec
+    );
+    const lineScheduledSec = Math.max(1e-6, shiftAudit.simTimeSec - linePlannedDowntimeSec);
+
+    const lineUnplannedDownSec = bnAnalytics
+      ? (bnAnalytics.downPct / 100) * lineScheduledSec
+      : params.totalDowntimeSec / stageCount;
+    const lineSetupSec = bnAnalytics
+      ? ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec
+      : (params.totalSetupTimeSec ?? 0) / stageCount;
+
+    lineOee = computeOeeMetrics({
+      calendarTimeSec: shiftAudit.simTimeSec,
+      plannedDowntimeSec: linePlannedDowntimeSec,
+      unplannedDowntimeSec: lineUnplannedDownSec,
+      setupTimeSec: lineSetupSec,
+      idealCycleTimeSec:
+        timingAudit.bottleneckCycleSec > 0
+          ? timingAudit.bottleneckCycleSec
+          : shiftAudit.arrivalIntervalSec,
+      totalUnitsProcessed: actualProduction,
+      goodUnitsProduced: goodUnits,
+    });
+  }
 
   const lineEfficiencyPct =
     timingAudit.stages.some((s) => s.baseTaskTimeSec > 0)
@@ -549,6 +635,13 @@ export function buildAuditedSimulationKPIs(params: {
     params.stageAnalytics.reduce((sum, sa) => sum + (sa.batchesCompleted || 0), 0);
   const avgBatchSize =
     totalBatchesCompleted > 0 && goodUnits > 0 ? goodUnits / totalBatchesCompleted : 1;
+
+  const calendarUtilizationPct =
+    params.calendarUtilizationPct ??
+    (params.stageAnalytics.length > 0
+      ? params.stageAnalytics.reduce((s, a) => s + (a.calendarUtilizationPct ?? 0), 0) /
+        params.stageAnalytics.length
+      : 0);
 
   return {
     totalPlannedProduction: shiftAudit.plannedUnits,
@@ -568,6 +661,7 @@ export function buildAuditedSimulationKPIs(params: {
     lineEfficiencyPct,
     workerUtilizationPct: params.workerUtilizationPct,
     machineUtilizationPct: params.machineUtilizationPct,
+    calendarUtilizationPct,
     bottleneckStageId: params.bottleneckStageId,
     bottleneckStageName: params.bottleneckStageName,
     avgWip: params.avgWip,

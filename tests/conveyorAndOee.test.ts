@@ -147,7 +147,7 @@ test('CapacityEngine avoids double-counting conveyors/buffers or batch container
 
   const profile = computeStageCapacityProfile(stage, [machine, bufObj]);
   assert.equal(profile.batchSize, 4);
-  // Machine has capacity 1, buffer counts as 1 channel (not 20 parallel servers)
-  assert.equal(profile.parallelServers, 2);
-  assert.equal(profile.effectiveUnitCycleSec, 40 / (2 * 4));
+  // Machine has capacity 1, buffer is queue storage (never a parallel machine server)
+  assert.equal(profile.parallelServers, 1);
+  assert.equal(profile.effectiveUnitCycleSec, 40 / 4);
 });

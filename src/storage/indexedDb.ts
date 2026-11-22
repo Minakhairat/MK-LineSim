@@ -157,7 +157,24 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
     products: Array.isArray(obj.products) ? obj.products : [],
     stages: Array.isArray(obj.stages) ? obj.stages : [],
     routes: Array.isArray(obj.routes) ? obj.routes : [],
-    workers: Array.isArray(obj.workers) ? obj.workers : [],
+    workers: Array.isArray(obj.workers)
+      ? obj.workers.map((w) => {
+          const rec = w as Record<string, unknown>;
+          const rot = Number(rec.rotation ?? rec.rotationDeg ?? 0);
+          const targetId =
+            typeof rec.assignedTo === 'string' && rec.assignedTo
+              ? rec.assignedTo
+              : typeof rec.assignedStationId === 'string' && rec.assignedStationId
+              ? rec.assignedStationId
+              : undefined;
+          return {
+            ...rec,
+            rotation: rot,
+            rotationDeg: rot,
+            ...(targetId ? { assignedTo: targetId, assignedStationId: targetId } : {}),
+          };
+        }) as ProjectData['workers']
+      : [],
     simulationConfig: (() => {
       const sc = (obj.simulationConfig as ProjectData['simulationConfig']) || {
         durationSec: 28800,

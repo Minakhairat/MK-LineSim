@@ -21,6 +21,7 @@ export interface MachineStateTotals {
   setup: number;
   down: number;
   maintenance: number;
+  unavailable: number;
   total: number;
 }
 
@@ -37,6 +38,7 @@ export interface ConveyorStateTotals {
   moving: number;
   stopped: number;
   blocked: number;
+  unavailable: number;
   total: number;
 }
 
@@ -47,6 +49,7 @@ export interface ConveyorStateTotals {
 export class ResourceStateTracker {
   private readonly horizonSec: number;
   private readonly recordIntervals: boolean;
+  private finalizedHorizon: number | null = null;
 
   private machineDurations = new Map<string, Omit<MachineStateTotals, 'total'>>();
   private machineCurrent = new Map<string, { state: MachineRuntimeStatus; since: number }>();
@@ -71,6 +74,7 @@ export class ResourceStateTracker {
     initialState: MachineRuntimeStatus = 'idle',
     startSec = 0
   ): void {
+    this.finalizedHorizon = null;
     const t0 = Math.max(0, Math.min(this.horizonSec, startSec));
     this.machineDurations.set(id, {
       running: 0,
@@ -80,6 +84,7 @@ export class ResourceStateTracker {
       setup: 0,
       down: 0,
       maintenance: 0,
+      unavailable: 0,
     });
     this.machineCurrent.set(id, { state: initialState, since: t0 });
   }
@@ -89,6 +94,7 @@ export class ResourceStateTracker {
     initialState: WorkerRuntimeStatus = 'idle',
     startSec = 0
   ): void {
+    this.finalizedHorizon = null;
     const t0 = Math.max(0, Math.min(this.horizonSec, startSec));
     this.workerDurations.set(id, {
       busy: 0,
@@ -105,11 +111,13 @@ export class ResourceStateTracker {
     initialState: ConveyorRuntimeStatus = 'stopped',
     startSec = 0
   ): void {
+    this.finalizedHorizon = null;
     const t0 = Math.max(0, Math.min(this.horizonSec, startSec));
     this.conveyorDurations.set(id, {
       moving: 0,
       stopped: 0,
       blocked: 0,
+      unavailable: 0,
     });
     this.conveyorCurrent.set(id, { state: initialState, since: t0 });
   }
@@ -155,6 +163,7 @@ export class ResourceStateTracker {
       runtime.setupTimeSec = acc.setup;
       runtime.downTimeSec = acc.down;
       runtime.maintenanceTimeSec = acc.maintenance;
+      runtime.unavailableTimeSec = acc.unavailable;
       runtime.lastStateChangeTime = clampedNow;
     }
   }
@@ -230,11 +239,13 @@ export class ResourceStateTracker {
       runtime.conveyorStatus = nextState;
       runtime.movingTimeSec = acc.moving;
       runtime.stoppedTimeSec = acc.stopped;
+      runtime.unavailableTimeSec = acc.unavailable;
     }
   }
 
   /**
    * Closes all unfinished states cleanly up to endSec (clamped to horizonSec).
+   * Strictly idempotent so repeated calls never double-count.
    */
   public finalizeAt(
     endSec: number,
@@ -242,6 +253,11 @@ export class ResourceStateTracker {
     workerStates?: Map<string, WorkerRuntimeState>
   ): void {
     const horizon = Math.min(this.horizonSec, Math.max(0, endSec));
+    if (this.finalizedHorizon !== null && horizon <= this.finalizedHorizon + 1e-12) {
+      return;
+    }
+    this.finalizedHorizon = horizon;
+
     for (const [id, cur] of this.machineCurrent.entries()) {
       this.transitionMachine(id, cur.state, horizon, objectStates?.get(id));
     }
@@ -262,6 +278,7 @@ export class ResourceStateTracker {
       setup: 0,
       down: 0,
       maintenance: 0,
+      unavailable: 0,
     };
     const out: MachineStateTotals = { ...acc, total: 0 };
     const cur = this.machineCurrent.get(id);
@@ -277,7 +294,8 @@ export class ResourceStateTracker {
       out.starved +
       out.setup +
       out.down +
-      out.maintenance;
+      out.maintenance +
+      out.unavailable;
     return out;
   }
 
@@ -305,6 +323,7 @@ export class ResourceStateTracker {
       moving: 0,
       stopped: 0,
       blocked: 0,
+      unavailable: 0,
     };
     const out: ConveyorStateTotals = { ...acc, total: 0 };
     const cur = this.conveyorCurrent.get(id);
@@ -313,7 +332,7 @@ export class ResourceStateTracker {
       const dt = Math.max(0, clamped - cur.since);
       out[cur.state] += dt;
     }
-    out.total = out.moving + out.stopped + out.blocked;
+    out.total = out.moving + out.stopped + out.blocked + out.unavailable;
     return out;
   }
 

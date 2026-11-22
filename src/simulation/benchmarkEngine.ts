@@ -10,6 +10,8 @@ import {
 import { DiscreteEventSimulationEngine } from './desEngine';
 import { validateProject } from './validator';
 import { evaluateConveyorPhysics } from '../engineering/conveyorPhysics';
+import { computeStageCapacityProfile } from '../engineering/capacityEngine';
+import { createSeededRng, sampleRepairDurationSec } from './failureModels';
 
 function createBenchmarkBaseProject(
   id: string,
@@ -212,6 +214,13 @@ function runTimedCase(
     categoryAr: string;
     description: string;
     descriptionAr: string;
+    verificationTier?: 'des' | 'math';
+    engineeringConcept?: string;
+    engineeringConceptAr?: string;
+    inputSummary?: string;
+    inputSummaryAr?: string;
+    explanation?: string;
+    explanationAr?: string;
   },
   fn: () => { metrics: BenchmarkMetricComparison[]; failureReason?: string }
 ): BenchmarkCaseResult {
@@ -221,6 +230,7 @@ function runTimedCase(
     const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     const passed = !failureReason && metrics.every((m) => m.passed);
     return {
+      verificationTier: 'des',
       ...meta,
       passed,
       executionMs: Number(Math.max(0.01, t1 - t0).toFixed(2)),
@@ -582,7 +592,8 @@ export function runAllEngineeringBenchmarks(): BenchmarkSuiteSummary {
           (stState?.starvedTimeSec ?? 0) +
           (stState?.setupTimeSec ?? 0) +
           (stState?.downTimeSec ?? 0) +
-          (stState?.maintenanceTimeSec ?? 0);
+          (stState?.maintenanceTimeSec ?? 0) +
+          (stState?.unavailableTimeSec ?? 0);
 
         return {
           metrics: [
@@ -786,6 +797,333 @@ export function runAllEngineeringBenchmarks(): BenchmarkSuiteSummary {
             compareMetric('Scheduled Production Time', 'وقت الإنتاج المجدول', 's', 3300, k.scheduledProductionTimeSec ?? 0, 0.5),
             compareMetric('Operating Time', 'وقت التشغيل الصافي', 's', 3000, k.operatingTimeSec ?? 0, 1),
             compareMetric('OEE = A × P × Q Identity', 'تطابق معادلة OEE', '%', productOee, k.oeePct ?? 0, 0.05),
+          ],
+        };
+      }
+    )
+  );
+
+  // 12. Capacity Engine Deduplication & Buffer/Conveyor Non-Inflation (Scenario A1)
+  results.push(
+    runTimedCase(
+      {
+        id: 'bm_12_capacity_dedup_no_buffer_inflation',
+        name: '12. Parallel Capacity Deduplication (No Buffer Inflation)',
+        nameAr: '12. منع تضخيم السعة الموازية بالمخازن والسيور والتكرار',
+        category: 'Capacity & Batching',
+        categoryAr: 'السعة والتجميع',
+        description:
+          'Single machine (cap=1) paired with buffer (cap=20), conveyor, and duplicate object ID keeps parallelServers=1 and batch=4 amortized cycle=10s.',
+        descriptionAr:
+          'ماكينة واحدة (سعة 1) مع بفر (سعة 20) وسير ومعرف مكرر تحافظ على عدد خوادم موازية = 1 ودورة مكافئة للوحدة 10 ث.',
+        verificationTier: 'des',
+        engineeringConcept: 'Parallel Machine Server Count vs. Buffer Queue Capacity',
+        engineeringConceptAr: 'فصل عدد الخوادم الموازية للماكينة عن سعة المخزن الوسيط',
+        inputSummary: '1 machine (cap=1, 40s, batch=4) + buffer (cap=20) + conveyor + duplicate ID, 3600s shift',
+        inputSummaryAr: 'ماكينة (سعة 1، 40ث، دفعة 4) + بفر (سعة 20) + سير + معرف مكرر، وردية 3600ث',
+        explanation:
+          'Only unique machine/workstation resources count as parallel servers. Effective unit cycle = 40 / (1 * 4) = 10 s (360 u/hr).',
+        explanationAr:
+          'تُحتسب فقط الماكينات/محطات العمل الفريدة كخوادم موازية. الزمن المكافئ للوحدة = 40 / (1 × 4) = 10 ث (360 وحدة/ساعة).',
+      },
+      () => {
+        const proj = createBenchmarkBaseProject('bm12', 'Capacity Non-Inflation', {
+          durationSec: 3600,
+          arrivalIntervalSec: 1,
+        });
+        const m1 = makeStationObj('m1', 'st_1', 'Palletizer 1', 5, 40, {
+          capacity: 1,
+          batchSize: 4,
+          batchMode: 'collect_batch',
+        });
+        m1.kind = 'machine';
+        const buf: LayoutObject = {
+          ...makeStationObj('b1', 'st_1', 'Staging Buffer', 3, 0, { capacity: 20 }),
+          kind: 'buffer',
+          category: 'buffer',
+        };
+        const conv = makeStationObj('c1', 'st_1', 'Feed Belt', 8, 0, {
+          kind: 'conveyor',
+          capacity: 10,
+          speedMps: 1.0,
+        });
+        proj.layoutObjects.push(m1, buf, conv);
+        const st = makeStage('st_1', 'S1', 'Palletizing', 'm1', 40, {
+          assignedObjectIds: ['m1', 'm1', 'b1', 'c1'],
+          batchSize: 4,
+          batchMode: 'collect_batch',
+          bufferCapacity: 200,
+        });
+        proj.stages.push(st);
+        proj.products[0].routeStageIds = ['st_1'];
+
+        const profile = computeStageCapacityProfile(st, [m1, m1, buf, conv]);
+        const res = new DiscreteEventSimulationEngine(proj).runToCompletion();
+
+        return {
+          metrics: [
+            compareMetric('Parallel Server Count', 'عدد الخوادم الموازية', 'servers', 1, profile.parallelServers, 0),
+            compareMetric('Effective Unit Cycle', 'الزمن المكافئ للوحدة', 's', 10, profile.effectiveUnitCycleSec, 0.01),
+            compareMetric('Theoretical Throughput', 'الإنتاجية النظرية', 'u/hr', 360, profile.theoreticalCapacityPerHour, 0.1),
+            compareMetric('DES Measured Good Units', 'الوحدات المنتجة بالمحاكاة', 'units', 356, res.kpis.goodUnits, 4),
+          ],
+        };
+      }
+    )
+  );
+
+  // 13. Parallel Machines Linear Scaling Regression (Scenario A2)
+  results.push(
+    runTimedCase(
+      {
+        id: 'bm_13_parallel_machines_regression',
+        name: '13. True Parallel Machines 2x Throughput Scaling',
+        nameAr: '13. التضاعف الفعلي للإنتاجية مع ماكينتين متوازيتين',
+        category: 'Capacity & Batching',
+        categoryAr: 'السعة والتجميع',
+        description:
+          '2 identical parallel machines (cap=1 each, 40s, batch=4) plus buffer doubles throughput to 720 u/hr analytical and ~712 units in 3600s DES.',
+        descriptionAr:
+          'ماكينتان متوازيتان (سعة 1 لكل منهما، 40ث، دفعة 4) مع بفر تضاعف الإنتاجية النظرية إلى 720 و/س والمحاكاة إلى ~712 وحدة.',
+        verificationTier: 'des',
+        engineeringConcept: 'Identical Parallel Server Scaling',
+        engineeringConceptAr: 'تدرج السعة الموازية للماكينات المتطابقة',
+        inputSummary: '2 parallel machines (cap=1 each, 40s, batch=4) + buffer (cap=20), 3600s shift',
+        inputSummaryAr: 'ماكينتان متوازيتان (سعة 1 لكل منهما، 40ث، دفعة 4) + بفر (سعة 20)، وردية 3600ث',
+        explanation:
+          'Distinct assigned machines sum to parallelServers=2 -> effectiveUnitCycle = 40 / (2 * 4) = 5s -> 720 u/hr.',
+        explanationAr:
+          'تُجمع الماكينات الفريدة لتعطي 2 خادم موازي، فيصبح الزمن المكافئ 40 / (2 × 4) = 5 ث (720 وحدة/ساعة).',
+      },
+      () => {
+        const proj = createBenchmarkBaseProject('bm13', 'Parallel 2-Machine Scaling', {
+          durationSec: 3600,
+          arrivalIntervalSec: 1,
+        });
+        const m1 = makeStationObj('m1', 'st_1', 'Palletizer A', 5, 40, {
+          capacity: 1,
+          batchSize: 4,
+          batchMode: 'collect_batch',
+        });
+        m1.kind = 'machine';
+        const m2 = makeStationObj('m2', 'st_1', 'Palletizer B', 7, 40, {
+          capacity: 1,
+          batchSize: 4,
+          batchMode: 'collect_batch',
+        });
+        m2.kind = 'machine';
+        const buf: LayoutObject = {
+          ...makeStationObj('b1', 'st_1', 'Buffer', 3, 0, { capacity: 20 }),
+          kind: 'buffer',
+          category: 'buffer',
+        };
+        proj.layoutObjects.push(m1, m2, buf);
+        const st = makeStage('st_1', 'S1', 'Parallel Palletizing', 'm1', 40, {
+          assignedObjectIds: ['m1', 'm2', 'b1'],
+          batchSize: 4,
+          batchMode: 'collect_batch',
+          bufferCapacity: 200,
+        });
+        proj.stages.push(st);
+        proj.products[0].routeStageIds = ['st_1'];
+
+        const profile = computeStageCapacityProfile(st, [m1, m2, buf]);
+        const res = new DiscreteEventSimulationEngine(proj).runToCompletion();
+
+        return {
+          metrics: [
+            compareMetric('Parallel Server Count', 'عدد الخوادم الموازية', 'servers', 2, profile.parallelServers, 0),
+            compareMetric('Effective Unit Cycle', 'الزمن المكافئ للوحدة', 's', 5, profile.effectiveUnitCycleSec, 0.01),
+            compareMetric('Theoretical Throughput', 'الإنتاجية النظرية', 'u/hr', 720, profile.theoreticalCapacityPerHour, 0.1),
+            compareMetric('DES Measured Good Units', 'الوحدات المنتجة بالمحاكاة', 'units', 712, res.kpis.goodUnits, 8),
+          ],
+        };
+      }
+    )
+  );
+
+  // 14. Resource-Specific Shift & Unavailable State Conservation (Scenario B1 + C1)
+  results.push(
+    runTimedCase(
+      {
+        id: 'bm_14_resource_shift_unavailable_state',
+        name: '14. Resource Shift Assignment & Unavailable State Conservation',
+        nameAr: '14. وردية المعدة المخصصة وحفظ حالة عدم التوفر',
+        category: 'Calendars & States',
+        categoryAr: 'التقاويم والحالات',
+        description:
+          'Machine assigned exclusively to Shift 1 (3600s) inside a 10800s 2-shift plant tracks 7200s strictly as unavailable (0s false idle), yielding 100% scheduled util & 33.3% calendar util.',
+        descriptionAr:
+          'ماكينة معينة للوردية الأولى (3600ث) ضمن أفق 10800ث تسجل 7200ث كغير متاح (0ث خمول زائف) بنسبة تشغيل مجدول 100% وتقويمي 33.3%.',
+        verificationTier: 'des',
+        engineeringConcept: 'Scheduled Utilization (OT/SPT) vs. Calendar Utilization (OT/CT)',
+        engineeringConceptAr: 'فصل الاستغلال المجدول (OT/SPT) عن الاستغلال التقويمي (OT/CT) وتصنيف خارج الوردية',
+        inputSummary: 'Horizon=10800s; Shift1=[0..3600], Shift2=[3600..10800]; Machine assigned to Shift1, 30s cycle',
+        inputSummaryAr: 'أفق 10800ث؛ الوردية1 [0..3600]، الوردية2 [3600..10800]؛ الماكينة على الوردية1 بدورة 30ث',
+        explanation:
+          'Off-shift time is classified as unavailableTimeSec (7200s), keeping idleTimeSec=0 and resource OEE=100% on its 3600s scheduled window.',
+        explanationAr:
+          'يُصنف الوقت خارج الوردية كعدم توفر (7200ث) بدون أي خمول زائف، وتصل كفاءة المعدة المجدولة OEE إلى 100% في نافذتها.',
+      },
+      () => {
+        const proj = createBenchmarkBaseProject('bm14', 'Resource Shift & Unavailable', {
+          durationSec: 10800,
+          arrivalIntervalSec: 30,
+        });
+        proj.simulationConfig.shifts = [
+          { id: 'shift_1', name: 'Shift 1', startSec: 0, durationSec: 3600, breaks: [] },
+          { id: 'shift_2', name: 'Shift 2', startSec: 3600, durationSec: 7200, breaks: [] },
+        ];
+        const m1 = makeStationObj('m1', 'st_1', 'CNC Shift-1', 5, 30, { shiftId: 'shift_1' });
+        m1.kind = 'machine';
+        proj.layoutObjects.push(m1);
+        proj.stages.push(makeStage('st_1', 'S1', 'Machining', 'm1', 30, { bufferCapacity: 200 }));
+        proj.products[0].routeStageIds = ['st_1'];
+
+        const eng = new DiscreteEventSimulationEngine(proj);
+        const res = eng.runToCompletion();
+        const rt = eng.getSnapshot().objects['m1'];
+        const ra = res.resourceAnalytics?.find((r) => r.objectId === 'm1');
+        const stateSum =
+          (rt?.runningTimeSec ?? 0) +
+          (rt?.idleTimeSec ?? 0) +
+          (rt?.blockedTimeSec ?? 0) +
+          (rt?.starvedTimeSec ?? 0) +
+          (rt?.setupTimeSec ?? 0) +
+          (rt?.downTimeSec ?? 0) +
+          (rt?.maintenanceTimeSec ?? 0) +
+          (rt?.unavailableTimeSec ?? 0);
+
+        return {
+          metrics: [
+            compareMetric('Unavailable Time (Off-Shift)', 'زمن خارج الوردية', 's', 7200, rt?.unavailableTimeSec ?? 0, 0.5),
+            compareMetric('False Idle Time', 'زمن الخمول', 's', 0, rt?.idleTimeSec ?? 0, 0.5),
+            compareMetric('Scheduled Utilization (OT/SPT)', 'الاستغلال المجدول', '%', 100, ra?.scheduledUtilizationPct ?? 0, 0.5),
+            compareMetric('Calendar Utilization (OT/CT)', 'الاستغلال التقويمي', '%', 33.3333, ra?.calendarUtilizationPct ?? 0, 0.2),
+            compareMetric('Resource OEE (Scheduled)', 'OEE الماكينة', '%', 100, ra?.oeePct ?? 0, 0.5),
+            compareMetric('Exact State Conservation Sum', 'تطابق مجموع الحالات', 's', 10800, stateSum, 0.01),
+          ],
+        };
+      }
+    )
+  );
+
+  // 15. Heterogeneous Multi-Shift Resource & Weighted Plant OEE (Scenario B2)
+  results.push(
+    runTimedCase(
+      {
+        id: 'bm_15_heterogeneous_shift_weighted_oee',
+        name: '15. Multi-Shift Heterogeneous Resource & Plant OEE',
+        nameAr: '15. حساب OEE الموزون للماكينات مختلفة الورديات',
+        category: 'OEE Hierarchy',
+        categoryAr: 'حسابات OEE',
+        description:
+          'Machine A runs Shift 1 [0..3600s] @ 30s (120 units) feeding Buffer -> Machine B runs Shift 2 [3600..7200s] @ 60s (60 units). Both achieve 100% individual OEE and 100% scheduled-time weighted Plant OEE.',
+        descriptionAr:
+          'الماكينة A تعمل بالوردية 1 [0..3600ث] بدورة 30ث لتغذية الماكينة B بالوردية 2 [3600..7200ث] بدورة 60ث؛ تحقق كل معدة 100% OEE ومعدل المصنع الموزون 100%.',
+        verificationTier: 'des',
+        engineeringConcept: 'Weighted Multi-Shift Resource OEE Aggregation',
+        engineeringConceptAr: 'تجميع مؤشر OEE الموزون حسب وقت الإنتاج المجدول لكل مورد',
+        inputSummary: '7200s horizon; M1 Shift1 (3600s, 30s/u) -> M2 Shift2 (3600s, 60s/u)',
+        inputSummaryAr: 'أفق 7200ث؛ الماكينة 1 وردية1 (3600ث، 30ث) -> الماكينة 2 وردية2 (3600ث، 60ث)',
+        explanation:
+          'Evaluating each resource against its own shift calendar eliminates cross-shift dilution, giving 100% OEE for M1, M2, and Plant.',
+        explanationAr:
+          'تقييم كل معدة وفق تقويمها الخاص يمنع تخفيف الكفاءة خارج ورديتها ويحقق 100% للمعدتين والمصنع.',
+      },
+      () => {
+        const proj = createBenchmarkBaseProject('bm15', 'Heterogeneous Shift Weighted OEE', {
+          durationSec: 7200,
+          arrivalIntervalSec: 30,
+        });
+        proj.simulationConfig.shifts = [
+          { id: 'shift_1', name: 'Shift 1', startSec: 0, durationSec: 3600, breaks: [] },
+          { id: 'shift_2', name: 'Shift 2', startSec: 3600, durationSec: 3600, breaks: [] },
+        ];
+        const m1 = makeStationObj('m1', 'st_1', 'Prep Press', 5, 30, { shiftId: 'shift_1' });
+        m1.kind = 'machine';
+        const m2 = makeStationObj('m2', 'st_2', 'Cure Oven', 12, 60, { shiftId: 'shift_2' });
+        m2.kind = 'machine';
+        proj.layoutObjects.push(m1, m2);
+        proj.stages.push(
+          makeStage('st_1', 'S1', 'Prep', 'm1', 30, { bufferCapacity: 300, successorIds: ['st_2'] }),
+          makeStage('st_2', 'S2', 'Cure', 'm2', 60, { bufferCapacity: 300, predecessorIds: ['st_1'] })
+        );
+        proj.products[0].routeStageIds = ['st_1', 'st_2'];
+
+        const res = new DiscreteEventSimulationEngine(proj).runToCompletion();
+        const r1 = res.resourceAnalytics?.find((r) => r.objectId === 'm1');
+        const r2 = res.resourceAnalytics?.find((r) => r.objectId === 'm2');
+
+        return {
+          metrics: [
+            compareMetric('Machine 1 OEE', 'OEE الماكينة 1', '%', 100, r1?.oeePct ?? 0, 0.5),
+            compareMetric('Machine 2 OEE', 'OEE الماكينة 2', '%', 100, r2?.oeePct ?? 0, 0.5),
+            compareMetric('Weighted Plant OEE', 'OEE المصنع الموزون', '%', 100, res.kpis.oeePct ?? 0, 0.5),
+            compareMetric('Line Good Units (M2 Exit)', 'الوحدات النهائية', 'units', 60, res.kpis.goodUnits, 1),
+          ],
+        };
+      }
+    )
+  );
+
+  // 16. Log-Normal Repair Distribution Method-of-Moments Statistical Verification
+  results.push(
+    runTimedCase(
+      {
+        id: 'bm_16_lognormal_repair_statistics',
+        name: '16. Log-Normal Repair Time Method of Moments',
+        nameAr: '16. التحقق الإحصائي لتوزيع إصلاح Log-Normal',
+        category: 'Reliability Math',
+        categoryAr: 'رياضيات الأعطال',
+        description:
+          '5,000 seeded Box-Muller samples from LogNormal(mean=120s, stdDev=60s) converge accurately to arithmetic target mean and standard deviation.',
+        descriptionAr:
+          'توليد 5,000 عينة بذرية لتوزيع Log-Normal بمتوسط 120ث وانحراف معياري 60ث ومطابقتها حسابياً.',
+        verificationTier: 'math',
+        engineeringConcept: 'Method of Moments Parameterization + Box-Muller Transform',
+        engineeringConceptAr: 'تحويل العزوم الحسابية وتوليد التوزيع اللوغاريتمي الطبيعي',
+        inputSummary: 'N=5000 seeded samples, target arithmetic MTTR mean=120s, stdDev=60s',
+        inputSummaryAr: '5000 عينة ببذرة ثابتة، متوسط MTTR المستهدف 120ث، الانحراف المعياري 60ث',
+        explanation:
+          'Verifies sigma^2 = ln(1 + (sd/mean)^2) and mu = ln(mean) - sigma^2/2 yield exact empirical mean and standard deviation.',
+        explanationAr:
+          'التحقق من تطابق المتوسط والانحراف المعياري التجريبيين مع القيم النظرية المحددة بدون قيم سالبة.',
+      },
+      () => {
+        const rng = createSeededRng(202604);
+        const N = 5000;
+        let sum = 0;
+        let sumSq = 0;
+        let invalidCount = 0;
+        for (let i = 0; i < N; i++) {
+          const val = sampleRepairDurationSec(
+            {
+              enabled: true,
+              failureModel: 'exponential',
+              repairModel: 'lognormal',
+              mtbfSec: 3600,
+              mttrSec: 120,
+              mttrStdDevSec: 60,
+              weibullShape: 2,
+              weibullScaleSec: 3600,
+              availability: 0.95,
+            },
+            rng
+          );
+          if (!Number.isFinite(val) || val <= 0) invalidCount++;
+          sum += val;
+          sumSq += val * val;
+        }
+        const mean = sum / N;
+        const variance = Math.max(0, sumSq / N - mean * mean);
+        const stdDev = Math.sqrt(variance);
+
+        return {
+          metrics: [
+            compareMetric('Empirical Sample Mean', 'المتوسط التجريبي للعينات', 's', 120, mean, 3.0),
+            compareMetric('Empirical Sample Std Dev', 'الانحراف المعياري التجريبي', 's', 60, stdDev, 4.0),
+            compareMetric('Invalid / Non-Positive Samples', 'العينات غير الصالحة', 'count', 0, invalidCount, 0),
           ],
         };
       }

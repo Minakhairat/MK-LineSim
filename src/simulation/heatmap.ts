@@ -4,6 +4,7 @@ import {
   ProductDefinition,
   SimulationConfig,
 } from '../types/project';
+import { ResourceCalendarEngine } from './resourceCalendar';
 import { computeShiftWindowAudit } from './timeAuditService';
 
 export type HeatmapTier = 'idle' | 'low' | 'healthy' | 'high' | 'bottleneck' | 'downtime';
@@ -11,9 +12,11 @@ export type HeatmapTier = 'idle' | 'low' | 'healthy' | 'high' | 'bottleneck' | '
 export interface ObjectHeatmapMetrics {
   objectId: string;
   utilPct: number;
+  calendarUtilPct: number;
   downPct: number;
   blockedPct: number;
   starvedPct: number;
+  unavailablePct: number;
   tier: HeatmapTier;
   colorHex: string;
   borderHex: string;
@@ -47,16 +50,17 @@ const TIER_STYLES: Record<HeatmapTier, { colorHex: string; borderHex: string; co
 
 /**
  * Computes active utilization % vs. unplanned downtime % and resolves a deterministic
- * thermal tier for an object in the 2D CAD / 3D WebGL factory viewports.
+ * thermal tier for an object in the 2D CAD / 3D WebGL factory viewports using resource-specific calendar windows.
  */
 export function computeObjectHeatmapMetrics(params: {
   obj: LayoutObject;
   runtime?: ObjectRuntimeState;
   clockSec: number;
   activeSimTimeSec: number;
+  simulationConfig?: SimulationConfig;
   isStageBottleneck?: boolean;
 }): ObjectHeatmapMetrics {
-  const { obj, runtime, clockSec, activeSimTimeSec, isStageBottleneck = false } = params;
+  const { obj, runtime, clockSec, activeSimTimeSec, simulationConfig, isStageBottleneck = false } = params;
 
   if (
     clockSec <= 0 ||
@@ -68,9 +72,11 @@ export function computeObjectHeatmapMetrics(params: {
     return {
       objectId: obj.id,
       utilPct: 0,
+      calendarUtilPct: 0,
       downPct: 0,
       blockedPct: 0,
       starvedPct: 0,
+      unavailablePct: 0,
       tier: 'idle',
       colorHex: style.colorHex,
       borderHex: style.borderHex,
@@ -85,16 +91,26 @@ export function computeObjectHeatmapMetrics(params: {
   const runT = runtime.runningTimeSec + (runtime.status === 'running' ? dtLast : 0);
   const blkT = runtime.blockedTimeSec + (runtime.status === 'blocked' ? dtLast : 0);
   const downT = runtime.downTimeSec + (runtime.status === 'down' ? dtLast : 0);
+  const unavailT = (runtime.unavailableTimeSec ?? 0) + (runtime.status === 'unavailable' ? dtLast : 0);
   const starvedT =
     runtime.idleTimeSec +
     runtime.starvedTimeSec +
     (runtime.status === 'idle' || runtime.status === 'starved' ? dtLast : 0);
 
-  const denom = Math.max(1e-6, activeSimTimeSec);
-  const utilPct = Math.min(100, Math.max(0, (runT / denom) * 100));
-  const downPct = Math.min(100, Math.max(0, (downT / denom) * 100));
-  const blockedPct = Math.min(100, Math.max(0, (blkT / denom) * 100));
-  const starvedPct = Math.min(100, Math.max(0, (starvedT / denom) * 100));
+  let resourceSchedSec = activeSimTimeSec;
+  if (simulationConfig) {
+    const cal = new ResourceCalendarEngine(simulationConfig, Math.max(clockSec, simulationConfig.durationSec || clockSec));
+    const resMetrics = cal.getObjectCalendarMetrics(obj, clockSec);
+    resourceSchedSec = resMetrics.scheduledProductionTimeSec;
+  }
+
+  const denom = Math.max(1e-6, resourceSchedSec);
+  const utilPct = resourceSchedSec > 1e-6 ? Math.min(100, Math.max(0, (runT / denom) * 100)) : 0;
+  const calendarUtilPct = Math.min(100, Math.max(0, (runT / Math.max(1e-6, clockSec)) * 100));
+  const downPct = resourceSchedSec > 1e-6 ? Math.min(100, Math.max(0, (downT / denom) * 100)) : 0;
+  const blockedPct = resourceSchedSec > 1e-6 ? Math.min(100, Math.max(0, (blkT / denom) * 100)) : 0;
+  const starvedPct = resourceSchedSec > 1e-6 ? Math.min(100, Math.max(0, (starvedT / denom) * 100)) : 0;
+  const unavailablePct = Math.min(100, Math.max(0, (unavailT / Math.max(1e-6, clockSec)) * 100));
   const isDownActive = runtime.status === 'down';
 
   let tier: HeatmapTier;
@@ -106,6 +122,8 @@ export function computeObjectHeatmapMetrics(params: {
     tier = 'high';
   } else if (utilPct >= 35) {
     tier = 'healthy';
+  } else if (runtime.status === 'unavailable' && runT <= 1e-6) {
+    tier = 'idle';
   } else {
     tier = 'low';
   }
@@ -119,9 +137,11 @@ export function computeObjectHeatmapMetrics(params: {
   return {
     objectId: obj.id,
     utilPct,
+    calendarUtilPct,
     downPct,
     blockedPct,
     starvedPct,
+    unavailablePct,
     tier,
     colorHex: style.colorHex,
     borderHex: style.borderHex,

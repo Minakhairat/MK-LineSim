@@ -41,7 +41,34 @@ export interface CalendarValidationResult {
     overlapSec: number;
   }>;
   breaksOutsideShift: Array<{ shift: ShiftDefinition; brk: ShiftBreak }>;
-  invalidMaintenanceWindows: Array<{ win: PlannedMaintenanceWindow; reason: string }>;
+  invalidMaintenanceWindows: Array<{
+    win: PlannedMaintenanceWindow;
+    reason: string;
+    targetId?: string;
+    resourceName?: string;
+  }>;
+  invalidObjectShifts: Array<{ obj: LayoutObject; missingRef: string }>;
+  invalidWorkerShifts: Array<{ worker: WorkerDefinition; missingRef: string }>;
+  maintenanceOutsideHorizon: Array<{
+    win: PlannedMaintenanceWindow;
+    kind: 'outside' | 'partial';
+    horizonSec: number;
+    targetId?: string;
+    resourceName?: string;
+  }>;
+  overlappingMaintenanceWindows: Array<{
+    a: PlannedMaintenanceWindow;
+    b: PlannedMaintenanceWindow;
+    overlapSec: number;
+    targetId?: string;
+    resourceName?: string;
+  }>;
+}
+
+export interface ResourceShiftResolution {
+  status: 'unassigned' | 'matched' | 'invalid';
+  shifts: ShiftDefinition[];
+  missingRef?: string;
 }
 
 export interface ResourceAvailabilityState {
@@ -174,16 +201,58 @@ export function containsTimestamp(intervals: TimeInterval[], tSec: number): bool
   return false;
 }
 
+function matchShiftsInList(
+  shifts: ShiftDefinition[],
+  shiftId?: string,
+  scheduleName?: string
+): ResourceShiftResolution {
+  const cleanShiftId = shiftId?.trim() || '';
+  const cleanSchedule = scheduleName?.trim() || '';
+
+  if (!cleanShiftId && !cleanSchedule) {
+    return { status: 'unassigned', shifts };
+  }
+
+  if (cleanShiftId) {
+    const exactMatch = shifts.filter((s) => s.id === cleanShiftId);
+    if (exactMatch.length > 0) return { status: 'matched', shifts: exactMatch };
+    const lowerId = cleanShiftId.toLowerCase();
+    const looseMatch = shifts.filter(
+      (s) => s.id.toLowerCase() === lowerId || s.name.trim().toLowerCase() === lowerId
+    );
+    if (looseMatch.length > 0) return { status: 'matched', shifts: looseMatch };
+    return { status: 'invalid', shifts: [], missingRef: cleanShiftId };
+  }
+
+  const lowerSched = cleanSchedule.toLowerCase();
+  const schedMatch = shifts.filter(
+    (s) => s.id.toLowerCase() === lowerSched || s.name.trim().toLowerCase() === lowerSched
+  );
+  if (schedMatch.length > 0) return { status: 'matched', shifts: schedMatch };
+  return { status: 'invalid', shifts: [], missingRef: cleanSchedule };
+}
+
 /**
- * Validates shift overlaps, break overlaps, break-within-shift bounds, and maintenance windows.
+ * Validates shift overlaps, break overlaps, break-within-shift bounds, maintenance windows,
+ * and resource/worker shift assignments.
  */
-export function validateSimulationCalendars(config: SimulationConfig): CalendarValidationResult {
+export function validateSimulationCalendars(
+  config: SimulationConfig,
+  objects: LayoutObject[] = [],
+  workers: WorkerDefinition[] = []
+): CalendarValidationResult {
   const overlappingShifts: CalendarValidationResult['overlappingShifts'] = [];
   const overlappingBreaks: CalendarValidationResult['overlappingBreaks'] = [];
   const breaksOutsideShift: CalendarValidationResult['breaksOutsideShift'] = [];
   const invalidMaintenanceWindows: CalendarValidationResult['invalidMaintenanceWindows'] = [];
+  const invalidObjectShifts: CalendarValidationResult['invalidObjectShifts'] = [];
+  const invalidWorkerShifts: CalendarValidationResult['invalidWorkerShifts'] = [];
+  const maintenanceOutsideHorizon: CalendarValidationResult['maintenanceOutsideHorizon'] = [];
+  const overlappingMaintenanceWindows: CalendarValidationResult['overlappingMaintenanceWindows'] = [];
 
   const shifts = config.shifts || [];
+  const horizonSec = Math.max(0, config.durationSec || 0);
+
   for (let i = 0; i < shifts.length; i++) {
     const a = shifts[i];
     const aStart = a.startSec;
@@ -217,12 +286,85 @@ export function validateSimulationCalendars(config: SimulationConfig): CalendarV
     }
   }
 
-  for (const win of config.maintenanceWindows || []) {
-    if (win.startSec < 0 || win.durationSec <= 0) {
-      invalidMaintenanceWindows.push({
-        win,
-        reason: 'Planned maintenance window must have non-negative start and positive duration.',
-      });
+  const checkMaintList = (
+    windows: PlannedMaintenanceWindow[],
+    targetId?: string,
+    resourceName?: string
+  ) => {
+    for (const win of windows) {
+      if (win.startSec < 0 || win.durationSec <= 0) {
+        invalidMaintenanceWindows.push({
+          win,
+          reason: 'Planned maintenance window must have non-negative start and positive duration.',
+          targetId,
+          resourceName,
+        });
+        continue;
+      }
+      if (horizonSec > 0) {
+        if (win.startSec >= horizonSec - 1e-9) {
+          maintenanceOutsideHorizon.push({
+            win,
+            kind: 'outside',
+            horizonSec,
+            targetId,
+            resourceName,
+          });
+        } else if (win.startSec + win.durationSec > horizonSec + 1e-6) {
+          maintenanceOutsideHorizon.push({
+            win,
+            kind: 'partial',
+            horizonSec,
+            targetId,
+            resourceName,
+          });
+        }
+      }
+    }
+
+    for (let i = 0; i < windows.length; i++) {
+      const a = windows[i];
+      if (a.startSec < 0 || a.durationSec <= 0) continue;
+      for (let j = i + 1; j < windows.length; j++) {
+        const b = windows[j];
+        if (b.startSec < 0 || b.durationSec <= 0) continue;
+        // Skip unrelated global object-scoped windows when checking global list
+        if (!targetId && a.objectId && b.objectId && a.objectId !== b.objectId) continue;
+        const aEnd = a.startSec + a.durationSec;
+        const bEnd = b.startSec + b.durationSec;
+        const overlapSec = Math.min(aEnd, bEnd) - Math.max(a.startSec, b.startSec);
+        if (overlapSec > 1e-6) {
+          overlappingMaintenanceWindows.push({
+            a,
+            b,
+            overlapSec,
+            targetId: targetId || a.objectId || b.objectId,
+            resourceName,
+          });
+        }
+      }
+    }
+  };
+
+  checkMaintList(config.maintenanceWindows || []);
+
+  for (const obj of objects) {
+    if (!obj.rendering.visible) continue;
+    const objMaint = obj.operations.plannedMaintenance || [];
+    if (objMaint.length > 0) {
+      checkMaintList(objMaint, obj.id, obj.name);
+    }
+
+    const res = matchShiftsInList(shifts, obj.operations.shiftId, obj.operations.operatingSchedule);
+    if (res.status === 'invalid' && res.missingRef) {
+      invalidObjectShifts.push({ obj, missingRef: res.missingRef });
+    }
+  }
+
+  for (const worker of workers) {
+    const res = matchShiftsInList(shifts, worker.shiftId, undefined);
+    if (res.status === 'invalid' && res.missingRef) {
+      invalidWorkerShifts.push({ worker, missingRef: res.missingRef });
     }
   }
 
@@ -231,6 +373,10 @@ export function validateSimulationCalendars(config: SimulationConfig): CalendarV
     overlappingBreaks,
     breaksOutsideShift,
     invalidMaintenanceWindows,
+    invalidObjectShifts,
+    invalidWorkerShifts,
+    maintenanceOutsideHorizon,
+    overlappingMaintenanceWindows,
   };
 }
 
@@ -242,13 +388,16 @@ export function validateSimulationCalendars(config: SimulationConfig): CalendarV
 export class ResourceCalendarEngine {
   private readonly simDurationSec: number;
   private readonly shifts: ShiftDefinition[];
+  private readonly hasExplicitPlantShifts: boolean;
   private readonly globalMaintWindows: PlannedMaintenanceWindow[];
 
   constructor(config: SimulationConfig, horizonSec?: number) {
     this.simDurationSec = Math.max(1e-6, horizonSec ?? config.durationSec ?? 1e-6);
     if (config.shifts && config.shifts.length > 0) {
       this.shifts = config.shifts;
+      this.hasExplicitPlantShifts = true;
     } else {
+      this.hasExplicitPlantShifts = false;
       this.shifts = [
         {
           id: 'shift_default',
@@ -266,19 +415,18 @@ export class ResourceCalendarEngine {
     return this.simDurationSec;
   }
 
+  public resolveResourceShiftStatus(shiftId?: string, scheduleName?: string): ResourceShiftResolution {
+    const cleanShiftId = shiftId?.trim() || '';
+    const cleanSchedule = scheduleName?.trim() || '';
+    if (!cleanShiftId && !cleanSchedule) {
+      return { status: 'unassigned', shifts: this.shifts };
+    }
+    const configuredShifts = this.hasExplicitPlantShifts ? this.shifts : [];
+    return matchShiftsInList(configuredShifts, cleanShiftId, cleanSchedule);
+  }
+
   private getShiftsForResource(shiftId?: string, scheduleName?: string): ShiftDefinition[] {
-    if (shiftId) {
-      const match = this.shifts.filter((s) => s.id === shiftId);
-      if (match.length > 0) return match;
-    }
-    if (scheduleName && scheduleName.trim().length > 0) {
-      const clean = scheduleName.trim().toLowerCase();
-      const match = this.shifts.filter(
-        (s) => s.id.toLowerCase() === clean || s.name.trim().toLowerCase() === clean
-      );
-      if (match.length > 0) return match;
-    }
-    return this.shifts;
+    return this.resolveResourceShiftStatus(shiftId, scheduleName).shifts;
   }
 
   public getClippedShiftIntervals(shiftId?: string, scheduleName?: string, upToSec?: number): TimeInterval[] {

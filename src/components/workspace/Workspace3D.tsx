@@ -26,6 +26,7 @@ const STATUS_COLORS: Record<MachineRuntimeStatus, number> = {
   setup: 0x0284c7,
   down: 0xdc2626,
   maintenance: 0x7c3aed,
+  unavailable: 0x94a3b8,
 };
 
 const WORKER_STATUS_COLORS: Record<WorkerRuntimeStatus, number> = {
@@ -679,6 +680,7 @@ export const Workspace3D: React.FC = () => {
     for (const w of project.workers) {
       const { group, vestMesh } = buildWorkerGroup(w.color);
       group.position.set(w.position.x, 0, w.position.z);
+      group.rotation.y = (-((w.rotation ?? w.rotationDeg ?? 0)) * Math.PI) / 180;
       group.userData = { entityKind: 'worker', entityId: w.id };
       wg.add(group);
       workerMeshMap.current.set(w.id, { group, vest: vestMesh });
@@ -729,15 +731,16 @@ export const Workspace3D: React.FC = () => {
     for (const [wid, entry] of workerMeshMap.current.entries()) {
       const rt = simSnapshot.workers[wid];
       const mat = entry.vest.material as THREE.MeshStandardMaterial;
+      const def = project.workers.find((w) => w.id === wid);
+      if (def) {
+        entry.group.rotation.y = (-((def.rotation ?? def.rotationDeg ?? 0)) * Math.PI) / 180;
+      }
       if (rt && simSnapshot.clockSec > 0) {
         entry.group.position.set(rt.position.x, 0, rt.position.z);
         mat.color.setHex(WORKER_STATUS_COLORS[rt.status] ?? 0x1d4ed8);
-      } else {
-        const def = project.workers.find((w) => w.id === wid);
-        if (def) {
-          entry.group.position.set(def.position.x, 0, def.position.z);
-          mat.color.set(def.color || '#1D4ED8');
-        }
+      } else if (def) {
+        entry.group.position.set(def.position.x, 0, def.position.z);
+        mat.color.set(def.color || '#1D4ED8');
       }
     }
 
@@ -833,6 +836,7 @@ export const Workspace3D: React.FC = () => {
         runtime: simSnapshot.objects[obj.id],
         clockSec: simSnapshot.clockSec,
         activeSimTimeSec: activeWindowSec,
+        simulationConfig: project.simulationConfig,
         isStageBottleneck: isStageBn,
       });
 

@@ -170,7 +170,7 @@ export interface GeometricProps {
 }
 
 export type FailureDistributionType = 'exponential' | 'fixed' | 'weibull';
-export type RepairDistributionType = 'exponential' | 'fixed' | 'triangular';
+export type RepairDistributionType = 'exponential' | 'fixed' | 'triangular' | 'lognormal';
 
 export interface PlannedMaintenanceWindow {
   id: string;
@@ -192,7 +192,8 @@ export interface OperationalProps {
   productSpacingM?: number; // for conveyors
   direction?: 1 | -1; // +1 forward local X, -1 reverse
   mtbfSec?: number; // mean time between failures (optional)
-  mttrSec?: number; // mean time to repair
+  mttrSec?: number; // arithmetic mean time to repair (seconds)
+  mttrStdDevSec?: number; // arithmetic standard deviation of repair duration for lognormal (seconds)
   failureModel?: FailureDistributionType;
   weibullShape?: number; // k parameter for Weibull failure model (default ~1.5)
   weibullScaleSec?: number; // lambda scale parameter for Weibull
@@ -302,13 +303,24 @@ export interface ProductionRoute {
   stageIds: string[];
 }
 
+export interface WorkerConveyorSegmentRef {
+  objectId: string;
+  segmentIndex: number;
+  segmentCount: number;
+  offsetRatio: number; // 0..1 along conveyor belt length
+}
+
 export interface WorkerDefinition {
   id: string;
   label: string;
   name: string;
   position: Vec3;
+  rotation?: number; // orientation in degrees (-360..360), primary field synced with rotationDeg
+  rotationDeg?: number; // orientation around vertical axis in degrees (-360..360)
   assignedStageIds: string[];
   assignedStationId?: string;
+  assignedTo?: string; // conveyor or station object ID linked to this worker
+  assignedConveyorSegment?: WorkerConveyorSegmentRef;
   skillCategory: string;
   skillLevel: number; // 1..5
   efficiencyFactor: number; // 0.5..1.5
@@ -388,9 +400,10 @@ export type MachineRuntimeStatus =
   | 'starved'
   | 'setup'
   | 'down'
-  | 'maintenance';
+  | 'maintenance'
+  | 'unavailable';
 export type WorkerRuntimeStatus = 'idle' | 'walking' | 'busy' | 'break' | 'unavailable';
-export type ConveyorRuntimeStatus = 'moving' | 'stopped' | 'blocked';
+export type ConveyorRuntimeStatus = 'moving' | 'stopped' | 'blocked' | 'unavailable';
 
 export interface ProductEntityState {
   id: string;
@@ -430,6 +443,7 @@ export interface ObjectRuntimeState {
   setupTimeSec?: number;
   downTimeSec: number;
   maintenanceTimeSec?: number;
+  unavailableTimeSec?: number;
   movingTimeSec?: number;
   stoppedTimeSec?: number;
   lastStateChangeTime: number;
@@ -466,12 +480,19 @@ export interface StageAnalytics {
   avgQueueLength: number;
   maxQueueLength: number;
   utilizationPct: number;
+  scheduledUtilizationPct?: number;
+  calendarUtilizationPct?: number;
   blockedPct: number;
   starvedPct: number;
   idlePct?: number;
   setupPct?: number;
   downPct: number;
   maintenancePct?: number;
+  unavailablePct?: number;
+  calendarTimeSec?: number;
+  scheduledTimeSec?: number;
+  plannedDowntimeSec?: number;
+  operatingTimeSec?: number;
   isBottleneck: boolean;
   availabilityPct?: number;
   performancePct?: number;
@@ -497,6 +518,36 @@ export interface StageAnalytics {
     | 'conveyor_saturation';
   bottleneckReasonDetail?: string;
   bottleneckReasonDetailAr?: string;
+}
+
+export interface ResourceOeeAnalytics {
+  objectId: string;
+  objectName: string;
+  kind: LayoutObjectKind;
+  stageId?: string;
+  shiftId?: string;
+  calendarTimeSec: number;
+  plannedDowntimeSec: number;
+  scheduledProductionTimeSec: number;
+  unplannedDowntimeSec: number;
+  setupTimeSec: number;
+  operatingTimeSec: number;
+  runningTimeSec: number;
+  idleTimeSec: number;
+  blockedTimeSec: number;
+  starvedTimeSec: number;
+  maintenanceTimeSec: number;
+  unavailableTimeSec: number;
+  scheduledUtilizationPct: number;
+  calendarUtilizationPct: number;
+  availabilityPct: number;
+  performancePct: number;
+  qualityPct: number;
+  oeePct: number;
+  processedCount: number;
+  goodCount: number;
+  scrapCount: number;
+  idealCycleTimeSec: number;
 }
 
 export interface HourlyProductionPoint {
@@ -536,6 +587,7 @@ export interface SimulationKPIs {
   lineEfficiencyPct: number;
   workerUtilizationPct: number;
   machineUtilizationPct: number;
+  calendarUtilizationPct?: number;
   bottleneckStageId?: string;
   bottleneckStageName?: string;
 
@@ -571,6 +623,7 @@ export interface SimulationResult {
   simTimeSec: number;
   kpis: SimulationKPIs;
   stageAnalytics: StageAnalytics[];
+  resourceAnalytics?: ResourceOeeAnalytics[];
   hourlySeries: HourlyProductionPoint[];
   wipSeries: WipTimePoint[];
   recentEvents: SimEvent[];
@@ -622,6 +675,9 @@ export interface ValidationIssue {
   code: string;
   message: string;
   messageAr?: string;
+  recommendation?: string;
+  recommendationAr?: string;
+  resourceName?: string;
   targetId?: string;
   targetType?: 'factory' | 'object' | 'stage' | 'worker' | 'product' | 'shift';
 }
@@ -668,6 +724,13 @@ export interface BenchmarkCaseResult {
   categoryAr: string;
   description: string;
   descriptionAr: string;
+  verificationTier?: 'math' | 'des';
+  engineeringConcept?: string;
+  engineeringConceptAr?: string;
+  inputSummary?: string;
+  inputSummaryAr?: string;
+  explanation?: string;
+  explanationAr?: string;
   passed: boolean;
   executionMs: number;
   metrics: BenchmarkMetricComparison[];

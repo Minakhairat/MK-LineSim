@@ -581,6 +581,11 @@ export function buildWorkerGroup(colorHex = '#1D4ED8'): {
   hat.castShadow = true;
   group.add(hat);
 
+  // Directional forward cap brim & front vest chest badge (+X local forward when rotationDeg = 0)
+  const capBrimMat = new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.45, metalness: 0.1 });
+  group.add(createBoxPart(0.11, 0.025, 0.17, capBrimMat, 0.11, 1.505, 0));
+  group.add(createBoxPart(0.03, 0.14, 0.14, hatMat, 0.195, 1.16, 0));
+
   return { group, vestMesh };
 }
 

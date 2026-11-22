@@ -6,9 +6,9 @@ import { DiscreteEventSimulationEngine } from '../src/simulation/desEngine';
 import { validateProject } from '../src/simulation/validator';
 import { migrateProjectSchema } from '../src/storage/indexedDb';
 
-test('All 11 Engineering Benchmarks pass deterministic DES verification', () => {
+test('All 16 Engineering Benchmarks pass deterministic verification', () => {
   const summary = runAllEngineeringBenchmarks();
-  assert.equal(summary.totalTests, 11);
+  assert.equal(summary.totalTests, 16);
   for (const bm of summary.results) {
     assert.equal(
       bm.passed,

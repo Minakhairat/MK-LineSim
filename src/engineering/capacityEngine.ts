@@ -6,77 +6,150 @@ export interface StageBatchConfig {
   containerKind: 'pallet' | 'carton' | 'pack';
 }
 
+export interface StageEquipmentBreakdown {
+  processingServers: LayoutObject[];
+  processingServerCount: number;
+  processingCapacitySum: number;
+  bufferStorageCapacity: number;
+  bufferCapacitySum: number;
+  conveyorChannelCount: number;
+  conveyorTransportCapacity: number;
+  conveyorCapacitySum: number;
+  physicalEquipmentCount: number;
+}
+
 export interface StageCapacityProfile {
   baseTaskTimeSec: number;
   setupTimeSec: number;
   batchSize: number;
+  batchMode: StageBatchConfig['batchMode'];
   parallelServers: number;
+  bufferStorageCapacity: number;
+  conveyorChannelCount: number;
+  conveyorTransportCapacity: number;
   effectiveUnitCycleSec: number;
   theoreticalCapacityPerHour: number;
 }
 
+function dedupeObjects(assignedObjects: LayoutObject[]): LayoutObject[] {
+  const seen = new Set<string>();
+  const unique: LayoutObject[] = [];
+  for (const obj of assignedObjects) {
+    if (!obj || !obj.id || seen.has(obj.id)) continue;
+    seen.add(obj.id);
+    unique.push(obj);
+  }
+  return unique;
+}
+
 /**
- * Resolves batch grouping behavior and container kind from stage + assigned floor equipment.
+ * Resolves stage batch configuration (batchSize, batchMode, containerKind)
+ * without letting batch container size inflate parallel machine servers.
  */
 export function resolveStageBatchConfig(
   stage: ProductionStage,
-  assignedObjects: LayoutObject[]
+  assignedObjects: LayoutObject[] = []
 ): StageBatchConfig {
-  const primaryObj = assignedObjects[0];
-  const rawMode = stage.batchMode ?? primaryObj?.operations.batchMode;
-  const rawSize = Math.max(
-    1,
-    Math.round(Number(stage.batchSize ?? primaryObj?.operations.batchSize ?? 1) || 1)
-  );
+  const uniqueObjs = dedupeObjects(assignedObjects);
+  const procObj = uniqueObjs.find((o) => o.kind === 'machine' || o.kind === 'workstation') ?? uniqueObjs[0];
 
-  const cat = primaryObj?.category || '';
-  const containerKind: StageBatchConfig['containerKind'] =
-    cat.includes('pallet') || cat.includes('stretch_wrapper') || cat === 'material_handling'
-      ? 'pallet'
-      : cat.includes('shrink') || cat.includes('strapping')
-      ? 'pack'
-      : 'carton';
+  const rawBatch = Number(stage.batchSize ?? procObj?.operations.batchSize ?? 1);
+  const batchSize = Number.isFinite(rawBatch) && rawBatch >= 1 ? Math.round(rawBatch) : 1;
 
-  if (rawMode === 'unbatch') {
-    return { batchSize: 1, batchMode: 'unbatch', containerKind };
-  }
-  if (rawMode === 'single' || rawSize <= 1 || primaryObj?.kind === 'conveyor') {
-    return { batchSize: 1, batchMode: 'single', containerKind };
-  }
+  const rawMode = stage.batchMode ?? procObj?.operations.batchMode;
+  const batchMode: StageBatchConfig['batchMode'] =
+    rawMode === 'collect_batch' || rawMode === 'unbatch' || rawMode === 'single'
+      ? rawMode
+      : batchSize > 1
+      ? 'collect_batch'
+      : 'single';
+
+  const cat = `${procObj?.category || ''} ${procObj?.name || ''} ${stage.name || ''}`.toLowerCase();
+  const containerKind: StageBatchConfig['containerKind'] = cat.includes('pallet')
+    ? 'pallet'
+    : cat.includes('shrink') || cat.includes('stretch') || cat.includes('wrap') || cat.includes('pack')
+    ? 'pack'
+    : 'carton';
+
   return {
-    batchSize: rawSize,
-    batchMode: 'collect_batch',
+    batchSize,
+    batchMode,
     containerKind,
   };
 }
 
 /**
- * Computes true parallel server count for a stage without double-counting buffers,
- * conveyors, or batch container sizes as parallel machines.
+ * Separates true processing server capacity (machines & workstations only)
+ * from auxiliary buffer storage capacity and conveyor transport channels.
+ */
+export function resolveStageEquipmentBreakdown(
+  stage: ProductionStage,
+  assignedObjects: LayoutObject[]
+): StageEquipmentBreakdown {
+  const uniqueObjs = dedupeObjects(assignedObjects);
+  if (uniqueObjs.length === 0) {
+    const req = Math.max(1, Math.round(Number(stage.requiredMachines || 1)));
+    const buf = Math.max(0, Number(stage.bufferCapacity || 0));
+    return {
+      processingServers: [],
+      processingServerCount: req,
+      processingCapacitySum: req,
+      bufferStorageCapacity: buf,
+      bufferCapacitySum: buf,
+      conveyorChannelCount: 0,
+      conveyorTransportCapacity: 0,
+      conveyorCapacitySum: 0,
+      physicalEquipmentCount: 0,
+    };
+  }
+
+  const processingServers: LayoutObject[] = [];
+  let processingServerCount = 0;
+  let bufferStorageCapacity = 0;
+  let conveyorChannelCount = 0;
+  let conveyorTransportCapacity = 0;
+
+  for (const obj of uniqueObjs) {
+    if (obj.kind === 'machine' || obj.kind === 'workstation') {
+      processingServers.push(obj);
+      processingServerCount += Math.max(1, Math.round(Number(obj.operations.capacity || 1)));
+    } else if (obj.kind === 'buffer') {
+      bufferStorageCapacity += Math.max(1, Math.round(Number(obj.operations.capacity || 1)));
+    } else if (obj.kind === 'conveyor') {
+      conveyorChannelCount += 1;
+      conveyorTransportCapacity += Math.max(1, Math.round(Number(obj.operations.capacity || 1)));
+    }
+  }
+
+  return {
+    processingServers,
+    processingServerCount,
+    processingCapacitySum: processingServerCount,
+    bufferStorageCapacity,
+    bufferCapacitySum: bufferStorageCapacity,
+    conveyorChannelCount,
+    conveyorTransportCapacity,
+    conveyorCapacitySum: conveyorTransportCapacity,
+    physicalEquipmentCount: uniqueObjs.length,
+  };
+}
+
+/**
+ * Computes true parallel processing server count for a stage.
+ * Deduplicates equipment IDs and strictly counts ONLY processing equipment
+ * (`kind === 'machine'` or `kind === 'workstation'`).
+ * Buffers, conveyors, storage, vehicles, and batch sizes NEVER inflate server count.
  */
 export function resolveStageParallelServerCount(
   stage: ProductionStage,
   assignedObjects: LayoutObject[]
 ): number {
-  if (assignedObjects.length === 0) {
-    return Math.max(1, Number(stage.requiredMachines || 1));
-  }
-
-  let parallelServers = 0;
-  for (const obj of assignedObjects) {
-    if (obj.kind === 'machine' || obj.kind === 'workstation') {
-      parallelServers += Math.max(1, Math.round(Number(obj.operations.capacity || 1)));
-    } else {
-      // Buffers and conveyors act as staging/transit channels rather than parallel machine servers
-      parallelServers += 1;
-    }
-  }
-  return Math.max(1, parallelServers);
+  return resolveStageEquipmentBreakdown(stage, assignedObjects).processingServerCount;
 }
 
 /**
  * Computes deterministic theoretical stage capacity profile from configured task times,
- * true parallel server slots, and batch amortization.
+ * true parallel machine/workstation server slots, and batch amortization.
  */
 export function computeStageCapacityProfile(
   stage: ProductionStage,
@@ -88,10 +161,22 @@ export function computeStageCapacityProfile(
     Math.max(0, Number(stage.unloadingTimeSec || 0));
 
   const setupTimeSec = Math.max(0, Number(stage.setupTimeSec || 0));
-  const batchCfg = resolveStageBatchConfig(stage, assignedObjects);
-  const parallelServers = resolveStageParallelServerCount(stage, assignedObjects);
+  const uniqueObjs = dedupeObjects(assignedObjects);
+  const batchCfg = resolveStageBatchConfig(stage, uniqueObjs);
+  const breakdown = resolveStageEquipmentBreakdown(stage, uniqueObjs);
+  const parallelServers = breakdown.processingServerCount;
 
-  const effectiveUnitCycleSec = baseTaskTimeSec / (parallelServers * batchCfg.batchSize);
+  const divisorServers =
+    parallelServers > 0
+      ? parallelServers
+      : breakdown.conveyorChannelCount > 0 && baseTaskTimeSec > 0
+      ? breakdown.conveyorChannelCount
+      : 0;
+
+  const effectiveUnitCycleSec =
+    divisorServers > 0 && baseTaskTimeSec > 0
+      ? baseTaskTimeSec / (divisorServers * batchCfg.batchSize)
+      : 0;
   const theoreticalCapacityPerHour =
     effectiveUnitCycleSec > 0 ? 3600 / effectiveUnitCycleSec : 0;
 
@@ -99,7 +184,11 @@ export function computeStageCapacityProfile(
     baseTaskTimeSec,
     setupTimeSec,
     batchSize: batchCfg.batchSize,
+    batchMode: batchCfg.batchMode,
     parallelServers,
+    bufferStorageCapacity: breakdown.bufferStorageCapacity,
+    conveyorChannelCount: breakdown.conveyorChannelCount,
+    conveyorTransportCapacity: breakdown.conveyorTransportCapacity,
     effectiveUnitCycleSec,
     theoreticalCapacityPerHour,
   };

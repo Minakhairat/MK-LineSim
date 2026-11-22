@@ -252,11 +252,30 @@ export function importFlowchartToSimulationData(project: ProjectData): {
       primaryObj.stageId = st.id;
 
       if (primaryObj.kind === 'conveyor') {
-        st.requiredWorkers = 0;
-        st.processingTimeSec = 0;
-        st.loadingTimeSec = 0;
-        st.unloadingTimeSec = 0;
-        st.scrapRate = 0;
+        // Preserve user-configured manual inspection/assembly work on conveyor when set
+        const stageHasWork =
+          st.requiredWorkers > 0 ||
+          st.processingTimeSec > 0 ||
+          st.loadingTimeSec > 0 ||
+          st.unloadingTimeSec > 0;
+        const objHasWork =
+          primaryObj.operations.requiredOperators > 0 ||
+          primaryObj.operations.processingTimeSec > 0 ||
+          primaryObj.operations.loadingTimeSec > 0 ||
+          primaryObj.operations.unloadingTimeSec > 0;
+        if (stageHasWork) {
+          primaryObj.operations.processingTimeSec = Math.max(0, st.processingTimeSec);
+          primaryObj.operations.setupTimeSec = Math.max(0, st.setupTimeSec);
+          primaryObj.operations.loadingTimeSec = Math.max(0, st.loadingTimeSec);
+          primaryObj.operations.unloadingTimeSec = Math.max(0, st.unloadingTimeSec);
+          primaryObj.operations.requiredOperators = Math.max(0, st.requiredWorkers);
+        } else if (objHasWork) {
+          st.processingTimeSec = Math.max(0, primaryObj.operations.processingTimeSec);
+          st.setupTimeSec = Math.max(0, primaryObj.operations.setupTimeSec);
+          st.loadingTimeSec = Math.max(0, primaryObj.operations.loadingTimeSec);
+          st.unloadingTimeSec = Math.max(0, primaryObj.operations.unloadingTimeSec);
+          st.requiredWorkers = Math.max(0, primaryObj.operations.requiredOperators);
+        }
         if (!primaryObj.operations.speedMps || primaryObj.operations.speedMps <= 0) {
           primaryObj.operations.speedMps = 0.08;
         }
@@ -295,7 +314,9 @@ export function importFlowchartToSimulationData(project: ProjectData): {
   for (const st of draft.stages) {
     if (!reachable.has(st.id) || st.requiredWorkers <= 0) continue;
     const assigned = draft.workers.filter(
-      (w) => w.assignedStageIds.includes(st.id) || st.assignedObjectIds.includes(w.assignedStationId || '')
+      (w) =>
+        w.assignedStageIds.includes(st.id) ||
+        st.assignedObjectIds.includes(w.assignedTo || w.assignedStationId || '')
     );
     const stObj = objById.get(st.assignedObjectIds[0]);
     while (assigned.length < st.requiredWorkers) {
@@ -311,7 +332,10 @@ export function importFlowchartToSimulationData(project: ProjectData): {
               z: Math.max(0.5, Math.min(draft.factory.widthM - 0.5, stObj.geometry.position.z + 0.95)),
             }
           : { x: 4, y: 0, z: 10 },
+        rotation: 0,
+        rotationDeg: 0,
         assignedStageIds: [st.id],
+        assignedTo: stObj?.id,
         assignedStationId: stObj?.id,
         skillCategory: 'Assembly & Operations',
         skillLevel: 4,

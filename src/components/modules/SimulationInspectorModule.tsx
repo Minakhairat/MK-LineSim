@@ -47,6 +47,7 @@ export const SimulationInspectorModule: React.FC = () => {
         runtime: simSnapshot.objects[obj.id],
         clockSec: simSnapshot.clockSec,
         activeSimTimeSec: activeHeatWindowSec,
+        simulationConfig: project.simulationConfig,
         isStageBottleneck: isStageBn,
       });
       return { obj, stage, metrics };
@@ -191,6 +192,10 @@ export const SimulationInspectorModule: React.FC = () => {
           <div className="flex items-center gap-1.5">
             <span className="h-2.5 w-2.5 rounded-sm bg-blue-600 shrink-0" />
             <span className="truncate">{t.simStatus.inProcess}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="h-2.5 w-2.5 rounded-sm bg-slate-400 shrink-0" />
+            <span className="truncate">{t.simStatus.unavailable}</span>
           </div>
         </div>
       </section>

@@ -144,12 +144,20 @@ export const EngineeringValidationCenterModule: React.FC = () => {
                     <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                   )}
                   <div className="min-w-0 flex-1">
-                    <div className="font-mono-tabular text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
-                      {issue.code}
+                    <div className="flex flex-wrap items-center gap-2 font-mono-tabular text-[11px] font-semibold text-neutral-700 dark:text-neutral-300">
+                      <span>{issue.code}</span>
+                      {issue.resourceName && (
+                        <span className="text-[10px] font-normal text-neutral-500">· {issue.resourceName}</span>
+                      )}
                     </div>
                     <div className="text-neutral-700 dark:text-neutral-300">
                       {isAr && issue.messageAr ? issue.messageAr : issue.message}
                     </div>
+                    {(issue.recommendation || issue.recommendationAr) && (
+                      <div className="mt-0.5 text-[11px] text-neutral-500">
+                        {t.labels.recommendation}: {isAr && issue.recommendationAr ? issue.recommendationAr : issue.recommendation}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -215,6 +223,17 @@ export const EngineeringValidationCenterModule: React.FC = () => {
                           <span className="text-[11px] font-normal text-neutral-500">
                             {isAr ? bm.categoryAr : bm.category}
                           </span>
+                          <span
+                            className={`rounded px-1.5 py-0.5 font-mono-tabular text-[10px] font-medium ${
+                              bm.verificationTier === 'math'
+                                ? 'bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                                : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                            }`}
+                          >
+                            {bm.verificationTier === 'math'
+                              ? t.validationCenter.tierMath
+                              : t.validationCenter.tierDes}
+                          </span>
                         </div>
                         <p className="mt-0.5 text-[11px] text-neutral-500">
                           {isAr ? bm.descriptionAr : bm.description}
@@ -247,6 +266,34 @@ export const EngineeringValidationCenterModule: React.FC = () => {
 
                   {isExpanded && (
                     <div className="border-t border-neutral-100 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/60 px-4 py-3 overflow-x-auto">
+                      {(bm.engineeringConcept || bm.inputSummary || bm.explanation) && (
+                        <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2 rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-2.5 text-[11px]">
+                          {(bm.engineeringConcept || bm.engineeringConceptAr) && (
+                            <div>
+                              <span className="font-semibold text-neutral-500">{t.validationCenter.concept}: </span>
+                              <span className="text-neutral-800 dark:text-neutral-200">
+                                {isAr ? bm.engineeringConceptAr || bm.engineeringConcept : bm.engineeringConcept}
+                              </span>
+                            </div>
+                          )}
+                          {(bm.inputSummary || bm.inputSummaryAr) && (
+                            <div>
+                              <span className="font-semibold text-neutral-500">{t.validationCenter.inputs}: </span>
+                              <span className="font-mono-tabular text-neutral-800 dark:text-neutral-200">
+                                {isAr ? bm.inputSummaryAr || bm.inputSummary : bm.inputSummary}
+                              </span>
+                            </div>
+                          )}
+                          {(bm.explanation || bm.explanationAr) && (
+                            <div>
+                              <span className="font-semibold text-neutral-500">{t.validationCenter.explanation}: </span>
+                              <span className="text-neutral-800 dark:text-neutral-200">
+                                {isAr ? bm.explanationAr || bm.explanation : bm.explanation}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {bm.failureReason && (
                         <div className="mb-2 text-[11px] font-mono-tabular text-red-600 dark:text-red-400">
                           {bm.failureReason}

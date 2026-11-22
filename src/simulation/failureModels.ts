@@ -11,10 +11,26 @@ export interface FailureModelParams {
   failureModel: FailureDistributionType;
   repairModel: RepairDistributionType;
   mtbfSec: number;
+  /** Arithmetic mean time to repair in seconds */
   mttrSec: number;
+  /** Arithmetic standard deviation of repair duration in seconds (for lognormal) */
+  mttrStdDevSec: number;
   weibullShape: number;
   weibullScaleSec: number;
   availability: number;
+}
+
+/**
+ * Deterministic Mulberry32 PRNG for reproducible reliability & DES sampling.
+ */
+export function createSeededRng(seed: number): () => number {
+  let a = (seed >>> 0) || 1;
+  return () => {
+    let t = (a += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 /**
@@ -45,6 +61,25 @@ export function gammaFn(z: number): number {
 }
 
 /**
+ * Converts arithmetic mean M > 0 and arithmetic standard deviation S >= 0
+ * into log-space parameters (mu, sigma) via exact Method of Moments:
+ *   sigma^2 = ln(1 + (S / M)^2)
+ *   mu      = ln(M) - 0.5 * sigma^2
+ */
+export function lognormalParamsFromArithmeticMoments(
+  meanSec: number,
+  stdDevSec: number
+): { mu: number; sigma: number } {
+  const mean = Math.max(0.1, meanSec);
+  const sd = Math.max(0, stdDevSec);
+  const cvSq = (sd / mean) * (sd / mean);
+  const sigmaSq = Math.log(1 + cvSq);
+  const sigma = Math.sqrt(sigmaSq);
+  const mu = Math.log(mean) - 0.5 * sigmaSq;
+  return { mu, sigma };
+}
+
+/**
  * Resolves failure & repair distribution parameters from equipment operational properties
  * and simulation configuration.
  */
@@ -63,6 +98,7 @@ export function resolveObjectFailureParams(
       repairModel,
       mtbfSec: 0,
       mttrSec: 0,
+      mttrStdDevSec: 0,
       weibullShape,
       weibullScaleSec: 0,
       availability: 1,
@@ -94,6 +130,7 @@ export function resolveObjectFailureParams(
       repairModel,
       mtbfSec: 0,
       mttrSec: 0,
+      mttrStdDevSec: 0,
       weibullShape,
       weibullScaleSec: 0,
       availability: 1,
@@ -102,6 +139,11 @@ export function resolveObjectFailureParams(
 
   const weibullScaleSec =
     rawScale > 0 ? rawScale : mtbfSec / Math.max(1e-6, gammaFn(1 + 1 / weibullShape));
+  const rawStdDev = obj.operations.mttrStdDevSec;
+  const mttrStdDevSec =
+    rawStdDev !== undefined && Number.isFinite(Number(rawStdDev)) && Number(rawStdDev) >= 0
+      ? Number(rawStdDev)
+      : 0.5 * mttrSec; // Default CV = 0.5 for repair times when stdDev not explicitly provided
 
   return {
     enabled: true,
@@ -109,6 +151,7 @@ export function resolveObjectFailureParams(
     repairModel,
     mtbfSec,
     mttrSec,
+    mttrStdDevSec,
     weibullShape,
     weibullScaleSec,
     availability: avail,
@@ -136,7 +179,11 @@ export function sampleTimeToFailureSec(
 }
 
 /**
- * Samples repair duration using configured repair distribution (fixed, exponential, or symmetric triangular).
+ * Samples repair duration using configured repair distribution:
+ * - fixed: deterministic mttrSec
+ * - triangular: symmetric [0.5*M, 1.5*M] with mode M
+ * - lognormal: arithmetic mean M = mttrSec and arithmetic std dev S = mttrStdDevSec via Box-Muller
+ * - exponential: memoryless rate 1/M
  */
 export function sampleRepairDurationSec(
   params: FailureModelParams,
@@ -147,7 +194,6 @@ export function sampleRepairDurationSec(
     return Math.max(0.1, params.mttrSec);
   }
   if (params.repairModel === 'triangular') {
-    // Symmetric triangular distribution on [0.5 * mttr, 1.5 * mttr] with mode = mttr
     const a = 0.5 * params.mttrSec;
     const b = 1.5 * params.mttrSec;
     const u = Math.max(1e-7, Math.min(0.9999999, rng()));
@@ -155,6 +201,19 @@ export function sampleRepairDurationSec(
       return a + Math.sqrt(u * (b - a) * (params.mttrSec - a));
     }
     return b - Math.sqrt((1 - u) * (b - a) * (b - params.mttrSec));
+  }
+  if (params.repairModel === 'lognormal') {
+    const { mu, sigma } = lognormalParamsFromArithmeticMoments(
+      params.mttrSec,
+      params.mttrStdDevSec
+    );
+    if (sigma <= 1e-9) {
+      return Math.max(0.1, params.mttrSec);
+    }
+    const u1 = Math.max(1e-7, Math.min(0.9999999, rng()));
+    const u2 = Math.max(1e-7, Math.min(0.9999999, rng()));
+    const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    return Math.max(0.1, Math.exp(mu + sigma * z));
   }
   const u = Math.max(1e-7, Math.min(0.9999999, 1 - rng()));
   return Math.max(0.1, -params.mttrSec * Math.log(u));

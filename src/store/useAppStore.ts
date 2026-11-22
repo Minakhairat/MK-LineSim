@@ -50,6 +50,11 @@ import {
   export3DFactoryStep,
   export3DFactoryStl,
 } from '../utils/cadExporter';
+import {
+  assignWorkerToConveyorSegmentInDraft,
+  normalizeRotationDeg,
+  unassignWorkerFromConveyorInDraft,
+} from '../engineering/conveyorWorkerAssignment';
 
 export type CadExportFormat = 'dxf' | 'step' | 'stl' | 'obj';
 
@@ -155,6 +160,14 @@ interface AppState {
   addWorker: (worker: WorkerDefinition) => void;
   updateWorker: (id: string, partial: Partial<WorkerDefinition>, skipHistory?: boolean) => void;
   deleteWorker: (id: string) => void;
+  assignWorkerToConveyorSegment: (
+    workerId: string,
+    conveyorId: string,
+    segmentIndex: number,
+    segmentCount?: number,
+    side?: 1 | -1
+  ) => void;
+  unassignWorkerTarget: (workerId: string) => void;
   updateSimConfig: (partial: Partial<SimulationConfig>) => void;
 
   // Equipment library
@@ -792,7 +805,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       Object.assign(obj, rest);
 
       // Propagate floor equipment operational parameters bidirectionally to linked stage(s)
-      if (partial.operations && obj.kind !== 'conveyor') {
+      if (partial.operations) {
         for (const st of draft.stages) {
           if (st.assignedObjectIds.includes(obj.id) || obj.stageId === st.id) {
             if (partial.operations.processingTimeSec !== undefined) {
@@ -838,6 +851,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         st.assignedObjectIds = st.assignedObjectIds.filter((oid) => oid !== id);
       }
       draft.stages = draft.stages.filter((st) => st.assignedObjectIds.length > 0);
+      for (const w of draft.workers) {
+        if (w.assignedTo === id || w.assignedStationId === id) {
+          w.assignedTo = undefined;
+          w.assignedStationId = undefined;
+          w.assignedConveyorSegment = undefined;
+        }
+      }
       syncProductRoutes(draft);
     }),
 
@@ -990,7 +1010,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Synchronize operational parameters bidirectionally onto assigned floor objects
       for (const oid of s.assignedObjectIds) {
         const obj = draft.layoutObjects.find((o) => o.id === oid);
-        if (!obj || obj.kind === 'conveyor') continue;
+        if (!obj) continue;
         if (partial.processingTimeSec !== undefined) obj.operations.processingTimeSec = partial.processingTimeSec;
         if (partial.setupTimeSec !== undefined) obj.operations.setupTimeSec = partial.setupTimeSec;
         if (partial.loadingTimeSec !== undefined) obj.operations.loadingTimeSec = partial.loadingTimeSec;
@@ -1024,18 +1044,67 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addWorker: (worker) =>
     get().commitProjectEdit((draft) => {
-      draft.workers.push(worker);
+      const next = structuredClone(worker);
+      const rot = normalizeRotationDeg(next.rotation ?? next.rotationDeg ?? 0);
+      next.rotation = rot;
+      next.rotationDeg = rot;
+      const target = next.assignedTo || next.assignedStationId;
+      if (target) {
+        next.assignedTo = target;
+        next.assignedStationId = target;
+      }
+      draft.workers.push(next);
     }),
 
   updateWorker: (id, partial, skipHistory = false) =>
     get().commitProjectEdit((draft) => {
       const w = draft.workers.find((item) => item.id === id);
-      if (w) Object.assign(w, partial);
+      if (!w) return;
+      Object.assign(w, partial);
+
+      if (partial.rotation !== undefined || partial.rotationDeg !== undefined) {
+        const syncedRot = normalizeRotationDeg(partial.rotation ?? partial.rotationDeg ?? 0);
+        w.rotation = syncedRot;
+        w.rotationDeg = syncedRot;
+      }
+
+      if ('assignedTo' in partial || 'assignedStationId' in partial) {
+        const syncedTarget = partial.assignedTo ?? partial.assignedStationId;
+        w.assignedTo = syncedTarget;
+        w.assignedStationId = syncedTarget;
+        if (!syncedTarget || (w.assignedConveyorSegment && w.assignedConveyorSegment.objectId !== syncedTarget)) {
+          w.assignedConveyorSegment = undefined;
+        }
+      }
     }, skipHistory),
 
   deleteWorker: (id) =>
     get().commitProjectEdit((draft) => {
       draft.workers = draft.workers.filter((w) => w.id !== id);
+    }),
+
+  assignWorkerToConveyorSegment: (workerId, conveyorId, segmentIndex, segmentCount, side = 1) => {
+    const { commitProjectEdit, setToast, language, project } = get();
+    const conv = project.layoutObjects.find((o) => o.id === conveyorId && o.kind === 'conveyor');
+    const wk = project.workers.find((w) => w.id === workerId);
+    if (!conv || !wk) return;
+
+    commitProjectEdit((draft) => {
+      assignWorkerToConveyorSegmentInDraft(draft, workerId, conveyorId, segmentIndex, segmentCount, side);
+    });
+
+    set({ selection: { kind: 'worker', ids: [workerId] } });
+    setToast(
+      language === 'ar'
+        ? `تم تعيين ${wk.label} على قطاع ${segmentIndex + 1} من "${conv.name}"`
+        : `Assigned ${wk.label} to Segment ${segmentIndex + 1} of "${conv.name}"`,
+      'success'
+    );
+  },
+
+  unassignWorkerTarget: (workerId) =>
+    get().commitProjectEdit((draft) => {
+      unassignWorkerFromConveyorInDraft(draft, workerId);
     }),
 
   updateSimConfig: (partial) =>

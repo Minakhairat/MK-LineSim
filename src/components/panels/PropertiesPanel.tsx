@@ -1,8 +1,10 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle2, Lock, Trash2, Unlock, Eye, EyeOff, Wrench } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Lock, Plus, Trash2, Unlock, Eye, EyeOff, Wrench } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import { fromMeters, toMeters } from '../../utils/units';
+import { fromMeters, toMeters, uid } from '../../utils/units';
 import { getT } from '../../i18n/translations';
+import { FailureDistributionType, RepairDistributionType } from '../../types/project';
+import { getConveyorSegmentCount, normalizeRotationDeg } from '../../engineering/conveyorWorkerAssignment';
 
 export const PropertiesPanel: React.FC = () => {
   const project = useAppStore((s) => s.project);
@@ -15,13 +17,17 @@ export const PropertiesPanel: React.FC = () => {
   const deleteLayoutObject = useAppStore((s) => s.deleteLayoutObject);
   const updateWorker = useAppStore((s) => s.updateWorker);
   const deleteWorker = useAppStore((s) => s.deleteWorker);
+  const assignWorkerToConveyorSegment = useAppStore((s) => s.assignWorkerToConveyorSegment);
+  const unassignWorkerTarget = useAppStore((s) => s.unassignWorkerTarget);
   const updateZone = useAppStore((s) => s.updateZone);
   const deleteZone = useAppStore((s) => s.deleteZone);
   const updateSimConfig = useAppStore((s) => s.updateSimConfig);
+  const commitProjectEdit = useAppStore((s) => s.commitProjectEdit);
   const selectItem = useAppStore((s) => s.selectItem);
   const autoFixIssues = useAppStore((s) => s.autoFixIssues);
 
   const t = getT(language);
+  const isAr = language === 'ar';
   const unit = project.factory.unit;
 
   const selectedObj =
@@ -279,6 +285,77 @@ export const PropertiesPanel: React.FC = () => {
                       </button>
                     </div>
                   </div>
+                  <div className="col-span-2 mt-1 border-t border-neutral-200 dark:border-neutral-800 pt-2">
+                    <div className="text-[10px] font-semibold text-neutral-500 mb-1.5">
+                      {t.labels.conveyorWorkTitle}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {numInput(
+                        t.labels.processingTime,
+                        selectedObj.operations.processingTimeSec,
+                        false,
+                        (v) =>
+                          updateLayoutObject(selectedObj.id, {
+                            operations: { ...selectedObj.operations, processingTimeSec: Math.max(0, v) },
+                          }),
+                        1,
+                        0
+                      )}
+                      {numInput(
+                        t.labels.requiredWorkers,
+                        selectedObj.operations.requiredOperators,
+                        false,
+                        (v) =>
+                          updateLayoutObject(selectedObj.id, {
+                            operations: { ...selectedObj.operations, requiredOperators: Math.max(0, Math.round(v)) },
+                          }),
+                        1,
+                        0
+                      )}
+                    </div>
+                    {!project.stages.some(
+                      (st) => st.assignedObjectIds.includes(selectedObj.id) || st.id === selectedObj.stageId
+                    ) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          commitProjectEdit((draft) => {
+                            const conv = draft.layoutObjects.find((o) => o.id === selectedObj.id);
+                            if (!conv) return;
+                            const sid = uid('stg');
+                            const idx = draft.stages.length + 1;
+                            draft.stages.push({
+                              id: sid,
+                              code: `CV-${idx * 10}`,
+                              name: conv.name,
+                              description: isAr ? 'عملية مباشرة على السير' : 'On-conveyor work operation',
+                              processingTimeSec: Math.max(0, conv.operations.processingTimeSec || 10),
+                              setupTimeSec: conv.operations.setupTimeSec || 0,
+                              loadingTimeSec: 0,
+                              unloadingTimeSec: 0,
+                              requiredWorkers: Math.max(1, conv.operations.requiredOperators || 1),
+                              requiredMachines: 1,
+                              inputQty: 1,
+                              outputQty: 1,
+                              scrapRate: 0,
+                              reworkProbability: 0,
+                              bufferCapacity: Math.max(1, conv.operations.capacity || 5),
+                              predecessorIds: [],
+                              successorIds: [],
+                              assignedObjectIds: [conv.id],
+                              conveyorObjectId: conv.id,
+                            });
+                            conv.stageId = sid;
+                            conv.operations.requiredOperators = Math.max(1, conv.operations.requiredOperators || 1);
+                            conv.operations.processingTimeSec = Math.max(0, conv.operations.processingTimeSec || 10);
+                          })
+                        }
+                        className="mt-2 w-full rounded border border-red-300 dark:border-red-800 bg-red-50/70 dark:bg-red-950/30 px-2 py-1 text-[11px] font-medium text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-950/50"
+                      >
+                        {t.labels.syncConveyorStage}
+                      </button>
+                    )}
+                  </div>
                 </>
               ) : (
                 <>
@@ -411,6 +488,243 @@ export const PropertiesPanel: React.FC = () => {
             </div>
           </div>
 
+          {selectedObj.kind !== 'storage' && selectedObj.kind !== 'vehicle' && (
+            <>
+              {/* Resource Shift Assignment & Break Continuity */}
+              <div className="border-t border-neutral-200 dark:border-neutral-800 pt-3 flex flex-col gap-2">
+                <div className="text-[11px] font-semibold text-neutral-500">{t.labels.shiftAssignment}</div>
+                <select
+                  value={selectedObj.operations.shiftId || ''}
+                  onChange={(e) =>
+                    updateLayoutObject(selectedObj.id, {
+                      operations: { ...selectedObj.operations, shiftId: e.target.value || undefined },
+                    })
+                  }
+                  className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-900 dark:text-neutral-100"
+                >
+                  <option value="">{t.labels.plantDefaultShift}</option>
+                  {project.simulationConfig.shifts.map((sh) => (
+                    <option key={sh.id} value={sh.id}>
+                      {sh.name} ({Math.round(sh.durationSec / 60)}m)
+                    </option>
+                  ))}
+                  {selectedObj.operations.shiftId &&
+                    !project.simulationConfig.shifts.some((s) => s.id === selectedObj.operations.shiftId) && (
+                      <option value={selectedObj.operations.shiftId}>
+                        {selectedObj.operations.shiftId} (Invalid)
+                      </option>
+                    )}
+                </select>
+                <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selectedObj.operations.runDuringBreaks)}
+                    onChange={(e) =>
+                      updateLayoutObject(selectedObj.id, {
+                        operations: { ...selectedObj.operations, runDuringBreaks: e.target.checked },
+                      })
+                    }
+                  />
+                  <span>{t.labels.runDuringBreaks}</span>
+                </label>
+              </div>
+
+              {/* Failure & Repair Distributions */}
+              <div className="border-t border-neutral-200 dark:border-neutral-800 pt-3 flex flex-col gap-2">
+                <div className="text-[11px] font-semibold text-neutral-500">{t.labels.failureModel}</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="col-span-2 flex flex-col gap-1">
+                    <select
+                      value={selectedObj.operations.failureModel || 'exponential'}
+                      onChange={(e) =>
+                        updateLayoutObject(selectedObj.id, {
+                          operations: {
+                            ...selectedObj.operations,
+                            failureModel: e.target.value as FailureDistributionType,
+                          },
+                        })
+                      }
+                      className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-900 dark:text-neutral-100"
+                    >
+                      <option value="exponential">{t.labels.failureExp}</option>
+                      <option value="weibull">{t.labels.failureWeibull}</option>
+                      <option value="fixed">{t.labels.failureFixed}</option>
+                    </select>
+                  </label>
+                  {numInput(
+                    t.labels.mtbfSec,
+                    selectedObj.operations.mtbfSec ?? 3600,
+                    false,
+                    (v) =>
+                      updateLayoutObject(selectedObj.id, {
+                        operations: { ...selectedObj.operations, mtbfSec: Math.max(10, v) },
+                      }),
+                    60,
+                    10
+                  )}
+                  {(selectedObj.operations.failureModel || 'exponential') === 'weibull' &&
+                    numInput(
+                      t.labels.weibullShape,
+                      selectedObj.operations.weibullShape ?? 2.0,
+                      false,
+                      (v) =>
+                        updateLayoutObject(selectedObj.id, {
+                          operations: { ...selectedObj.operations, weibullShape: Math.max(0.2, v) },
+                        }),
+                      0.1,
+                      0.2
+                    )}
+                  <label className="col-span-2 flex flex-col gap-1 mt-1">
+                    <span className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400">
+                      {t.labels.repairModel}
+                    </span>
+                    <select
+                      value={selectedObj.operations.repairModel || 'fixed'}
+                      onChange={(e) =>
+                        updateLayoutObject(selectedObj.id, {
+                          operations: {
+                            ...selectedObj.operations,
+                            repairModel: e.target.value as RepairDistributionType,
+                          },
+                        })
+                      }
+                      className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs text-neutral-900 dark:text-neutral-100"
+                    >
+                      <option value="fixed">{t.labels.repairFixed}</option>
+                      <option value="exponential">{t.labels.repairExp}</option>
+                      <option value="lognormal">{t.labels.repairLogNormal}</option>
+                    </select>
+                  </label>
+                  {numInput(
+                    t.labels.mttrSec,
+                    selectedObj.operations.mttrSec ?? 180,
+                    false,
+                    (v) =>
+                      updateLayoutObject(selectedObj.id, {
+                        operations: { ...selectedObj.operations, mttrSec: Math.max(1, v) },
+                      }),
+                    15,
+                    1
+                  )}
+                  {selectedObj.operations.repairModel === 'lognormal' &&
+                    numInput(
+                      t.labels.mttrStdDevSec,
+                      selectedObj.operations.mttrStdDevSec ?? Math.round((selectedObj.operations.mttrSec ?? 180) * 0.5),
+                      false,
+                      (v) =>
+                        updateLayoutObject(selectedObj.id, {
+                          operations: { ...selectedObj.operations, mttrStdDevSec: Math.max(0, v) },
+                        }),
+                      5,
+                      0
+                    )}
+                </div>
+              </div>
+
+              {/* Resource Planned Maintenance Windows */}
+              <div className="border-t border-neutral-200 dark:border-neutral-800 pt-3 flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold text-neutral-500">{t.labels.plannedMaintenance}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextList = [
+                        ...(selectedObj.operations.plannedMaintenance || []),
+                        {
+                          id: uid('pm'),
+                          name: `PM ${(selectedObj.operations.plannedMaintenance?.length ?? 0) + 1}`,
+                          startSec: 1800,
+                          durationSec: 300,
+                        },
+                      ];
+                      updateLayoutObject(selectedObj.id, {
+                        operations: { ...selectedObj.operations, plannedMaintenance: nextList },
+                      });
+                    }}
+                    className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-[10px] font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{t.labels.addMaintWindow}</span>
+                  </button>
+                </div>
+                {(selectedObj.operations.plannedMaintenance || []).map((mw) => (
+                  <div
+                    key={mw.id}
+                    className="grid grid-cols-2 gap-1.5 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 p-1.5"
+                  >
+                    <div className="col-span-2 flex items-center gap-1">
+                      <input
+                        type="text"
+                        value={mw.name}
+                        onChange={(e) => {
+                          const next = (selectedObj.operations.plannedMaintenance || []).map((item) =>
+                            item.id === mw.id ? { ...item, name: e.target.value } : item
+                          );
+                          updateLayoutObject(selectedObj.id, {
+                            operations: { ...selectedObj.operations, plannedMaintenance: next },
+                          });
+                        }}
+                        className="flex-1 min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-[11px]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = (selectedObj.operations.plannedMaintenance || []).filter(
+                            (item) => item.id !== mw.id
+                          );
+                          updateLayoutObject(selectedObj.id, {
+                            operations: { ...selectedObj.operations, plannedMaintenance: next },
+                          });
+                        }}
+                        className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 rounded"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <label className="flex flex-col gap-0.5">
+                      <span className="text-[10px] text-neutral-500">{t.labels.startSec}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={60}
+                        value={mw.startSec}
+                        onChange={(e) => {
+                          const v = Math.max(0, Number(e.target.value) || 0);
+                          const next = (selectedObj.operations.plannedMaintenance || []).map((item) =>
+                            item.id === mw.id ? { ...item, startSec: v } : item
+                          );
+                          updateLayoutObject(selectedObj.id, {
+                            operations: { ...selectedObj.operations, plannedMaintenance: next },
+                          });
+                        }}
+                        className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-0.5">
+                      <span className="text-[10px] text-neutral-500">{t.labels.durationSec}</span>
+                      <input
+                        type="number"
+                        min={10}
+                        step={60}
+                        value={mw.durationSec}
+                        onChange={(e) => {
+                          const v = Math.max(10, Number(e.target.value) || 10);
+                          const next = (selectedObj.operations.plannedMaintenance || []).map((item) =>
+                            item.id === mw.id ? { ...item, durationSec: v } : item
+                          );
+                          updateLayoutObject(selectedObj.id, {
+                            operations: { ...selectedObj.operations, plannedMaintenance: next },
+                          });
+                        }}
+                        className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                      />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
           <button
             onClick={() => deleteLayoutObject(selectedObj.id)}
             disabled={selectedObj.rendering.locked}
@@ -458,6 +772,225 @@ export const PropertiesPanel: React.FC = () => {
               0.5
             )}
           </div>
+
+          {/* Worker Orientation (updates both rotation & rotationDeg for 2D/3D) */}
+          {(() => {
+            const workerRot = selectedWorker.rotation ?? selectedWorker.rotationDeg ?? 0;
+            return (
+              <div className="flex flex-col gap-1.5 rounded border border-neutral-200 dark:border-neutral-800 p-2">
+                {numInput(
+                  t.labels.rotationDeg,
+                  Math.round(workerRot * 10) / 10,
+                  false,
+                  (v) => {
+                    const wrapped = normalizeRotationDeg(v);
+                    updateWorker(selectedWorker.id, { rotation: wrapped, rotationDeg: wrapped });
+                  },
+                  5,
+                  -360
+                )}
+                <input
+                  type="range"
+                  min={-180}
+                  max={180}
+                  step={5}
+                  value={normalizeRotationDeg(workerRot)}
+                  onChange={(e) => {
+                    const wrapped = normalizeRotationDeg(Number(e.target.value));
+                    updateWorker(selectedWorker.id, { rotation: wrapped, rotationDeg: wrapped });
+                  }}
+                  aria-label={t.labels.rotationDeg}
+                  className="w-full accent-red-600 cursor-pointer"
+                />
+                <div className="grid grid-cols-4 gap-1">
+                  {[0, 90, 180, -90].map((deg) => (
+                    <button
+                      key={deg}
+                      type="button"
+                      onClick={() =>
+                        updateWorker(selectedWorker.id, { rotation: deg, rotationDeg: deg })
+                      }
+                      className={`rounded border px-1.5 py-0.5 font-mono-tabular text-[10px] ${
+                        Math.round(workerRot) === deg
+                          ? 'border-red-600 bg-red-600 text-white'
+                          : 'border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                      }`}
+                    >
+                      {deg}°
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Worker Shift Assignment */}
+          <label className="flex flex-col gap-1">
+            <span className="text-[11px] font-medium text-neutral-500">{t.labels.shiftAssignment}</span>
+            <select
+              value={selectedWorker.shiftId || ''}
+              onChange={(e) =>
+                updateWorker(selectedWorker.id, { shiftId: e.target.value || undefined })
+              }
+              className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs"
+            >
+              <option value="">{t.labels.plantDefaultShift}</option>
+              {project.simulationConfig.shifts.map((sh) => (
+                <option key={sh.id} value={sh.id}>
+                  {sh.name} ({Math.round(sh.durationSec / 60)}m)
+                </option>
+              ))}
+              {selectedWorker.shiftId &&
+                !project.simulationConfig.shifts.some((s) => s.id === selectedWorker.shiftId) && (
+                  <option value={selectedWorker.shiftId}>{selectedWorker.shiftId} (Invalid)</option>
+                )}
+            </select>
+          </label>
+
+          {/* Direct Station or Conveyor Segment Assignment (assignedTo) */}
+          {(() => {
+            const currentTargetId = selectedWorker.assignedTo || selectedWorker.assignedStationId || '';
+            const currentTargetObj = project.layoutObjects.find((o) => o.id === currentTargetId);
+            const segCount =
+              currentTargetObj?.kind === 'conveyor'
+                ? getConveyorSegmentCount(currentTargetObj)
+                : 0;
+            const currentSegIdx = Math.max(
+              0,
+              Math.min(
+                Math.max(0, segCount - 1),
+                selectedWorker.assignedConveyorSegment?.segmentIndex ?? 0
+              )
+            );
+            return (
+              <div className="flex flex-col gap-1.5">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-medium text-neutral-500">
+                    {t.labels.assignedStation}
+                  </span>
+                  <select
+                    value={currentTargetId}
+                    onChange={(e) => {
+                      const stationId = e.target.value || undefined;
+                      if (!stationId) {
+                        unassignWorkerTarget(selectedWorker.id);
+                        return;
+                      }
+                      const picked = project.layoutObjects.find((o) => o.id === stationId);
+                      if (!picked) return;
+                      if (picked.kind === 'conveyor') {
+                        assignWorkerToConveyorSegment(selectedWorker.id, picked.id, 0);
+                        return;
+                      }
+                      commitProjectEdit((draft) => {
+                        const wk = draft.workers.find((w) => w.id === selectedWorker.id);
+                        if (!wk) return;
+                        wk.assignedTo = stationId;
+                        wk.assignedStationId = stationId;
+                        wk.assignedConveyorSegment = undefined;
+                        const stObj = draft.layoutObjects.find((o) => o.id === stationId);
+                        if (!stObj) return;
+                        wk.position = {
+                          x: stObj.geometry.position.x,
+                          y: 0,
+                          z: Math.min(
+                            draft.factory.widthM - 0.3,
+                            stObj.geometry.position.z + stObj.geometry.dimensions.width / 2 + 0.55
+                          ),
+                        };
+                        let stage = draft.stages.find(
+                          (s) => s.assignedObjectIds.includes(stObj.id) || s.id === stObj.stageId
+                        );
+                        if (!stage) {
+                          const sid = uid('stg');
+                          const idx = draft.stages.length + 1;
+                          stage = {
+                            id: sid,
+                            code: `OP-${idx * 10}`,
+                            name: stObj.name,
+                            description: stObj.name,
+                            processingTimeSec: Math.max(1, stObj.operations.processingTimeSec || 15),
+                            setupTimeSec: stObj.operations.setupTimeSec || 0,
+                            loadingTimeSec: stObj.operations.loadingTimeSec || 0,
+                            unloadingTimeSec: stObj.operations.unloadingTimeSec || 0,
+                            requiredWorkers: Math.max(1, stObj.operations.requiredOperators || 1),
+                            requiredMachines: 1,
+                            inputQty: 1,
+                            outputQty: 1,
+                            scrapRate: 0,
+                            reworkProbability: 0,
+                            bufferCapacity: Math.max(1, stObj.operations.capacity || 5),
+                            predecessorIds: [],
+                            successorIds: [],
+                            assignedObjectIds: [stObj.id],
+                          };
+                          draft.stages.push(stage);
+                          stObj.stageId = sid;
+                        } else if (stage.requiredWorkers <= 0) {
+                          stage.requiredWorkers = 1;
+                        }
+                        if (stObj.operations.requiredOperators <= 0) {
+                          stObj.operations.requiredOperators = 1;
+                        }
+                        if (!wk.assignedStageIds.includes(stage.id)) {
+                          wk.assignedStageIds = [...wk.assignedStageIds, stage.id];
+                        }
+                      });
+                    }}
+                    className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs"
+                  >
+                    <option value="">{t.labels.unassignedStation}</option>
+                    {project.layoutObjects
+                      .filter(
+                        (o) =>
+                          o.rendering.visible &&
+                          (o.kind === 'machine' || o.kind === 'workstation' || o.kind === 'conveyor')
+                      )
+                      .map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.kind === 'conveyor' ? `[${t.flowchart.conveyorBadge}] ` : ''}
+                          {o.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+
+                {currentTargetObj?.kind === 'conveyor' && segCount > 0 && (
+                  <div className="flex items-center gap-1.5 rounded border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/25 px-2 py-1.5">
+                    <span className="text-[10px] font-semibold text-blue-700 dark:text-blue-300 shrink-0">
+                      {t.workforce.segmentLabel}:
+                    </span>
+                    <select
+                      value={currentSegIdx}
+                      onChange={(e) =>
+                        assignWorkerToConveyorSegment(
+                          selectedWorker.id,
+                          currentTargetObj.id,
+                          Number(e.target.value),
+                          segCount
+                        )
+                      }
+                      className="flex-1 min-w-0 rounded border border-blue-300 dark:border-blue-800 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-[11px]"
+                    >
+                      {Array.from({ length: segCount }).map((_, idx) => (
+                        <option key={idx} value={idx}>
+                          {t.workforce.segmentLabel} {idx + 1} / {segCount}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => unassignWorkerTarget(selectedWorker.id)}
+                      className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                    >
+                      {t.workforce.unassignTarget}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <div className="flex flex-col gap-1.5">
             <span className="text-[11px] font-semibold text-neutral-500">{t.labels.assignedStages}</span>
             <div className="flex flex-col gap-1 max-h-40 overflow-y-auto border border-neutral-200 dark:border-neutral-800 rounded p-2">
@@ -609,6 +1142,8 @@ export const PropertiesPanel: React.FC = () => {
                       onClick={() => {
                         if (issue.targetId && issue.targetType === 'object') {
                           selectItem('object', issue.targetId);
+                        } else if (issue.targetId && issue.targetType === 'worker') {
+                          selectItem('worker', issue.targetId);
                         }
                       }}
                       className={`flex items-start gap-2 rounded border p-2 text-start text-[11px] transition-colors ${
@@ -618,7 +1153,14 @@ export const PropertiesPanel: React.FC = () => {
                       }`}
                     >
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                      <span>{language === 'ar' ? issue.messageAr || issue.message : issue.message}</span>
+                      <div className="min-w-0 flex-1">
+                        <div>{isAr ? issue.messageAr || issue.message : issue.message}</div>
+                        {(issue.recommendation || issue.recommendationAr) && (
+                          <div className="mt-0.5 text-[10px] opacity-85">
+                            {isAr ? issue.recommendationAr || issue.recommendation : issue.recommendation}
+                          </div>
+                        )}
+                      </div>
                     </button>
                   ))}
                 </div>

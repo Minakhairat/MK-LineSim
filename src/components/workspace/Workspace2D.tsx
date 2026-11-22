@@ -9,6 +9,12 @@ import {
   HEATMAP_LEGEND_STOPS,
   resolveHeatmapActiveTimeSec,
 } from '../../simulation/heatmap';
+import {
+  computeConveyorSegmentPlacement,
+  findConveyorSegmentAtPoint,
+  getConveyorSegmentCount,
+  normalizeRotationDeg,
+} from '../../engineering/conveyorWorkerAssignment';
 
 const STATUS_RING: Record<MachineRuntimeStatus, string> = {
   running: '#16A34A',
@@ -18,6 +24,7 @@ const STATUS_RING: Record<MachineRuntimeStatus, string> = {
   setup: '#0284C7',
   down: '#DC2626',
   maintenance: '#7C3AED',
+  unavailable: '#94A3B8',
 };
 
 type DragState =
@@ -26,6 +33,7 @@ type DragState =
   | { mode: 'move_worker'; id: string; startWorldX: number; startWorldZ: number; origX: number; origZ: number }
   | { mode: 'move_zone'; id: string; startWorldX: number; startWorldZ: number; origX: number; origZ: number }
   | { mode: 'rotate_obj'; id: string; cx: number; cz: number }
+  | { mode: 'rotate_worker'; id: string; cx: number; cz: number }
   | { mode: 'resize_obj'; id: string; origL: number; origW: number; cx: number; cz: number; rotDeg: number };
 
 export const Workspace2D: React.FC = () => {
@@ -34,6 +42,7 @@ export const Workspace2D: React.FC = () => {
 
   const project = useAppStore((s) => s.project);
   const selection = useAppStore((s) => s.selection);
+  const activeModule = useAppStore((s) => s.activeModule);
   const layersVisible = useAppStore((s) => s.layersVisible);
   const measureMode = useAppStore((s) => s.measureMode);
   const heatmapOverlayEnabled = useAppStore((s) => s.heatmapOverlayEnabled);
@@ -45,6 +54,7 @@ export const Workspace2D: React.FC = () => {
   const clearSelection = useAppStore((s) => s.clearSelection);
   const updateLayoutObject = useAppStore((s) => s.updateLayoutObject);
   const updateWorker = useAppStore((s) => s.updateWorker);
+  const assignWorkerToConveyorSegment = useAppStore((s) => s.assignWorkerToConveyorSegment);
   const updateZone = useAppStore((s) => s.updateZone);
   const saveCurrentProject = useAppStore((s) => s.saveCurrentProject);
   const setMeasureMode = useAppStore((s) => s.setMeasureMode);
@@ -54,6 +64,7 @@ export const Workspace2D: React.FC = () => {
   const [pxPerM, setPxPerM] = useState(28);
   const [pan, setPan] = useState({ x: 48, y: 48 });
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [dragHoverConv, setDragHoverConv] = useState<{ id: string; segIdx: number } | null>(null);
   const [measurePts, setMeasurePts] = useState<{ a: { x: number; z: number } | null; b: { x: number; z: number } | null }>({
     a: null,
     b: null,
@@ -162,6 +173,8 @@ export const Workspace2D: React.FC = () => {
       const nx = snapValue(Math.max(0.2, Math.min(lengthM - 0.2, drag.origX + dx)), gridSizeM, snapToGrid);
       const nz = snapValue(Math.max(0.2, Math.min(widthM - 0.2, drag.origZ + dz)), gridSizeM, snapToGrid);
       updateWorker(drag.id, { position: { x: nx, y: 0, z: nz } }, true);
+      const nearConv = findConveyorSegmentAtPoint(project.layoutObjects, nx, nz, 0.9);
+      setDragHoverConv(nearConv ? { id: nearConv.conveyor.id, segIdx: nearConv.segmentIndex } : null);
     } else if (drag.mode === 'move_zone') {
       const dx = world.x - drag.startWorldX;
       const dz = world.z - drag.startWorldZ;
@@ -178,6 +191,12 @@ export const Workspace2D: React.FC = () => {
       if (deg > 180) deg -= 360;
       if (deg < -180) deg += 360;
       updateLayoutObject(drag.id, { geometry: { ...obj.geometry, rotationDeg: deg } }, true);
+    } else if (drag.mode === 'rotate_worker') {
+      const angleRad = Math.atan2(world.z - drag.cz, world.x - drag.cx);
+      const step = e.shiftKey ? 1 : 5;
+      const rawDeg = (angleRad * 180) / Math.PI;
+      const deg = normalizeRotationDeg(Math.round(rawDeg / step) * step);
+      updateWorker(drag.id, { rotation: deg, rotationDeg: deg }, true);
     } else if (drag.mode === 'resize_obj') {
       const obj = project.layoutObjects.find((o) => o.id === drag.id);
       if (!obj || obj.rendering.locked) return;
@@ -197,6 +216,7 @@ export const Workspace2D: React.FC = () => {
   };
 
   const handlePointerUp = () => {
+    setDragHoverConv(null);
     if (drag && drag.mode !== 'pan') {
       saveCurrentProject();
     }
@@ -227,6 +247,7 @@ export const Workspace2D: React.FC = () => {
             runtime: rt,
             clockSec: simSnapshot.clockSec,
             activeSimTimeSec: activeHeatWindowSec,
+            simulationConfig: project.simulationConfig,
             isStageBottleneck: isBottleneck,
           })
         : null;
@@ -328,6 +349,12 @@ export const Workspace2D: React.FC = () => {
         {obj.kind === 'conveyor' && (() => {
           const dir = obj.operations.direction === -1 ? -1 : 1;
           const arrowCount = Math.max(1, Math.min(8, Math.floor(L / 1.8)));
+          const segCount = getConveyorSegmentCount(obj);
+          const showSegments =
+            activeModule === 'workforce' ||
+            dragHoverConv?.id === obj.id ||
+            isSelected ||
+            project.workers.some((w) => (w.assignedTo || w.assignedStationId) === obj.id);
           return (
             <>
               <line
@@ -339,6 +366,56 @@ export const Workspace2D: React.FC = () => {
                 strokeWidth={1.2 / pxPerM}
                 strokeDasharray={`${0.35} ${0.25}`}
               />
+              {showSegments &&
+                Array.from({ length: segCount }).map((_, segIdx) => {
+                  const segWidth = L / segCount;
+                  const segStart = (-L / 2 + segIdx * segWidth) * dir;
+                  const xLeft = dir === 1 ? segStart : segStart - segWidth;
+                  const isHoveredSeg =
+                    dragHoverConv?.id === obj.id && dragHoverConv.segIdx === segIdx;
+                  const hasAssignedWorker = project.workers.some(
+                    (w) =>
+                      (w.assignedTo || w.assignedStationId) === obj.id &&
+                      (w.assignedConveyorSegment?.segmentIndex ?? 0) === segIdx
+                  );
+                  return (
+                    <g key={`seg_${segIdx}`} style={{ pointerEvents: 'none' }}>
+                      {(isHoveredSeg || hasAssignedWorker) && (
+                        <rect
+                          x={xLeft + 0.04}
+                          y={-W / 2 + 0.04}
+                          width={Math.max(0.1, segWidth - 0.08)}
+                          height={Math.max(0.1, W - 0.08)}
+                          fill={isHoveredSeg ? '#38BDF8' : '#2563EB'}
+                          fillOpacity={isHoveredSeg ? 0.35 : 0.22}
+                          stroke={isHoveredSeg ? '#0284C7' : '#60A5FA'}
+                          strokeWidth={(isHoveredSeg ? 1.8 : 1.1) / pxPerM}
+                        />
+                      )}
+                      {segIdx > 0 && (
+                        <line
+                          x1={segStart}
+                          y1={-W / 2}
+                          x2={segStart}
+                          y2={W / 2}
+                          stroke="#94A3B8"
+                          strokeWidth={1 / pxPerM}
+                          strokeDasharray={`${0.12} ${0.1}`}
+                        />
+                      )}
+                      <text
+                        x={xLeft + segWidth / 2}
+                        y={-W / 2 + 0.16}
+                        textAnchor="middle"
+                        fontSize={0.18}
+                        fill={isHoveredSeg ? '#E0F2FE' : '#CBD5E1'}
+                        fontWeight={700}
+                      >
+                        S{segIdx + 1}
+                      </text>
+                    </g>
+                  );
+                })}
               {(obj.category === 'roller_conveyor' || obj.category === 'pallet_conveyor') &&
                 Array.from({ length: Math.min(40, Math.max(3, Math.floor(L / (obj.category === 'pallet_conveyor' ? 0.42 : 0.35)))) }).map((_, idx, arr) => {
                   const rx = -L / 2 + ((idx + 0.5) / arr.length) * L;
@@ -690,6 +767,44 @@ export const Workspace2D: React.FC = () => {
         onPointerDown={handleSvgPointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onDragOver={(e) => {
+          if (
+            !e.dataTransfer.types.includes('application/x-linesim-worker') &&
+            !e.dataTransfer.types.includes('text/plain')
+          ) {
+            return;
+          }
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          const world = clientToWorld(e.clientX, e.clientY);
+          const hit = findConveyorSegmentAtPoint(project.layoutObjects, world.x, world.z, 1.35);
+          setDragHoverConv(hit ? { id: hit.conveyor.id, segIdx: hit.segmentIndex } : null);
+        }}
+        onDragLeave={() => setDragHoverConv(null)}
+        onDrop={(e) => {
+          const workerId =
+            e.dataTransfer.getData('application/x-linesim-worker') ||
+            e.dataTransfer.getData('text/plain');
+          setDragHoverConv(null);
+          if (!workerId || !project.workers.some((w) => w.id === workerId)) return;
+          e.preventDefault();
+          const world = clientToWorld(e.clientX, e.clientY);
+          const hit = findConveyorSegmentAtPoint(project.layoutObjects, world.x, world.z, 1.35);
+          if (hit) {
+            assignWorkerToConveyorSegment(
+              workerId,
+              hit.conveyor.id,
+              hit.segmentIndex,
+              hit.segmentCount,
+              hit.side
+            );
+          } else {
+            const clampedX = Math.max(0.25, Math.min(fL - 0.25, world.x));
+            const clampedZ = Math.max(0.25, Math.min(fW - 0.25, world.z));
+            updateWorker(workerId, { position: { x: clampedX, y: 0, z: clampedZ } });
+            selectItem('worker', workerId);
+          }
+        }}
         onContextMenu={(e) => e.preventDefault()}
       >
         <defs>
@@ -973,12 +1088,48 @@ export const Workspace2D: React.FC = () => {
             .sort((a, b) => (a.kind === 'conveyor' ? -1 : b.kind === 'conveyor' ? 1 : 0))
             .map(renderObjectGlyph)}
 
-          {/* Workers */}
+          {/* Worker -> Assigned Conveyor Segment Tethers */}
+          {layersVisible.workers &&
+            project.workers.map((w) => {
+              const targetId = w.assignedTo || w.assignedStationId;
+              if (!targetId) return null;
+              const conv = project.layoutObjects.find((o) => o.id === targetId && o.kind === 'conveyor');
+              if (!conv) return null;
+              const isSel = selection.kind === 'worker' && selection.ids.includes(w.id);
+              if (!isSel && activeModule !== 'workforce') return null;
+              const segIdx = w.assignedConveyorSegment?.segmentIndex ?? 0;
+              const segCount = w.assignedConveyorSegment?.segmentCount ?? getConveyorSegmentCount(conv);
+              const placement = computeConveyorSegmentPlacement(conv, segIdx, segCount);
+              return (
+                <g key={`tether_${w.id}`} style={{ pointerEvents: 'none' }}>
+                  <line
+                    x1={w.position.x}
+                    y1={w.position.z}
+                    x2={placement.beltPoint.x}
+                    y2={placement.beltPoint.z}
+                    stroke="#2563EB"
+                    strokeWidth={1.6 / pxPerM}
+                    strokeDasharray={`${0.14} ${0.1}`}
+                  />
+                  <circle
+                    cx={placement.beltPoint.x}
+                    cy={placement.beltPoint.z}
+                    r={0.11}
+                    fill="#2563EB"
+                    stroke="#FFFFFF"
+                    strokeWidth={0.9 / pxPerM}
+                  />
+                </g>
+              );
+            })}
+
+          {/* Workers (clickable & rotatable directly in 2D) */}
           {layersVisible.workers &&
             project.workers.map((w) => {
               const rt = simSnapshot.workers[w.id];
               const wx = rt && simSnapshot.clockSec > 0 ? rt.position.x : w.position.x;
               const wz = rt && simSnapshot.clockSec > 0 ? rt.position.z : w.position.z;
+              const wRot = w.rotation ?? w.rotationDeg ?? 0;
               const isSel = selection.kind === 'worker' && selection.ids.includes(w.id);
               const statusFill =
                 rt && simSnapshot.clockSec > 0
@@ -1011,12 +1162,67 @@ export const Workspace2D: React.FC = () => {
                   }}
                   className="cursor-pointer"
                 >
-                  <circle
-                    r={0.32}
-                    fill={statusFill}
-                    stroke={isSel ? '#DC2626' : '#FFFFFF'}
-                    strokeWidth={(isSel ? 2.5 : 1.5) / pxPerM}
-                  />
+                  {/* Generous transparent hit target so workers are always easy to click in 2D */}
+                  <circle r={0.46} fill="transparent" />
+
+                  {isSel && (
+                    <circle
+                      r={0.44}
+                      fill="none"
+                      stroke="#DC2626"
+                      strokeWidth={1.6 / pxPerM}
+                      strokeDasharray={`${0.12} ${0.08}`}
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  )}
+
+                  <g transform={`rotate(${wRot})`}>
+                    <circle
+                      r={0.32}
+                      fill={statusFill}
+                      stroke={isSel ? '#DC2626' : '#FFFFFF'}
+                      strokeWidth={(isSel ? 2.5 : 1.5) / pxPerM}
+                    />
+                    <polygon
+                      points="0.28,-0.12 0.45,0 0.28,0.12"
+                      fill="#FACC15"
+                      stroke="#0F172A"
+                      strokeWidth={0.8 / pxPerM}
+                    />
+                    {isSel && (
+                      <>
+                        <line
+                          x1={0.32}
+                          y1={0}
+                          x2={0.74}
+                          y2={0}
+                          stroke="#DC2626"
+                          strokeWidth={1.6 / pxPerM}
+                        />
+                        <circle
+                          cx={0.82}
+                          cy={0}
+                          r={0.14}
+                          fill="#DC2626"
+                          stroke="#FFFFFF"
+                          strokeWidth={1.4 / pxPerM}
+                          className="cursor-grab"
+                          onPointerDown={(e) => {
+                            if (measureMode) return;
+                            e.stopPropagation();
+                            selectItem('worker', w.id);
+                            setDrag({
+                              mode: 'rotate_worker',
+                              id: w.id,
+                              cx: wx,
+                              cz: wz,
+                            });
+                          }}
+                        />
+                      </>
+                    )}
+                  </g>
+
                   <text
                     y={0.04}
                     textAnchor="middle"
@@ -1024,10 +1230,23 @@ export const Workspace2D: React.FC = () => {
                     fontSize={0.22}
                     fill="#FFFFFF"
                     fontWeight={700}
-                    style={{ pointerEvents: 'none' }}
+                    style={{ pointerEvents: 'none', userSelect: 'none' }}
                   >
                     {w.label}
                   </text>
+
+                  {isSel && (
+                    <text
+                      y={-0.55}
+                      textAnchor="middle"
+                      fontSize={0.22}
+                      fill="#DC2626"
+                      fontWeight={700}
+                      style={{ pointerEvents: 'none', userSelect: 'none' }}
+                    >
+                      {Math.round(wRot)}°
+                    </text>
+                  )}
                 </g>
               );
             })}
