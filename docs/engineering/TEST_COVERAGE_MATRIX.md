@@ -1,8 +1,8 @@
 # MK LineSim — Test Coverage Matrix & Verification Gaps
 
-**Program Phase:** Phase 0 & 0.1 (Engineering Baseline Audit & Evidence Reconciliation)  
+**Program Phase:** Phase 0, 0.1 & 0.2 (Engineering Baseline, Evidence Reconciliation & Lockfile/CI Hardening)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
-**Execution Evidence:** `npm test` (`tsx --test tests/*.test.ts`) -> **`57/57` passed, `0` failed, `0` skipped (`3802.94 ms`, exit code `0`)**.
+**Execution Evidence:** `npm test` (`tsx --test tests/*.test.ts`) -> **`57/57` passed, `0` failed, `0` skipped (`4128.02 ms` post-`npm ci`, exit code `0`)**.
 
 ---
 
@@ -68,4 +68,22 @@
 | **9. Web Worker Execution (`simWorker.ts`)** | Low (`1` fallback test) | `Missing verification` | `workerClient.ts` executes synchronous fallback in Node (`Worker === undefined`); real Web Worker sliced `advanceTo()` (20 slices + progress + cancellation + `validateProject` gate) has **zero** automated verification against `runToCompletion()`. |
 | **10. Procedural Layout, Exports & Storage** | None (`0` tests) | `Missing verification` | Zero unit/integration tests for `layoutGenerator.ts`, `indexedDb.ts` (save/load/corruption handling), `cadExporter.ts` (DXF output), `reportExporter.ts` (PDF generation), or `mediaCapture.ts`. |
 | **11. UI, Store (`useAppStore`) & E2E Browser** | None (`0` tests) | `Missing verification` | Zero automated React/DOM component tests, Zustand store action tests, 2D SVG / 3D Three.js viewport rendering tests, or Playwright/Cypress browser E2E tests. |
-| **12. CI Verification Gates** | None (`0` checks) | `Missing verification` | `.github/workflows/deploy.yml` omits `npm run lint` and `npm test` before `npm run build` / GitHub Pages deployment. |
+| **12. CI Verification Gates** | Local `npm ci --legacy-peer-deps`, `lint`, `test`, `build` pass; remote CI runner pending | `Verified behavior` (workflow config & local parity) / `Missing verification` (remote GitHub Actions run) | Phase 0.2 hardened `/.github/workflows/deploy.yml` to enforce `npm ci --legacy-peer-deps` (no fallback), `npm run lint`, and `npm test` before `npm run build` and Pages deployment. Live execution on GitHub Actions (`ubuntu-latest`, Node `"20"`) has not yet been triggered remotely. |
+
+---
+
+## 4. CI Verification Stages & Scope Boundaries (Phase 0.2)
+
+1. **Deterministic Dependency Install (`npm ci --legacy-peer-deps`)**:
+   - Consumes `/package-lock.json` (`lockfileVersion: 3`, `652` entries matching `package.json`) with the unpinned `|| npm install` fallback removed.
+   - `--legacy-peer-deps` is retained solely because `vite@8.3.8` declares `peerOptional esbuild@"^0.27.0 || ^0.28.0"` against `devDependencies.esbuild: "^0.25.0"` in `package.json`.
+2. **Static TypeScript Check (`npm run lint` -> `tsc --noEmit`)**:
+   - Verifies compile-time TypeScript consistency across `src/` and `tests/` (`exit 0`).
+   - **Boundary:** Executes `tsc --noEmit` with `"strict": false` (`tsconfig.json`) — it does **not** run ESLint or style/lint rule sets.
+3. **Automated Software Regression & Engineering Tests (`npm test` -> `tsx --test tests/*.test.ts`)**:
+   - Executes all `57` Node/`tsx` tests (`0` fail, `0` skip) covering unit/regression logic and the 16 embedded benchmarks.
+   - **Boundary:** Passing `npm test` verifies existing software regression checks only; it does **not** establish complete physical/real-world simulation validity, Web Worker sliced execution parity (`simWorker.ts`), DOM/UI component behavior, or WebGL/CAD rendering.
+4. **Production Bundle & PWA Verification (`npm run build` -> `vite build`)**:
+   - Verifies Vite client + worker bundling and `vite-plugin-pwa` Service Worker generation (`dist/sw.js`).
+5. **Automated Browser / E2E Testing**:
+   - Remains **`0` tests (`Missing verification`)**; UI and browser workflows are not covered by CI gates.

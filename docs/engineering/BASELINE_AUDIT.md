@@ -1,10 +1,10 @@
-# MK LineSim — Phase 0 & 0.1: Engineering Baseline, Repository Audit & Evidence Reconciliation
+# MK LineSim — Phase 0, 0.1 & 0.2: Engineering Baseline, Evidence Reconciliation & Lockfile/CI Hardening
 
-**Program Phase:** Phase 0 / Phase 0.1 (Read-Only Engineering Baseline Audit & Evidence Reconciliation)  
+**Program Phase:** Phase 0, 0.1 & 0.2 (Engineering Baseline, Evidence Reconciliation & Lockfile/CI Integrity Hardening)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
 **Stated Baseline Commit:** `dc8f6557912bf2fb8c1a78437ab331f485aea2d8`  
 **Audit Date:** 2026-11-23  
-**Workspace Constraints:** Read-only audit; zero application source, simulation equations, tests, or build configs were modified.
+**Workspace Constraints:** Zero application source (`src/`), simulation equations, tests (`tests/`), `package.json`, `tsconfig.json`, or `vite.config.ts` were modified; Phase 0.2 edits were strictly confined to dependency lockfiles, `.github/workflows/deploy.yml`, and `docs/engineering/`.
 
 ---
 
@@ -19,8 +19,8 @@
 | App Metadata (`metadata.json`) | `name: "MK LineSim"` | `/metadata.json` | `Verified behavior` |
 | Node.js Runtime | `v22.23.2` | `node -v` | `Verified behavior` |
 | npm CLI Version | `10.9.8` | `npm -v` | `Verified behavior` |
-| `bun.lock` Status (Workspace `/app/applet`) | **Present** (`166,801` bytes, `lockfileVersion: 2`, `configVersion: 1`, `Nov 23 09:22`) | `ls -la bun.lock` and `node` JSONC parse in `/app/applet` | `Verified behavior` (also attested in supplied archive) |
-| `package-lock.json` Status | **Absent in AI Studio workspace `/app/applet`** (`No such file or directory`; no `node_modules/.package-lock.json`, no `.zip` mounted); **attested present in upstream GitHub repo & supplied ZIP archive** | `ls -la`, `find /app -maxdepth 3 -name "*package-lock*"`, and Phase 0.1 user correction | `Missing verification` — Present per repo/archive attestation, but omitted from `/app/applet` import and therefore not locally inspectable |
+| `bun.lock` Status (Workspace `/app/applet`) | **Removed in Phase 0.2** (previously `166,801` bytes, `lockfileVersion: 2`) | Deleted in Phase 0.2; verified absent (`bun.lock exists: false`) | `Verified behavior` — `npm` selected as sole canonical package manager |
+| `package-lock.json` Status | **Regenerated in Phase 0.2** (`339,534` bytes, `lockfileVersion: 3`, `652` entries); **historical pre-Phase-0.2 upstream file was absent in `/app/applet`** | `npm install --package-lock-only --legacy-peer-deps`, Node inspection, `npm ls --depth=0`, `npm ci --legacy-peer-deps` | `Verified behavior` (current canonical lockfile & local `npm ci`); `Missing verification` (pre-fix upstream `package-lock.json` not locally mounted) |
 
 ---
 
@@ -35,15 +35,16 @@
   - `lint`: `tsc --noEmit`
   - `test`: `tsx --test tests/*.test.ts`
 - **Unused / Orphaned Dependencies (`/package.json:15,21,32`)** [`Potential defect`]: `@google/genai` (`^2.4.0`), `express` (`^4.21.2`), and `@types/express` (`^4.17.21`) are declared in `package.json`, and `metadata.json` lists `MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API`, yet `grep -rnE "@google/genai|express"` across `src/` and `tests/` returned zero usages and no `server.ts` exists.
-- **`package.json` vs. `bun.lock` Comparison (`/package.json`, `/bun.lock`)** [`Verified behavior`]:
-  - `package.json` declares **25 packages** (`15` `dependencies` + `10` `devDependencies`).
-  - `bun.lock` (`lockfileVersion: 2`, `configVersion: 1`) declares the exact same **25** semver ranges under `workspaces[""]` (`0` mismatches) and locks **647** total transitive/workspace packages:
-    - Key resolved runtime packages in `bun.lock`: `@google/genai@2.32.0`, `@tailwindcss/vite@4.3.5`, `@types/three@0.187.0`, `@vitejs/plugin-react@6.3.0`, `chart.js@4.6.1`, `dotenv@17.4.2`, `express@4.22.3`, `jspdf@4.2.1`, `lucide-react@0.546.0`, `motion@12.43.0`, `react@19.3.1`, `react-dom@19.3.1`, `three@0.187.0`, `vite@8.3.8`, `zustand@5.1.0`.
-    - Key resolved dev packages in `bun.lock`: `@types/express@4.17.25`, `@types/node@22.20.5`, `@types/react@19.3.0`, `@types/react-dom@19.3.0`, `autoprefixer@10.7.0`, `esbuild@0.25.12`, `tailwindcss@4.3.5`, `tsx@4.23.15`, `typescript@7.0.2`, `vite-plugin-pwa@2.0.0`.
-- **`package.json` vs. `package-lock.json` Comparison** [`Missing verification`]:
-  - Because `package-lock.json` is not present in `/app/applet` (and no `.zip` archive or `.git` checkout is mounted locally), `package-lock.json` integrity, resolved npm versions, and parity with `bun.lock` could **not** be independently verified in this workspace.
-- **Dual-Lockfile Maintenance Risk (`package-lock.json` + `bun.lock`)** [`Potential defect`]:
-  - Maintaining both `package-lock.json` (used by `npm` / GitHub Actions) and `bun.lock` (used by Bun / AI Studio container bootstrap) risks silent version divergence if a dependency change updates only one lockfile.
+- **Canonical Package Manager Consolidation (Phase 0.2)** [`Verified behavior`]:
+  - **`npm`** is consolidated as the sole canonical package manager (`README.md` and `.github/workflows/deploy.yml` reference `npm` exclusively; zero references to `bun`, `yarn`, or `pnpm` exist anywhere in configs/scripts/workflows).
+  - `/bun.lock` was removed so only `/package-lock.json` governs installs.
+- **`package.json` vs. `package-lock.json` Comparison (Phase 0.2)** [`Verified behavior`]:
+  - `package.json` declares **25 direct packages** (`15` `dependencies` + `10` `devDependencies`).
+  - Regenerated `/package-lock.json` (`lockfileVersion: 3`, `652` total `packages` entries) matches `package.json` `dependencies` and `devDependencies` **1:1** (`dependencies exact match: true`, `devDependencies exact match: true`), including `"vite-plugin-pwa": "^2.0.0"` in `packages[""].devDependencies` and `"node_modules/vite-plugin-pwa"` (`version: "2.0.0"`, `dev: true`, with `resolved` tarball URL and `sha512` integrity).
+  - `npm ls --depth=0` reports `0` problems across all `25` top-level dependencies. Only `6` optional `wasm32-wasi` transitive entries nested under `@tailwindcss/oxide-wasm32-wasi` lack `resolved`/`integrity` (`optional: true`, platform-optional).
+  - Note: Historical pre-Phase-0.2 upstream `package-lock.json` was absent from `/app/applet` prior to regeneration and could not be diffed locally (`Missing verification`).
+- **Root Cause for `--legacy-peer-deps`** [`Design assumption` / `Potential defect`]:
+  - Strict `npm install --package-lock-only` (without `--legacy-peer-deps`) fails with `ERESOLVE` solely because `vite@8.3.8` declares `peerOptional esbuild@"^0.27.0 || ^0.28.0"` against `devDependencies.esbuild: "^0.25.0"` in `/package.json:37`. Retaining `--legacy-peer-deps` preserves `package.json` dependency ranges unmodified.
 
 ### 2.2 TypeScript Configuration (`/tsconfig.json`)
 - **Non-Strict Compiler Settings (`/tsconfig.json:1-28`)** [`Design assumption` / `Potential defect`]:
@@ -58,33 +59,30 @@
   - Emits main chunk size warning: `dist/assets/index-CVu68wF1.js` is `2,463.77 kB` (`gzip: 660.84 kB`).
 
 ### 2.4 GitHub Actions Workflow (`/.github/workflows/deploy.yml`)
-- **Package Manager Used in CI (`/.github/workflows/deploy.yml:23-40`)** [`Verified behavior`]:
-  - Workflow sets up Node.js `"20"` (`actions/setup-node@v4`) and uses **`npm`** exclusively (`npm ci`, `npm install`, `npm run build`). It does **not** install or invoke `bun` and ignores `bun.lock`.
-- **`npm ci` Fallback Behavior (`/.github/workflows/deploy.yml:28-33`)** [`Potential defect`]:
-  ```bash
-  if [ -f package-lock.json ]; then
-    npm ci --legacy-peer-deps || npm install --legacy-peer-deps
-  else
-    npm install --legacy-peer-deps
-  fi
-  ```
-  - **When `package-lock.json` is present** (upstream GitHub repository / archive state): executes `npm ci --legacy-peer-deps`. However, if `npm ci` fails (e.g., lockfile out of sync with `package.json`, peer conflict, or integrity mismatch), the `|| npm install --legacy-peer-deps` fallback **catches the non-zero exit code and runs an unpinned `npm install`** instead of failing the workflow.
-  - **When `package-lock.json` is absent** (e.g., workspace export missing `package-lock.json`): executes `npm install --legacy-peer-deps` directly.
-- **Missing Verification Gates (`/.github/workflows/deploy.yml:17-55`)** [`Confirmed defect`]:
-  - `deploy.yml` executes only dependency installation and `npm run build` (`line 40`) before GitHub Pages upload/deploy.
-  - **`npm test` and `npm run lint` are completely absent from CI**, allowing failing tests or TypeScript errors to reach production deployment undetected.
-  - *Note*: Live GitHub Actions runner execution was not triggered or observed in this local audit (`Missing verification`).
+- **Hardened CI Execution Pipeline (`/.github/workflows/deploy.yml:17-55`, Phase 0.2)** [`Verified behavior` (config & local parity)]:
+  - Uses Node.js `"20"` (`actions/setup-node@v4`; satisfies `vite@8.3.8` `^20.19.0 || >=22.12.0` and `vite-plugin-pwa@2.0.0` `>=20.19.0`) and `npm` exclusively.
+  - Exact `build` job sequence before `deploy` (`needs: build`, `actions/deploy-pages@v4`):
+    1. `actions/checkout@v4`
+    2. `actions/setup-node@v4` (`node-version: "20"`)
+    3. `npm ci --legacy-peer-deps` — strict deterministic lockfile install; the unpinned `|| npm install --legacy-peer-deps` fallback and conditional branch were removed.
+    4. `npm run lint` — runs `tsc --noEmit` static TypeScript type-checking (note: does not run ESLint).
+    5. `npm test` — runs `tsx --test tests/*.test.ts` (`57` automated tests).
+    6. `actions/configure-pages@v5`
+    7. `npm run build` — runs `vite build` with `VITE_BASE_PATH`.
+    8. `actions/upload-pages-artifact@v3` (`./dist`)
+  - Any non-zero exit code in `npm ci`, `npm run lint`, `npm test`, or `npm run build` fails the `build` job and blocks `deploy`.
+  - *Remote Boundary*: Live execution on GitHub-hosted `ubuntu-latest` with Node `"20"` has **not** yet been triggered from this workspace (`Missing verification`; local checks ran on Node `v22.23.2`).
 
-### 2.5 Reproducible Commands & Observed Results (Task 10)
+### 2.5 Reproducible Commands & Observed Results (Task 10 & Phase 0.2)
 
-All commands below were actually executed in `/app/applet` during this audit:
+All commands below were actually executed cleanly in `/app/applet` after removing Bun `node_modules` and generating `/package-lock.json`:
 
-| Step | Reproducible Command | Exit Code | Actual Observed Output Summary |
-| :--- | :--- | :--- | :--- |
-| Dependency Install | Workspace pre-installed (`bun.lock` + `node_modules/` present); CI uses `npm ci --legacy-peer-deps \|\| npm install --legacy-peer-deps` | N/A (not re-run to keep `node_modules` unmodified) | `bun.lock` (`166,801` bytes, `647` packages) matches `package.json`; `package-lock.json` absent in `/app/applet`. |
-| Unit & Regression Tests | `npm test` (`tsx --test tests/*.test.ts`) | `0` (`TEST_EXIT=0`) | TAP output: `57` tests, `0` suites, `57` pass, `0` fail, `0` cancelled/skipped/todo; total duration `3802.94 ms`. |
-| Type Checking | `npm run lint` (`tsc --noEmit`) | `0` (`LINT_EXIT=0`) | Clean pass with zero diagnostics (`strict: false`). |
-| Production Build | `npm run build` (`vite build`) | `0` (`BUILD_EXIT=0`) | `1919` modules transformed in `1.61s`; PWA precache `21` entries (`3031.51 KiB`); generates `dist/sw.js` & `dist/workbox-7e5eb42b.js`; warns on `__dirname` (`vite.config.ts:93`) and chunk size (`dist/assets/index-CVu68wF1.js` `2,463.77 kB`). |
+| Step | Reproducible Command | Exit Code | Actual Observed Output Summary (Phase 0.2) |
+| :--- | :--- | :---: | :--- |
+| Deterministic Lockfile Install | `npm ci --legacy-peer-deps` | `0` (`CI_EXIT=0`) | `added 514 packages, and audited 521 packages in 13s`; `npm ls --depth=0` reports `0` problems (`25` top-level dependencies). |
+| Type Checking | `npm run lint` (`tsc --noEmit`) | `0` (`LINT_EXIT=0`) | Clean pass with zero diagnostics (`strict: false`, static TypeScript check only). |
+| Unit & Regression Tests | `npm test` (`tsx --test tests/*.test.ts`) | `0` (`TEST_EXIT=0`) | TAP output: `57` tests, `0` suites, `57` pass, `0` fail, `0` cancelled/skipped/todo; total duration `4128.02 ms`. |
+| Production Build | `npm run build` (`vite build`) | `0` (`BUILD_EXIT=0`) | `1919` modules transformed in `1.57s`; PWA precache `21` entries (`3031.54 KiB`); generates `dist/sw.js` & `dist/workbox-7e5eb42b.js`; pre-existing Vite warnings only (`__dirname` & >500 kB chunk size). |
 
 ---
 
@@ -184,16 +182,17 @@ Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813
 
 | Path / Artifact | Present in `/app/applet`? | Timestamp / Size in Workspace | Origin / Classification |
 | :--- | :---: | :--- | :--- |
-| `.github/workflows/deploy.yml`, `.gitignore`, `LICENSE`, `README.md`, `index.html`, `metadata.json`, `package.json`, `tsconfig.json`, `vite.config.ts` | Yes | `Nov 23 09:21` | Repository source & build configuration files imported into workspace |
-| `public/` (6 icon assets), `src/` (50 files, `33,203` lines), `tests/` (14 files, `3,610` lines) | Yes | `Nov 23 09:21` | Repository application, engineering, simulation, and test code |
-| `dev-dist/sw.js`, `dev-dist/workbox-7e5eb42b.js` | Yes | Initial tree `09:21`; updated `10:42` (`2,820` B / `129,442` B) | Generated by `vite-plugin-pwa` dev mode (`vite.config.ts:78-81`); present in imported tree and regenerated by running dev server |
-| `bun.lock` | Yes | `Nov 23 09:22` (`166,801` B, `root:root`) | Present in supplied archive per user attestation AND materialized/updated in AI Studio container bootstrap |
+| `.github/workflows/deploy.yml` | Yes | Updated `Nov 23` (`1,234` B) | Hardened in Phase 0.2 (`npm ci --legacy-peer-deps`, `npm run lint`, `npm test`, `npm run build`) |
+| `.gitignore`, `LICENSE`, `README.md`, `index.html`, `metadata.json`, `package.json`, `tsconfig.json`, `vite.config.ts` | Yes | `Nov 23 09:21` | Unmodified repository configuration & metadata files |
+| `public/` (6 icon assets), `src/` (50 files, `33,203` lines), `tests/` (14 files, `3,610` lines) | Yes | `Nov 23 09:21` | Unmodified repository application, engineering, simulation, and test code |
+| `dev-dist/sw.js`, `dev-dist/workbox-7e5eb42b.js` | Yes | Initial tree `09:21`; updated `10:42` | Generated by `vite-plugin-pwa` dev mode (`vite.config.ts:78-81`) |
+| `bun.lock` | **No** | Deleted in Phase 0.2 | Removed so `npm` is sole canonical package manager |
+| `package-lock.json` | **Yes** | Created `Nov 23 11:04` (`339,534` B) | Generated in Phase 0.2 via `npm install --package-lock-only --legacy-peer-deps`; prior upstream file omitted on import |
 | `.env.example` | Yes | `Nov 23 09:22` (`33` B, `root:root`) | AI Studio execution workspace environment template (`GEMINI_API_KEY=`, `VITE_BASE_PATH=/`) |
-| `node_modules/` | Yes | `Nov 23 09:22` (`root:root`) | Installed runtime workspace dependencies (`.gitignore` excluded) |
-| `dist/` | Yes | `Nov 23 10:33` (`root:root`) | Production bundle generated by `npm run build` during audit (`.gitignore` excluded) |
-| `docs/engineering/*.md` | Yes | `Nov 23 10:36+` | Phase 0 / Phase 0.1 audit deliverables created in-session |
-| `package-lock.json` | **No** | Absent in `/app/applet` & Turn 1 initial tree | **Repository/Archive file omitted from AI Studio workspace** (user-attested present in GitHub repo & ZIP archive; unverified locally) |
-| `.git/` | **No** | Absent in `/app/applet` | **Repository VCS metadata omitted from AI Studio workspace** (`git rev-parse HEAD` fails locally) |
+| `node_modules/` | Yes | Installed `Nov 23 11:05` | Cleanly installed by `npm ci --legacy-peer-deps` (`514` packages, `.gitignore` excluded) |
+| `dist/` | Yes | Built `Nov 23 11:05` | Production bundle generated by `npm run build` after `npm ci` (`.gitignore` excluded) |
+| `docs/engineering/*.md` | Yes | Updated Phase 0.2 | Phase 0 / 0.1 / 0.2 engineering audit & hardening documentation |
+| `.git/` | **No** | Absent in `/app/applet` | Repository VCS metadata omitted from AI Studio workspace (`git status` / `git rev-parse HEAD` fail locally) |
 
 ---
 
