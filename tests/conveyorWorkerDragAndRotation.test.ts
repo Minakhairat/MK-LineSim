@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assignWorkerToConveyorSegmentInDraft,
+  assignWorkerToStationSideInDraft,
   computeConveyorSegmentPlacement,
   findConveyorSegmentAtPoint,
   getConveyorSegmentCount,
@@ -10,6 +11,7 @@ import {
 } from '../src/engineering/conveyorWorkerAssignment';
 import { createDesertAirCoolerProject } from '../src/data/sampleProject';
 import { DiscreteEventSimulationEngine } from '../src/simulation/desEngine';
+import { computeWorkerTravelAudit } from '../src/simulation/timeAuditService';
 import { validateProject } from '../src/simulation/validator';
 import { migrateProjectSchema } from '../src/storage/indexedDb';
 import { ProjectData } from '../src/types/project';
@@ -287,4 +289,114 @@ test('Worker Busy excludes mid-cycle workstation breakdown repair duration', () 
     `Worker busy time must equal exact 20s active work and exclude 50s repair downtime (got ${wa.busyTimeSec}s)`
   );
 });
+
+test('assignWorkerToStationSideInDraft positions workers on N/S/E/W edges & travel audit incurs 0s home walk', () => {
+  const draft: ProjectData = structuredClone(createDesertAirCoolerProject());
+  const station = draft.layoutObjects.find((o) => o.kind === 'workstation' || o.kind === 'machine')!;
+  station.geometry.rotationDeg = 0;
+  const cx = station.geometry.position.x;
+  const cz = station.geometry.position.z;
+
+  const wNorth = draft.workers[0]!;
+  const wEast = draft.workers[1]!;
+  const wWest = draft.workers[2]!;
+
+  assignWorkerToStationSideInDraft(draft, wNorth.id, station.id, 'north');
+  assignWorkerToStationSideInDraft(draft, wEast.id, station.id, 'east');
+  assignWorkerToStationSideInDraft(draft, wWest.id, station.id, 'west');
+
+  assert.equal(wNorth.placementSide, 'north');
+  assert.ok(wNorth.position.z < cz, 'North worker must stand at z < station.z');
+  assert.equal(wEast.placementSide, 'east');
+  assert.ok(wEast.position.x > cx, 'East worker must stand at x > station.x');
+  assert.equal(wWest.placementSide, 'west');
+  assert.ok(wWest.position.x < cx, 'West worker must stand at x < station.x');
+
+  // Verify travel audit yields 0s walk delay at each chosen cardinal side and for custom coords
+  assert.equal(computeWorkerTravelAudit(wNorth, wNorth.position, station.id, station).walkTimeSec, 0);
+  assert.equal(computeWorkerTravelAudit(wEast, wEast.position, station.id, station).walkTimeSec, 0);
+  assert.equal(computeWorkerTravelAudit(wWest, wWest.position, station.id, station).walkTimeSec, 0);
+
+  wNorth.placementSide = 'custom';
+  wNorth.position = { x: cx + 2.1, y: 0, z: cz - 1.4 };
+  assert.equal(computeWorkerTravelAudit(wNorth, wNorth.position, station.id, station).walkTimeSec, 0);
+});
+
+test('Conveyor Side B (-1) persists across segment switches, migration, and 0s DES travel audit', () => {
+  const draft: ProjectData = structuredClone(createDesertAirCoolerProject());
+  const conv = draft.layoutObjects.find((o) => o.kind === 'conveyor')!;
+  const wk = draft.workers[0]!;
+  const segCount = getConveyorSegmentCount(conv);
+
+  assignWorkerToConveyorSegmentInDraft(draft, wk.id, conv.id, 0, segCount, -1);
+  assert.equal(wk.assignedConveyorSegment?.side, -1);
+  const sideBPos = { ...wk.position };
+
+  // Travel audit on Side B must incur 0s walk delay
+  assert.equal(computeWorkerTravelAudit(wk, wk.position, conv.id, conv).walkTimeSec, 0);
+
+  // Changing segment without specifying side preserves Side B (-1)
+  assignWorkerToConveyorSegmentInDraft(draft, wk.id, conv.id, Math.min(1, segCount - 1), segCount);
+  assert.equal(wk.assignedConveyorSegment?.side, -1);
+  assert.notDeepEqual(wk.position, sideBPos);
+
+  const migrated = migrateProjectSchema(draft);
+  const migWk = migrated.workers.find((w) => w.id === wk.id)!;
+  assert.equal(migWk.assignedConveyorSegment?.side, -1);
+  assert.ok(migWk.placementSide);
+});
+
+test('Single machine with capacity=2 amortizes idealUnitCycleSec in resourceAnalytics OEE', () => {
+  const draft: ProjectData = structuredClone(createDesertAirCoolerProject());
+  const ws = draft.layoutObjects.find((o) => o.kind === 'workstation' || o.kind === 'machine')!;
+  const worker = draft.workers[0]!;
+
+  unassignWorkerFromConveyorInDraft(draft, worker.id);
+  ws.operations.processingTimeSec = 60;
+  ws.operations.setupTimeSec = 0;
+  ws.operations.loadingTimeSec = 0;
+  ws.operations.unloadingTimeSec = 0;
+  ws.operations.capacity = 2;
+  ws.operations.requiredOperators = 0;
+  ws.operations.availability = 1;
+
+  const stg = draft.stages.find((s) => s.assignedObjectIds.includes(ws.id))!;
+  stg.processingTimeSec = 60;
+  stg.setupTimeSec = 0;
+  stg.loadingTimeSec = 0;
+  stg.unloadingTimeSec = 0;
+  stg.requiredWorkers = 0;
+  stg.scrapRate = 0;
+  stg.reworkProbability = 0;
+  stg.bufferCapacity = 20;
+
+  draft.stages = [stg];
+  draft.products[0]!.routeStageIds = [stg.id];
+  draft.products[0]!.entryStageIds = [stg.id];
+  draft.products[0]!.routingMode = 'manual';
+  draft.workers = [worker];
+  draft.simulationConfig = {
+    durationSec: 600,
+    arrivalIntervalSec: 30,
+    maxPlannedUnits: 10,
+    speedMultiplier: 100,
+    enableBreakdowns: false,
+    randomSeed: 1,
+    shifts: [{ id: worker.shiftId, name: 'Shift 1', startSec: 0, durationSec: 600, breaks: [] }],
+    maintenanceWindows: [],
+  };
+
+  const res = new DiscreteEventSimulationEngine(draft).runToCompletion();
+  const ra = res.resourceAnalytics?.find((r) => r.objectId === ws.id);
+  assert.ok(ra, 'resourceAnalytics must contain the multi-capacity machine');
+  assert.ok(
+    Math.abs((ra.idealCycleTimeSec ?? 0) - 30) < 0.01,
+    `idealCycleTimeSec for cap=2 & proc=60s must be 30s (got ${ra.idealCycleTimeSec})`
+  );
+  assert.ok(
+    (ra.performancePct ?? 0) <= 100.1,
+    `Resource Performance% must never exceed 100% due to unamortized capacity (got ${ra.performancePct}%)`
+  );
+});
+
 

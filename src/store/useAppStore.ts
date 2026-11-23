@@ -52,6 +52,8 @@ import {
 } from '../utils/cadExporter';
 import {
   assignWorkerToConveyorSegmentInDraft,
+  assignWorkerToStationSideInDraft,
+  CardinalPlacementSide,
   normalizeRotationDeg,
   unassignWorkerFromConveyorInDraft,
 } from '../engineering/conveyorWorkerAssignment';
@@ -167,6 +169,12 @@ interface AppState {
     segmentCount?: number,
     side?: 1 | -1
   ) => void;
+  assignWorkerToStationSide: (
+    workerId: string,
+    stationId: string,
+    side?: CardinalPlacementSide
+  ) => void;
+  assignStageWorkersSide: (stageId: string, side: CardinalPlacementSide) => void;
   unassignWorkerTarget: (workerId: string) => void;
   updateSimConfig: (partial: Partial<SimulationConfig>) => void;
 
@@ -1083,7 +1091,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       draft.workers = draft.workers.filter((w) => w.id !== id);
     }),
 
-  assignWorkerToConveyorSegment: (workerId, conveyorId, segmentIndex, segmentCount, side = 1) => {
+  assignWorkerToConveyorSegment: (workerId, conveyorId, segmentIndex, segmentCount, side) => {
     const { commitProjectEdit, setToast, language, project } = get();
     const conv = project.layoutObjects.find((o) => o.id === conveyorId && o.kind === 'conveyor');
     const wk = project.workers.find((w) => w.id === workerId);
@@ -1098,6 +1106,58 @@ export const useAppStore = create<AppState>((set, get) => ({
       language === 'ar'
         ? `تم تعيين ${wk.label} على قطاع ${segmentIndex + 1} من "${conv.name}"`
         : `Assigned ${wk.label} to Segment ${segmentIndex + 1} of "${conv.name}"`,
+      'success'
+    );
+  },
+
+  assignWorkerToStationSide: (workerId, stationId, side) => {
+    const { commitProjectEdit, setToast, language, project } = get();
+    const obj = project.layoutObjects.find((o) => o.id === stationId);
+    const wk = project.workers.find((w) => w.id === workerId);
+    if (!obj || !wk) return;
+
+    commitProjectEdit((draft) => {
+      assignWorkerToStationSideInDraft(draft, workerId, stationId, side);
+    });
+
+    set({ selection: { kind: 'worker', ids: [workerId] } });
+    setToast(
+      language === 'ar'
+        ? `تم وضع ${wk.label} عند "${obj.name}"`
+        : `Positioned ${wk.label} at "${obj.name}"`,
+      'success'
+    );
+  },
+
+  assignStageWorkersSide: (stageId, side) => {
+    const { commitProjectEdit, setToast, language, project } = get();
+    const st = project.stages.find((s) => s.id === stageId);
+    if (!st) return;
+
+    commitProjectEdit((draft) => {
+      const stage = draft.stages.find((s) => s.id === stageId);
+      if (!stage) return;
+      const fallbackObjId = stage.assignedObjectIds[0] || stage.conveyorObjectId;
+      for (const w of draft.workers) {
+        const currentTarget = w.assignedTo || w.assignedStationId;
+        const belongsToStage =
+          w.assignedStageIds.includes(stageId) ||
+          (currentTarget ? stage.assignedObjectIds.includes(currentTarget) : false);
+        if (!belongsToStage) continue;
+        const resolvedObjId =
+          currentTarget && stage.assignedObjectIds.includes(currentTarget)
+            ? currentTarget
+            : fallbackObjId;
+        if (resolvedObjId) {
+          assignWorkerToStationSideInDraft(draft, w.id, resolvedObjId, side);
+        }
+      }
+    });
+
+    setToast(
+      language === 'ar'
+        ? `تم تحديث جهة وقوف عمال مرحلة "${st.name}"`
+        : `Updated worker placement side for "${st.name}"`,
       'success'
     );
   },

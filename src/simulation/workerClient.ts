@@ -1,6 +1,7 @@
 import { ProjectData, ScenarioRecord, SimulationResult } from '../types/project';
 import { DiscreteEventSimulationEngine } from './desEngine';
 import type { SimWorkerRequest, SimWorkerResponse } from '../workers/simWorker';
+import { computeStationSidePlacement } from '../engineering/conveyorWorkerAssignment';
 
 let workerInstance: Worker | null = null;
 const pending = new Map<
@@ -110,14 +111,22 @@ export function applyScenarioOverrides(
       const targetStage = sortedStages[extraIdx % sortedStages.length];
       const stObj = cloned.layoutObjects.find((o) => o.id === targetStage.assignedObjectIds[0]);
       const n = cloned.workers.length + 1;
+      const placement = stObj
+        ? computeStationSidePlacement(stObj, 'south', {
+            lengthM: cloned.factory.lengthM,
+            widthM: cloned.factory.widthM,
+          })
+        : undefined;
       cloned.workers.push({
         id: `wrk_scen_${n}`,
         label: `W-${String(n).padStart(2, '0')}`,
         name: `Added Operator ${String(n).padStart(2, '0')}`,
-        position: stObj
-          ? { x: stObj.geometry.position.x + 0.5, y: 0, z: stObj.geometry.position.z + 0.9 }
-          : { x: 5, y: 0, z: 10 },
+        position: placement ? placement.position : { x: 5, y: 0, z: 10 },
+        rotation: placement ? placement.rotationDeg : 0,
+        rotationDeg: placement ? placement.rotationDeg : 0,
+        placementSide: placement ? 'south' : 'custom',
         assignedStageIds: [targetStage.id],
+        assignedTo: stObj?.id,
         assignedStationId: stObj?.id,
         skillCategory: 'Multi-Stage',
         skillLevel: 4,

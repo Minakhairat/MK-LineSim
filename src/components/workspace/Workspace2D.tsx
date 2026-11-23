@@ -214,7 +214,7 @@ export const Workspace2D: React.FC = () => {
       const dz = world.z - drag.startWorldZ;
       const nx = snapValue(Math.max(0.2, Math.min(lengthM - 0.2, drag.origX + dx)), gridSizeM, snapToGrid);
       const nz = snapValue(Math.max(0.2, Math.min(widthM - 0.2, drag.origZ + dz)), gridSizeM, snapToGrid);
-      updateWorker(drag.id, { position: { x: nx, y: 0, z: nz } }, true);
+      updateWorker(drag.id, { position: { x: nx, y: 0, z: nz }, placementSide: 'custom' }, true);
       const nearConv = findConveyorSegmentAtPoint(project.layoutObjects, nx, nz, 0.9);
       setDragHoverConv(nearConv ? { id: nearConv.conveyor.id, segIdx: nearConv.segmentIndex } : null);
     } else if (drag.mode === 'move_zone') {
@@ -852,7 +852,7 @@ export const Workspace2D: React.FC = () => {
           } else {
             const clampedX = Math.max(0.25, Math.min(fL - 0.25, world.x));
             const clampedZ = Math.max(0.25, Math.min(fW - 0.25, world.z));
-            updateWorker(workerId, { position: { x: clampedX, y: 0, z: clampedZ } });
+            updateWorker(workerId, { position: { x: clampedX, y: 0, z: clampedZ }, placementSide: 'custom' });
             selectItem('worker', workerId);
           }
         }}
@@ -1150,7 +1150,8 @@ export const Workspace2D: React.FC = () => {
               if (!isSel && activeModule !== 'workforce') return null;
               const segIdx = w.assignedConveyorSegment?.segmentIndex ?? 0;
               const segCount = w.assignedConveyorSegment?.segmentCount ?? getConveyorSegmentCount(conv);
-              const placement = computeConveyorSegmentPlacement(conv, segIdx, segCount);
+              const convSide = w.assignedConveyorSegment?.side ?? 1;
+              const placement = computeConveyorSegmentPlacement(conv, segIdx, segCount, convSide);
               return (
                 <g key={`tether_${w.id}`} style={{ pointerEvents: 'none' }}>
                   <line

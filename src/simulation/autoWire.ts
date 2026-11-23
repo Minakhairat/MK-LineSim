@@ -7,6 +7,7 @@ import {
   WorkerDefinition,
 } from '../types/project';
 import { getRotatedBounds, uid } from '../utils/units';
+import { computeStationSidePlacement } from '../engineering/conveyorWorkerAssignment';
 
 function getConveyorEndpoints(conv: LayoutObject): { entry: Vec3; exit: Vec3; ux: number; uz: number } {
   const rad = (conv.geometry.rotationDeg * Math.PI) / 180;
@@ -321,19 +322,24 @@ export function importFlowchartToSimulationData(project: ProjectData): {
     const stObj = objById.get(st.assignedObjectIds[0]);
     while (assigned.length < st.requiredWorkers) {
       const n = draft.workers.length + 1;
+      const defaultSide = 'south' as const;
+      const placement = stObj
+        ? computeStationSidePlacement(
+            stObj,
+            defaultSide,
+            { lengthM: draft.factory.lengthM, widthM: draft.factory.widthM },
+            assigned.length,
+            st.requiredWorkers
+          )
+        : undefined;
       const newWorker: WorkerDefinition = {
         id: uid('wrk'),
         label: `W-${String(n).padStart(2, '0')}`,
         name: `Operator ${String(n).padStart(2, '0')}`,
-        position: stObj
-          ? {
-              x: Math.max(0.5, Math.min(draft.factory.lengthM - 0.5, stObj.geometry.position.x)),
-              y: 0,
-              z: Math.max(0.5, Math.min(draft.factory.widthM - 0.5, stObj.geometry.position.z + 0.95)),
-            }
-          : { x: 4, y: 0, z: 10 },
-        rotation: 0,
-        rotationDeg: 0,
+        position: placement ? placement.position : { x: 4, y: 0, z: 10 },
+        rotation: placement ? placement.rotationDeg : 0,
+        rotationDeg: placement ? placement.rotationDeg : 0,
+        placementSide: placement ? defaultSide : 'custom',
         assignedStageIds: [st.id],
         assignedTo: stObj?.id,
         assignedStationId: stObj?.id,
@@ -626,18 +632,26 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
     const stObj = draft.layoutObjects.find((o) => o.id === st.assignedObjectIds[0]);
     while (assigned.length < st.requiredWorkers) {
       const n = draft.workers.length + 1;
+      const defaultSide = 'south' as const;
+      const placement = stObj
+        ? computeStationSidePlacement(
+            stObj,
+            defaultSide,
+            { lengthM: draft.factory.lengthM, widthM: draft.factory.widthM },
+            assigned.length,
+            st.requiredWorkers
+          )
+        : undefined;
       const newWorker: WorkerDefinition = {
         id: uid('wrk'),
         label: `W-${String(n).padStart(2, '0')}`,
         name: `Operator ${String(n).padStart(2, '0')}`,
-        position: stObj
-          ? {
-              x: Math.max(0.5, Math.min(draft.factory.lengthM - 0.5, stObj.geometry.position.x)),
-              y: 0,
-              z: Math.max(0.5, Math.min(draft.factory.widthM - 0.5, stObj.geometry.position.z + 0.95)),
-            }
-          : { x: 4, y: 0, z: 10 },
+        position: placement ? placement.position : { x: 4, y: 0, z: 10 },
+        rotation: placement ? placement.rotationDeg : 0,
+        rotationDeg: placement ? placement.rotationDeg : 0,
+        placementSide: placement ? defaultSide : 'custom',
         assignedStageIds: [st.id],
+        assignedTo: stObj?.id,
         assignedStationId: stObj?.id,
         skillCategory: 'Assembly & Operations',
         skillLevel: 4,

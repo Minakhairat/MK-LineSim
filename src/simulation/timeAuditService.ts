@@ -21,7 +21,11 @@ import {
   resolveStageBatchConfig,
   StageBatchConfig,
 } from '../engineering/capacityEngine';
-import { computeConveyorSegmentPlacement } from '../engineering/conveyorWorkerAssignment';
+import {
+  CardinalPlacementSide,
+  computeConveyorSegmentPlacement,
+  computeStationSidePlacement,
+} from '../engineering/conveyorWorkerAssignment';
 import { computeOeeMetrics } from '../engineering/oeeEngine';
 import { ResourceCalendarEngine } from './resourceCalendar';
 import { FailureModelParams, resolveObjectFailureParams } from './failureModels';
@@ -252,17 +256,27 @@ export function computeWorkerTravelAudit(
     const placement = computeConveyorSegmentPlacement(
       targetStation,
       worker.assignedConveyorSegment.segmentIndex,
-      worker.assignedConveyorSegment.segmentCount
+      worker.assignedConveyorSegment.segmentCount,
+      worker.assignedConveyorSegment.side ?? 1
     );
     targetPos = placement.position;
+  } else if (worker.placementSide && worker.placementSide !== 'custom') {
+    targetPos = computeStationSidePlacement(targetStation, worker.placementSide).position;
+  } else if (worker.placementSide === 'custom' && assignedTargetId === targetStation.id) {
+    return { walkTimeSec: 0, targetPos: { ...currentPos } };
   } else {
-    const sideOffset = targetStation.geometry.dimensions.width / 2 + 0.45;
-    const approachNorth = currentPos.z < targetStation.geometry.position.z;
-    targetPos = {
-      x: targetStation.geometry.position.x,
-      y: 0,
-      z: targetStation.geometry.position.z + (approachNorth ? -sideOffset : sideOffset),
-    };
+    const candidates: CardinalPlacementSide[] = ['north', 'south', 'east', 'west'];
+    let bestPos = computeStationSidePlacement(targetStation, 'south').position;
+    let bestDist = distance2D(currentPos, bestPos);
+    for (const side of candidates) {
+      const pos = computeStationSidePlacement(targetStation, side).position;
+      const d = distance2D(currentPos, pos);
+      if (d < bestDist) {
+        bestDist = d;
+        bestPos = pos;
+      }
+    }
+    targetPos = bestPos;
   }
 
   const dist = distance2D(currentPos, targetPos);

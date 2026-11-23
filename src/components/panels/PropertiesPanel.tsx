@@ -4,7 +4,18 @@ import { useAppStore } from '../../store/useAppStore';
 import { fromMeters, toMeters, uid } from '../../utils/units';
 import { getT } from '../../i18n/translations';
 import { FailureDistributionType, RepairDistributionType } from '../../types/project';
-import { getConveyorSegmentCount, normalizeRotationDeg } from '../../engineering/conveyorWorkerAssignment';
+import {
+  CardinalPlacementSide,
+  getConveyorSegmentCount,
+  normalizeRotationDeg,
+} from '../../engineering/conveyorWorkerAssignment';
+
+const CARDINAL_SIDE_BUTTONS: Array<{ side: CardinalPlacementSide; shortEn: string; shortAr: string }> = [
+  { side: 'north', shortEn: 'N', shortAr: 'ش' },
+  { side: 'south', shortEn: 'S', shortAr: 'ج' },
+  { side: 'east', shortEn: 'E', shortAr: 'ق' },
+  { side: 'west', shortEn: 'W', shortAr: 'غ' },
+];
 
 export const PropertiesPanel: React.FC = () => {
   const project = useAppStore((s) => s.project);
@@ -18,6 +29,7 @@ export const PropertiesPanel: React.FC = () => {
   const updateWorker = useAppStore((s) => s.updateWorker);
   const deleteWorker = useAppStore((s) => s.deleteWorker);
   const assignWorkerToConveyorSegment = useAppStore((s) => s.assignWorkerToConveyorSegment);
+  const assignWorkerToStationSide = useAppStore((s) => s.assignWorkerToStationSide);
   const unassignWorkerTarget = useAppStore((s) => s.unassignWorkerTarget);
   const updateZone = useAppStore((s) => s.updateZone);
   const deleteZone = useAppStore((s) => s.deleteZone);
@@ -725,6 +737,153 @@ export const PropertiesPanel: React.FC = () => {
             </>
           )}
 
+          {/* Assigned Workers & Side Controls directly from Station / Machine / Conveyor */}
+          {(selectedObj.kind === 'machine' ||
+            selectedObj.kind === 'workstation' ||
+            selectedObj.kind === 'conveyor' ||
+            selectedObj.kind === 'buffer') && (() => {
+            const objWorkers = project.workers.filter(
+              (w) => (w.assignedTo || w.assignedStationId) === selectedObj.id
+            );
+            const segCount =
+              selectedObj.kind === 'conveyor' ? getConveyorSegmentCount(selectedObj) : 0;
+            return (
+              <div className="flex flex-col gap-2 border-t border-neutral-200 dark:border-neutral-800 pt-3">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="text-[11px] font-semibold text-neutral-600 dark:text-neutral-300">
+                    {t.labels.assignedWorkersOnObj} ({objWorkers.length})
+                  </span>
+                </div>
+                {objWorkers.length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    {objWorkers.map((wk) => (
+                      <div
+                        key={wk.id}
+                        className="flex flex-col gap-1 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 p-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <button
+                            type="button"
+                            onClick={() => selectItem('worker', wk.id)}
+                            className="text-[11px] font-semibold text-neutral-800 dark:text-neutral-200 hover:underline truncate"
+                          >
+                            {wk.label} · {wk.name}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => unassignWorkerTarget(wk.id)}
+                            className="text-[10px] text-neutral-500 hover:text-red-600 px-1"
+                          >
+                            {t.workforce.unassignTarget}
+                          </button>
+                        </div>
+                        {selectedObj.kind === 'conveyor' ? (
+                          <div className="flex items-center gap-1">
+                            <select
+                              value={Math.min(
+                                Math.max(0, segCount - 1),
+                                wk.assignedConveyorSegment?.segmentIndex ?? 0
+                              )}
+                              onChange={(e) =>
+                                assignWorkerToConveyorSegment(
+                                  wk.id,
+                                  selectedObj.id,
+                                  Number(e.target.value),
+                                  segCount,
+                                  wk.assignedConveyorSegment?.side ?? 1
+                                )
+                              }
+                              className="flex-1 min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1 py-0.5 text-[10px]"
+                            >
+                              {Array.from({ length: segCount }).map((_, idx) => (
+                                <option key={idx} value={idx}>
+                                  {t.workforce.segmentLabel} {idx + 1}
+                                </option>
+                              ))}
+                            </select>
+                            {([1, -1] as const).map((sVal) => {
+                              const activeSide = (wk.assignedConveyorSegment?.side ?? 1) === sVal;
+                              return (
+                                <button
+                                  key={sVal}
+                                  type="button"
+                                  onClick={() =>
+                                    assignWorkerToConveyorSegment(
+                                      wk.id,
+                                      selectedObj.id,
+                                      wk.assignedConveyorSegment?.segmentIndex ?? 0,
+                                      segCount,
+                                      sVal
+                                    )
+                                  }
+                                  className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+                                    activeSide
+                                      ? 'border-blue-600 bg-blue-600 text-white'
+                                      : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-300'
+                                  }`}
+                                >
+                                  {sVal === 1 ? 'A' : 'B'}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-4 gap-1">
+                            {CARDINAL_SIDE_BUTTONS.map((btn) => {
+                              const active = (wk.placementSide || 'south') === btn.side;
+                              return (
+                                <button
+                                  key={btn.side}
+                                  type="button"
+                                  onClick={() =>
+                                    assignWorkerToStationSide(wk.id, selectedObj.id, btn.side)
+                                  }
+                                  className={`rounded border px-1 py-0.5 text-[10px] font-semibold ${
+                                    active
+                                      ? 'border-red-600 bg-red-600 text-white'
+                                      : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                                  }`}
+                                >
+                                  {isAr ? btn.shortAr : btn.shortEn}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {project.workers.some((w) => (w.assignedTo || w.assignedStationId) !== selectedObj.id) && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const wid = e.target.value;
+                      if (!wid) return;
+                      if (selectedObj.kind === 'conveyor') {
+                        assignWorkerToConveyorSegment(wid, selectedObj.id, 0, segCount, 1);
+                      } else {
+                        assignWorkerToStationSide(wid, selectedObj.id);
+                      }
+                    }}
+                    className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-[11px]"
+                  >
+                    <option value="">
+                      + {isAr ? 'تعيين عامل هنا...' : 'Assign worker here...'}
+                    </option>
+                    {project.workers
+                      .filter((w) => (w.assignedTo || w.assignedStationId) !== selectedObj.id)
+                      .map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.label} · {w.name}
+                        </option>
+                      ))}
+                  </select>
+                )}
+              </div>
+            );
+          })()}
+
           <button
             onClick={() => deleteLayoutObject(selectedObj.id)}
             disabled={selectedObj.rendering.locked}
@@ -750,10 +909,16 @@ export const PropertiesPanel: React.FC = () => {
           </label>
           <div className="grid grid-cols-2 gap-2">
             {numInput(t.labels.positionX, selectedWorker.position.x, true, (v) =>
-              updateWorker(selectedWorker.id, { position: { ...selectedWorker.position, x: v } })
+              updateWorker(selectedWorker.id, {
+                position: { ...selectedWorker.position, x: v },
+                placementSide: 'custom',
+              })
             )}
             {numInput(t.labels.positionZ, selectedWorker.position.z, true, (v) =>
-              updateWorker(selectedWorker.id, { position: { ...selectedWorker.position, z: v } })
+              updateWorker(selectedWorker.id, {
+                position: { ...selectedWorker.position, z: v },
+                placementSide: 'custom',
+              })
             )}
             {numInput(
               t.labels.walkingSpeed,
@@ -882,60 +1047,7 @@ export const PropertiesPanel: React.FC = () => {
                         assignWorkerToConveyorSegment(selectedWorker.id, picked.id, 0);
                         return;
                       }
-                      commitProjectEdit((draft) => {
-                        const wk = draft.workers.find((w) => w.id === selectedWorker.id);
-                        if (!wk) return;
-                        wk.assignedTo = stationId;
-                        wk.assignedStationId = stationId;
-                        wk.assignedConveyorSegment = undefined;
-                        const stObj = draft.layoutObjects.find((o) => o.id === stationId);
-                        if (!stObj) return;
-                        wk.position = {
-                          x: stObj.geometry.position.x,
-                          y: 0,
-                          z: Math.min(
-                            draft.factory.widthM - 0.3,
-                            stObj.geometry.position.z + stObj.geometry.dimensions.width / 2 + 0.55
-                          ),
-                        };
-                        let stage = draft.stages.find(
-                          (s) => s.assignedObjectIds.includes(stObj.id) || s.id === stObj.stageId
-                        );
-                        if (!stage) {
-                          const sid = uid('stg');
-                          const idx = draft.stages.length + 1;
-                          stage = {
-                            id: sid,
-                            code: `OP-${idx * 10}`,
-                            name: stObj.name,
-                            description: stObj.name,
-                            processingTimeSec: Math.max(1, stObj.operations.processingTimeSec || 15),
-                            setupTimeSec: stObj.operations.setupTimeSec || 0,
-                            loadingTimeSec: stObj.operations.loadingTimeSec || 0,
-                            unloadingTimeSec: stObj.operations.unloadingTimeSec || 0,
-                            requiredWorkers: Math.max(1, stObj.operations.requiredOperators || 1),
-                            requiredMachines: 1,
-                            inputQty: 1,
-                            outputQty: 1,
-                            scrapRate: 0,
-                            reworkProbability: 0,
-                            bufferCapacity: Math.max(1, stObj.operations.capacity || 5),
-                            predecessorIds: [],
-                            successorIds: [],
-                            assignedObjectIds: [stObj.id],
-                          };
-                          draft.stages.push(stage);
-                          stObj.stageId = sid;
-                        } else if (stage.requiredWorkers <= 0) {
-                          stage.requiredWorkers = 1;
-                        }
-                        if (stObj.operations.requiredOperators <= 0) {
-                          stObj.operations.requiredOperators = 1;
-                        }
-                        if (!wk.assignedStageIds.includes(stage.id)) {
-                          wk.assignedStageIds = [...wk.assignedStageIds, stage.id];
-                        }
-                      });
+                      assignWorkerToStationSide(selectedWorker.id, picked.id);
                     }}
                     className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs"
                   >
@@ -944,7 +1056,7 @@ export const PropertiesPanel: React.FC = () => {
                       .filter(
                         (o) =>
                           o.rendering.visible &&
-                          (o.kind === 'machine' || o.kind === 'workstation' || o.kind === 'conveyor')
+                          (o.kind === 'machine' || o.kind === 'workstation' || o.kind === 'conveyor' || o.kind === 'buffer')
                       )
                       .map((o) => (
                         <option key={o.id} value={o.id}>
@@ -955,36 +1067,102 @@ export const PropertiesPanel: React.FC = () => {
                   </select>
                 </label>
 
+                {currentTargetObj && currentTargetObj.kind !== 'conveyor' && (
+                  <div className="flex flex-col gap-1 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 p-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-neutral-600 dark:text-neutral-300">
+                        {t.labels.workerPlacementSide}
+                      </span>
+                      {selectedWorker.placementSide === 'custom' && (
+                        <span className="rounded bg-amber-500/15 px-1.5 py-0.2 text-[9px] font-semibold text-amber-700 dark:text-amber-400">
+                          {t.labels.sideCustom}
+                        </span>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      {CARDINAL_SIDE_BUTTONS.map((btn) => {
+                        const active = (selectedWorker.placementSide || 'south') === btn.side;
+                        return (
+                          <button
+                            key={btn.side}
+                            type="button"
+                            onClick={() =>
+                              assignWorkerToStationSide(selectedWorker.id, currentTargetObj.id, btn.side)
+                            }
+                            className={`rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                              active
+                                ? 'border-red-600 bg-red-600 text-white'
+                                : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                            }`}
+                          >
+                            {isAr ? btn.shortAr : btn.shortEn}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {currentTargetObj?.kind === 'conveyor' && segCount > 0 && (
-                  <div className="flex items-center gap-1.5 rounded border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/25 px-2 py-1.5">
-                    <span className="text-[10px] font-semibold text-blue-700 dark:text-blue-300 shrink-0">
-                      {t.workforce.segmentLabel}:
-                    </span>
-                    <select
-                      value={currentSegIdx}
-                      onChange={(e) =>
-                        assignWorkerToConveyorSegment(
-                          selectedWorker.id,
-                          currentTargetObj.id,
-                          Number(e.target.value),
-                          segCount
-                        )
-                      }
-                      className="flex-1 min-w-0 rounded border border-blue-300 dark:border-blue-800 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-[11px]"
-                    >
-                      {Array.from({ length: segCount }).map((_, idx) => (
-                        <option key={idx} value={idx}>
-                          {t.workforce.segmentLabel} {idx + 1} / {segCount}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => unassignWorkerTarget(selectedWorker.id)}
-                      className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                    >
-                      {t.workforce.unassignTarget}
-                    </button>
+                  <div className="flex flex-col gap-1.5 rounded border border-blue-200 dark:border-blue-900 bg-blue-50/70 dark:bg-blue-950/25 px-2 py-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-semibold text-blue-700 dark:text-blue-300 shrink-0">
+                        {t.workforce.segmentLabel}:
+                      </span>
+                      <select
+                        value={currentSegIdx}
+                        onChange={(e) =>
+                          assignWorkerToConveyorSegment(
+                            selectedWorker.id,
+                            currentTargetObj.id,
+                            Number(e.target.value),
+                            segCount,
+                            selectedWorker.assignedConveyorSegment?.side ?? 1
+                          )
+                        }
+                        className="flex-1 min-w-0 rounded border border-blue-300 dark:border-blue-800 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-[11px]"
+                      >
+                        {Array.from({ length: segCount }).map((_, idx) => (
+                          <option key={idx} value={idx}>
+                            {t.workforce.segmentLabel} {idx + 1} / {segCount}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => unassignWorkerTarget(selectedWorker.id)}
+                        className="rounded border border-neutral-300 dark:border-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      >
+                        {t.workforce.unassignTarget}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1">
+                      {([1, -1] as const).map((sVal) => {
+                        const isSideActive = (selectedWorker.assignedConveyorSegment?.side ?? 1) === sVal;
+                        return (
+                          <button
+                            key={sVal}
+                            type="button"
+                            onClick={() =>
+                              assignWorkerToConveyorSegment(
+                                selectedWorker.id,
+                                currentTargetObj.id,
+                                currentSegIdx,
+                                segCount,
+                                sVal
+                              )
+                            }
+                            className={`rounded border px-1.5 py-1 text-[10px] font-semibold transition-colors ${
+                              isSideActive
+                                ? 'border-blue-600 bg-blue-600 text-white'
+                                : 'border-blue-300 dark:border-blue-800 bg-white dark:bg-neutral-900 text-blue-800 dark:text-blue-200'
+                            }`}
+                          >
+                            {sVal === 1 ? t.labels.conveyorSideA : t.labels.conveyorSideB}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

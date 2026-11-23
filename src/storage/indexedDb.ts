@@ -167,11 +167,26 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
               : typeof rec.assignedStationId === 'string' && rec.assignedStationId
               ? rec.assignedStationId
               : undefined;
+          const validSides = new Set(['north', 'south', 'east', 'west', 'custom']);
+          const placementSide =
+            typeof rec.placementSide === 'string' && validSides.has(rec.placementSide)
+              ? (rec.placementSide as ProjectData['workers'][number]['placementSide'])
+              : undefined;
+          const segRaw = rec.assignedConveyorSegment as Record<string, unknown> | undefined;
+          const migratedSeg =
+            segRaw && typeof segRaw === 'object'
+              ? {
+                  ...segRaw,
+                  side: segRaw.side === -1 ? (-1 as const) : (1 as const),
+                }
+              : undefined;
           return {
             ...rec,
             rotation: rot,
             rotationDeg: rot,
+            ...(placementSide ? { placementSide } : {}),
             ...(targetId ? { assignedTo: targetId, assignedStationId: targetId } : {}),
+            ...(migratedSeg ? { assignedConveyorSegment: migratedSeg } : {}),
           };
         }) as ProjectData['workers']
       : [],

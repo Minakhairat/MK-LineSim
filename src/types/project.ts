@@ -303,11 +303,14 @@ export interface ProductionRoute {
   stageIds: string[];
 }
 
+export type WorkerPlacementSide = 'north' | 'south' | 'east' | 'west' | 'custom';
+
 export interface WorkerConveyorSegmentRef {
   objectId: string;
   segmentIndex: number;
   segmentCount: number;
   offsetRatio: number; // 0..1 along conveyor belt length
+  side?: 1 | -1; // +1 or -1 perpendicular to conveyor direction
 }
 
 export interface WorkerDefinition {
@@ -317,6 +320,7 @@ export interface WorkerDefinition {
   position: Vec3;
   rotation?: number; // orientation in degrees (-360..360), primary field synced with rotationDeg
   rotationDeg?: number; // orientation around vertical axis in degrees (-360..360)
+  placementSide?: WorkerPlacementSide;
   assignedStageIds: string[];
   assignedStationId?: string;
   assignedTo?: string; // conveyor or station object ID linked to this worker

@@ -3016,6 +3016,10 @@ export class DiscreteEventSimulationEngine {
         obj.operations.operatingSchedule
       );
 
+      const objCap =
+        obj.kind === 'machine' || obj.kind === 'workstation'
+          ? Math.max(1, Math.round(Number(obj.operations.capacity || 1)))
+          : 1;
       let idealUnitCycleSec = 0;
       if (st) {
         const assignedObjs = st.assignedObjectIds
@@ -3023,14 +3027,14 @@ export class DiscreteEventSimulationEngine {
           .filter((o): o is LayoutObject => Boolean(o));
         const profile = computeStageCapacityProfile(st, assignedObjs);
         idealUnitCycleSec =
-          profile.baseTaskTimeSec > 0 ? profile.baseTaskTimeSec / profile.batchSize : 0;
+          profile.baseTaskTimeSec > 0 ? profile.baseTaskTimeSec / (objCap * profile.batchSize) : 0;
       } else {
         const opTask =
           (obj.operations.processingTimeSec || 0) +
           (obj.operations.loadingTimeSec || 0) +
           (obj.operations.unloadingTimeSec || 0);
         const batch = Math.max(1, obj.operations.batchSize || 1);
-        idealUnitCycleSec = opTask > 0 ? opTask / batch : 0;
+        idealUnitCycleSec = opTask > 0 ? opTask / (objCap * batch) : 0;
       }
 
       const processed = stState?.processedCount ?? 0;

@@ -12,9 +12,19 @@ import { useAppStore } from '../../store/useAppStore';
 import { uid } from '../../utils/units';
 import { getT } from '../../i18n/translations';
 import {
+  assignWorkerToStationSideInDraft,
+  CardinalPlacementSide,
+  computeStationSidePlacement,
   getConveyorSegmentCount,
   normalizeRotationDeg,
 } from '../../engineering/conveyorWorkerAssignment';
+
+const CARDINAL_SIDES: Array<{ side: CardinalPlacementSide; shortEn: string; shortAr: string }> = [
+  { side: 'north', shortEn: 'N', shortAr: 'ش' },
+  { side: 'south', shortEn: 'S', shortAr: 'ج' },
+  { side: 'east', shortEn: 'E', shortAr: 'ق' },
+  { side: 'west', shortEn: 'W', shortAr: 'غ' },
+];
 
 export const WorkforceModule: React.FC = () => {
   const project = useAppStore((s) => s.project);
@@ -25,6 +35,7 @@ export const WorkforceModule: React.FC = () => {
   const deleteWorker = useAppStore((s) => s.deleteWorker);
   const selectItem = useAppStore((s) => s.selectItem);
   const assignWorkerToConveyorSegment = useAppStore((s) => s.assignWorkerToConveyorSegment);
+  const assignWorkerToStationSide = useAppStore((s) => s.assignWorkerToStationSide);
   const unassignWorkerTarget = useAppStore((s) => s.unassignWorkerTarget);
   const commitProjectEdit = useAppStore((s) => s.commitProjectEdit);
   const setToast = useAppStore((s) => s.setToast);
@@ -71,15 +82,18 @@ export const WorkforceModule: React.FC = () => {
         const st = sorted[idx % sorted.length];
         const stObj = draft.layoutObjects.find((o) => o.id === st.assignedObjectIds[0]);
         w.assignedStageIds = [st.id];
-        w.assignedTo = stObj?.id;
-        w.assignedStationId = stObj?.id;
-        w.assignedConveyorSegment = undefined;
         if (stObj) {
-          w.position = {
-            x: stObj.geometry.position.x + (idx >= sorted.length ? 0.5 : 0),
-            y: 0,
-            z: stObj.geometry.position.z + (idx % 2 === 0 ? -0.95 : 0.95),
-          };
+          const preferredSide: CardinalPlacementSide =
+            w.placementSide && w.placementSide !== 'custom'
+              ? w.placementSide
+              : idx % 2 === 0
+              ? 'south'
+              : 'north';
+          assignWorkerToStationSideInDraft(draft, w.id, stObj.id, preferredSide);
+        } else {
+          w.assignedTo = undefined;
+          w.assignedStationId = undefined;
+          w.assignedConveyorSegment = undefined;
         }
       });
     });
@@ -112,15 +126,20 @@ export const WorkforceModule: React.FC = () => {
               const st = project.stages[0];
               const stObj = project.layoutObjects.find((o) => o.id === st?.assignedObjectIds[0]);
               const wid = uid('wrk');
+              const placement = stObj
+                ? computeStationSidePlacement(stObj, 'south', {
+                    lengthM: project.factory.lengthM,
+                    widthM: project.factory.widthM,
+                  })
+                : undefined;
               addWorker({
                 id: wid,
                 label: `W-${String(n).padStart(2, '0')}`,
                 name: isAr ? `عامل ${String(n).padStart(2, '0')}` : `Operator ${String(n).padStart(2, '0')}`,
-                position: stObj
-                  ? { x: stObj.geometry.position.x, y: 0, z: stObj.geometry.position.z + 1.0 }
-                  : { x: 5, y: 0, z: 10 },
-                rotation: 0,
-                rotationDeg: 0,
+                position: placement ? placement.position : { x: 5, y: 0, z: 10 },
+                rotation: placement ? placement.rotationDeg : 0,
+                rotationDeg: placement ? placement.rotationDeg : 0,
+                placementSide: placement ? 'south' : 'custom',
                 assignedStageIds: st ? [st.id] : [],
                 assignedTo: stObj?.id,
                 assignedStationId: stObj?.id,
@@ -329,60 +348,9 @@ export const WorkforceModule: React.FC = () => {
                           assignWorkerToConveyorSegment(w.id, picked.id, 0);
                           return;
                         }
-                        commitProjectEdit((draft) => {
-                          const wk = draft.workers.find((item) => item.id === w.id);
-                          if (!wk) return;
-                          wk.assignedTo = stationId;
-                          wk.assignedStationId = stationId;
-                          wk.assignedConveyorSegment = undefined;
-                          const stObj = draft.layoutObjects.find((o) => o.id === stationId);
-                          if (!stObj) return;
-                          wk.position = {
-                            x: stObj.geometry.position.x,
-                            y: 0,
-                            z: Math.min(
-                              draft.factory.widthM - 0.3,
-                              stObj.geometry.position.z + stObj.geometry.dimensions.width / 2 + 0.55
-                            ),
-                          };
-                          let stage = draft.stages.find(
-                            (s) => s.assignedObjectIds.includes(stObj.id) || s.id === stObj.stageId
-                          );
-                          if (!stage) {
-                            const sid = uid('stg');
-                            const idx = draft.stages.length + 1;
-                            stage = {
-                              id: sid,
-                              code: `OP-${idx * 10}`,
-                              name: stObj.name,
-                              description: stObj.name,
-                              processingTimeSec: Math.max(1, stObj.operations.processingTimeSec || 15),
-                              setupTimeSec: stObj.operations.setupTimeSec || 0,
-                              loadingTimeSec: stObj.operations.loadingTimeSec || 0,
-                              unloadingTimeSec: stObj.operations.unloadingTimeSec || 0,
-                              requiredWorkers: Math.max(1, stObj.operations.requiredOperators || 1),
-                              requiredMachines: 1,
-                              inputQty: 1,
-                              outputQty: 1,
-                              scrapRate: 0,
-                              reworkProbability: 0,
-                              bufferCapacity: Math.max(1, stObj.operations.capacity || 5),
-                              predecessorIds: [],
-                              successorIds: [],
-                              assignedObjectIds: [stObj.id],
-                            };
-                            draft.stages.push(stage);
-                            stObj.stageId = sid;
-                          } else if (stage.requiredWorkers <= 0) {
-                            stage.requiredWorkers = 1;
-                          }
-                          if (stObj.operations.requiredOperators <= 0) {
-                            stObj.operations.requiredOperators = 1;
-                          }
-                          if (!wk.assignedStageIds.includes(stage.id)) {
-                            wk.assignedStageIds = [...wk.assignedStageIds, stage.id];
-                          }
-                        });
+                        if (picked) {
+                          assignWorkerToStationSide(w.id, picked.id);
+                        }
                       }}
                       className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 text-[11px]"
                     >
@@ -391,7 +359,7 @@ export const WorkforceModule: React.FC = () => {
                         .filter(
                           (o) =>
                             o.rendering.visible &&
-                            (o.kind === 'machine' || o.kind === 'workstation' || o.kind === 'conveyor')
+                            (o.kind === 'machine' || o.kind === 'workstation' || o.kind === 'conveyor' || o.kind === 'buffer')
                         )
                         .map((o) => (
                           <option key={o.id} value={o.id}>
@@ -400,6 +368,93 @@ export const WorkforceModule: React.FC = () => {
                           </option>
                         ))}
                     </select>
+                  </label>
+                  {assignedObj && assignedObj.kind !== 'conveyor' && (
+                    <div className="col-span-2 flex flex-col gap-1">
+                      <span className="text-[10px] text-neutral-500 truncate">{t.labels.workerPlacementSide}</span>
+                      <div className="grid grid-cols-4 gap-1">
+                        {CARDINAL_SIDES.map((btn) => {
+                          const active = (w.placementSide || 'south') === btn.side;
+                          return (
+                            <button
+                              key={btn.side}
+                              type="button"
+                              onClick={() => assignWorkerToStationSide(w.id, assignedObj.id, btn.side)}
+                              className={`rounded border px-1 py-0.5 text-[10px] font-semibold ${
+                                active
+                                  ? 'border-red-600 bg-red-600 text-white'
+                                  : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900'
+                              }`}
+                            >
+                              {isAr ? btn.shortAr : btn.shortEn}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {assignedObj?.kind === 'conveyor' && (
+                    <div className="col-span-2 grid grid-cols-2 gap-1">
+                      {([1, -1] as const).map((sVal) => {
+                        const isSideActive = (w.assignedConveyorSegment?.side ?? 1) === sVal;
+                        return (
+                          <button
+                            key={sVal}
+                            type="button"
+                            onClick={() =>
+                              assignWorkerToConveyorSegment(
+                                w.id,
+                                assignedObj.id,
+                                w.assignedConveyorSegment?.segmentIndex ?? 0,
+                                getConveyorSegmentCount(assignedObj),
+                                sVal
+                              )
+                            }
+                            className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+                              isSideActive
+                                ? 'border-blue-600 bg-blue-600 text-white'
+                                : 'border-blue-300 dark:border-blue-800 bg-white dark:bg-neutral-900'
+                            }`}
+                          >
+                            {sVal === 1 ? t.labels.conveyorSideA : t.labels.conveyorSideB}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.positionX} (m)</span>
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={Number(w.position.x.toFixed(2))}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!Number.isFinite(val)) return;
+                        updateWorker(w.id, {
+                          position: { ...w.position, x: Math.max(0.2, Math.min(project.factory.lengthM - 0.2, val)) },
+                          placementSide: 'custom',
+                        });
+                      }}
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.positionZ} (m)</span>
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={Number(w.position.z.toFixed(2))}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        if (!Number.isFinite(val)) return;
+                        updateWorker(w.id, {
+                          position: { ...w.position, z: Math.max(0.2, Math.min(project.factory.widthM - 0.2, val)) },
+                          placementSide: 'custom',
+                        });
+                      }}
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                    />
                   </label>
                 </div>
               )}
@@ -553,29 +608,50 @@ export const WorkforceModule: React.FC = () => {
                             </span>
                           ) : (
                             <div className="flex flex-wrap gap-1">
-                              {assignedHere.map((wk) => (
-                                <span
-                                  key={wk.id}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    selectItem('worker', wk.id);
-                                  }}
-                                  className="inline-flex items-center gap-0.5 rounded bg-blue-600 text-white px-1 py-0.2 text-[9px] font-semibold"
-                                >
-                                  <span>{wk.label}</span>
-                                  <button
-                                    type="button"
+                              {assignedHere.map((wk) => {
+                                const sideVal = wk.assignedConveyorSegment?.side ?? 1;
+                                const flippedSide: 1 | -1 = sideVal === 1 ? -1 : 1;
+                                return (
+                                  <span
+                                    key={wk.id}
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      unassignWorkerTarget(wk.id);
+                                      selectItem('worker', wk.id);
                                     }}
-                                    title={t.workforce.unassignTarget}
-                                    className="hover:text-red-200"
+                                    className="inline-flex items-center gap-0.5 rounded bg-blue-600 text-white px-1 py-0.2 text-[9px] font-semibold"
                                   >
-                                    <X className="w-2.5 h-2.5" />
-                                  </button>
-                                </span>
-                              ))}
+                                    <span>{wk.label}</span>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        assignWorkerToConveyorSegment(
+                                          wk.id,
+                                          conv.id,
+                                          segIdx,
+                                          segCount,
+                                          flippedSide
+                                        );
+                                      }}
+                                      title={t.labels.flipConveyorSide}
+                                      className="rounded bg-white/20 px-1 hover:bg-white/35 font-mono-tabular"
+                                    >
+                                      {sideVal === 1 ? 'A' : 'B'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        unassignWorkerTarget(wk.id);
+                                      }}
+                                      title={t.workforce.unassignTarget}
+                                      className="hover:text-red-200"
+                                    >
+                                      <X className="w-2.5 h-2.5" />
+                                    </button>
+                                  </span>
+                                );
+                              })}
                             </div>
                           )}
                         </div>

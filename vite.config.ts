@@ -5,9 +5,25 @@ import path from 'path';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+function resolveBasePath(): string {
+  const envBase = process.env.VITE_BASE_PATH?.trim();
+  if (envBase) {
+    const withLeading = envBase.startsWith('/') ? envBase : `/${envBase}`;
+    return withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
+  }
+  if (process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_REPOSITORY) {
+    const repo = process.env.GITHUB_REPOSITORY.split('/')[1] || '';
+    if (repo && !repo.endsWith('.github.io')) {
+      return `/${repo}/`;
+    }
+  }
+  return '/';
+}
+
 export default defineConfig(() => {
+  const base = resolveBasePath();
   return {
-    base: '/',
+    base,
     plugins: [
       react(),
       tailwindcss(),
@@ -22,7 +38,7 @@ export default defineConfig(() => {
           'pwa-maskable-512x512.png',
         ],
         manifest: {
-          id: '/',
+          id: base,
           name: 'MK LineSim',
           short_name: 'MK LineSim',
           description:
@@ -31,24 +47,24 @@ export default defineConfig(() => {
           background_color: '#0F172A',
           display: 'standalone',
           orientation: 'any',
-          start_url: '/',
-          scope: '/',
+          start_url: base,
+          scope: base,
           categories: ['productivity', 'utilities', 'engineering'],
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: `${base}pwa-192x192.png`,
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: `${base}pwa-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: `${base}pwa-maskable-512x512.png`,
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
@@ -89,6 +105,9 @@ export default defineConfig(() => {
       },
     },
     server: {
+      host: '0.0.0.0',
+      port: 3000,
+      allowedHosts: true as const,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
