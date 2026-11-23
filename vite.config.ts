@@ -5,22 +5,9 @@ import path from 'path';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig(({ command }) => {
-  const rawBase = process.env.VITE_BASE_PATH?.trim();
-  const base =
-    command === 'serve'
-      ? '/'
-      : rawBase
-      ? rawBase.endsWith('/')
-        ? rawBase
-        : `${rawBase}/`
-      : './';
-
-  const manifestScope = base === './' ? './' : base;
-  const manifestStartUrl = base === './' ? './' : base;
-
+export default defineConfig(() => {
   return {
-    base,
+    base: '/',
     plugins: [
       react(),
       tailwindcss(),
@@ -35,7 +22,7 @@ export default defineConfig(({ command }) => {
           'pwa-maskable-512x512.png',
         ],
         manifest: {
-          id: manifestStartUrl,
+          id: '/',
           name: 'MK LineSim',
           short_name: 'MK LineSim',
           description:
@@ -44,24 +31,24 @@ export default defineConfig(({ command }) => {
           background_color: '#0F172A',
           display: 'standalone',
           orientation: 'any',
-          start_url: manifestStartUrl,
-          scope: manifestScope,
+          start_url: '/',
+          scope: '/',
           categories: ['productivity', 'utilities', 'engineering'],
           icons: [
             {
-              src: 'pwa-192x192.png',
+              src: '/pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: 'pwa-512x512.png',
+              src: '/pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: 'pwa-maskable-512x512.png',
+              src: '/pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',

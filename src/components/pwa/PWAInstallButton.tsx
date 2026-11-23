@@ -53,7 +53,7 @@ export const PWAInstallButton: React.FC = () => {
             <div className="flex items-center justify-between gap-2 pb-3 border-b border-neutral-200 dark:border-neutral-800">
               <div className="flex items-center gap-2.5 min-w-0">
                 <img
-                  src={`${import.meta.env.BASE_URL}pwa-192x192.png`}
+                  src="/pwa-192x192.png"
                   alt="MK LineSim"
                   className="h-9 w-9 rounded-lg shrink-0"
                 />

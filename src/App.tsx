@@ -337,7 +337,7 @@ export default function App() {
               title={`${t.brand} — ${t.appName}`}
             >
               <img
-                src={`${import.meta.env.BASE_URL}favicon.svg`}
+                src="/favicon.svg"
                 alt="MK LineSim"
                 className="h-7 w-7 rounded shadow-xs shrink-0 transition-transform group-hover:scale-105"
               />

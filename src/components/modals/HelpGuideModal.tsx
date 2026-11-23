@@ -45,7 +45,7 @@ export const HelpGuideModal: React.FC<HelpGuideModalProps> = ({ open, onClose })
         {/* Header */}
         <div className="flex items-center justify-between border-b border-neutral-200 dark:border-neutral-800 px-4 sm:px-5 py-3.5">
           <div className="flex items-center gap-2.5">
-            <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="MK LineSim" className="h-6 w-6 rounded" />
+            <img src="/favicon.svg" alt="MK LineSim" className="h-6 w-6 rounded" />
             <div>
               <h2 className="text-sm font-bold text-neutral-950 dark:text-white">
                 {isAr ? `دليل استخدام ${t.appName}` : `${t.appName} Engineering User Guide`}
