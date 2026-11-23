@@ -451,6 +451,7 @@ export interface ProductEntityState {
   containerKind?: 'pallet' | 'carton' | 'pack';
   batchLabel?: string;
   absorbedIntoEntityId?: string;
+  routeStepIndex?: number;
 }
 
 export interface ObjectRuntimeState {

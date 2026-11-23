@@ -232,15 +232,59 @@ export function canAdmitToStageBuffer(
   return queuedCount + inTransitCount < cap;
 }
 
+function resolveServerTiming(
+  stageVal: unknown,
+  stationObj: LayoutObject | undefined,
+  field: 'processingTimeSec' | 'loadingTimeSec' | 'unloadingTimeSec' | 'setupTimeSec',
+  stageObjects?: LayoutObject[]
+): number {
+  const stageNum =
+    stageVal !== undefined && stageVal !== null && Number.isFinite(Number(stageVal))
+      ? Math.max(0, Number(stageVal))
+      : 0;
+  const stHasVal = stageVal !== undefined && stageVal !== null && Number.isFinite(Number(stageVal));
+
+  const servers = (stageObjects || []).filter(
+    (o) => o.kind === 'machine' || o.kind === 'workstation'
+  );
+  const definedVals = new Set<number>();
+  let allZeroOrMissing = true;
+  for (const s of servers) {
+    const raw = s.operations?.[field];
+    if (raw !== undefined && raw !== null && Number.isFinite(Number(raw)) && Number(raw) >= 0) {
+      const v = Number(raw);
+      definedVals.add(v);
+      if (v > 0) allZeroOrMissing = false;
+    }
+  }
+  const heterogeneous = definedVals.size > 1;
+  const objRaw = stationObj?.operations?.[field];
+  const objPresent =
+    objRaw !== undefined && objRaw !== null && Number.isFinite(Number(objRaw)) && Number(objRaw) >= 0;
+  const objNum = objPresent ? Number(objRaw) : stageNum;
+
+  if (heterogeneous) {
+    return objPresent ? objNum : stageNum;
+  }
+  if (allZeroOrMissing && stageNum > 0) {
+    return stageNum;
+  }
+  if (stHasVal && stageNum > 0) {
+    return stageNum;
+  }
+  return objPresent ? objNum : stageNum;
+}
+
 /**
  * Computes setup duration adjusted by operator efficiency when setup is required.
  */
 export function computeStageSetupDurationSec(
   stage: ProductionStage,
   stationObj: LayoutObject | undefined,
-  workers: WorkerDefinition[]
+  workers: WorkerDefinition[],
+  stageObjects?: LayoutObject[]
 ): number {
-  const setup = Math.max(0, Number(stage.setupTimeSec ?? stationObj?.operations.setupTimeSec ?? 0));
+  const setup = resolveServerTiming(stage.setupTimeSec, stationObj, 'setupTimeSec', stageObjects);
   if (setup <= 0) return 0;
   let effSum = 0;
   for (const w of workers) {
@@ -258,23 +302,20 @@ export function computeStageProcessingTimeSec(
   stationObj: LayoutObject | undefined,
   workers: WorkerDefinition[],
   needsSetup: boolean,
-  product?: ProductDefinition
+  product?: ProductDefinition,
+  stageObjects?: LayoutObject[]
 ): number {
   const prodStageOverride = product?.stageProcessingTimes?.[stage.id];
-  const baseProc = Math.max(
-    0,
-    Number(
-      prodStageOverride !== undefined && Number.isFinite(prodStageOverride)
-        ? prodStageOverride
-        : stage.processingTimeSec ?? stationObj?.operations.processingTimeSec ?? 0
-    )
-  );
+  const baseProc =
+    prodStageOverride !== undefined && Number.isFinite(prodStageOverride)
+      ? Math.max(0, Number(prodStageOverride))
+      : resolveServerTiming(stage.processingTimeSec, stationObj, 'processingTimeSec', stageObjects);
   const cycleMult = Math.max(0.05, Number(product?.cycleTimeMultiplier ?? 1));
   const proc = baseProc * cycleMult;
-  const load = Math.max(0, Number(stage.loadingTimeSec ?? stationObj?.operations.loadingTimeSec ?? 0));
-  const unload = Math.max(0, Number(stage.unloadingTimeSec ?? stationObj?.operations.unloadingTimeSec ?? 0));
+  const load = resolveServerTiming(stage.loadingTimeSec, stationObj, 'loadingTimeSec', stageObjects);
+  const unload = resolveServerTiming(stage.unloadingTimeSec, stationObj, 'unloadingTimeSec', stageObjects);
   const setup = needsSetup
-    ? Math.max(0, Number(stage.setupTimeSec ?? stationObj?.operations.setupTimeSec ?? 0))
+    ? resolveServerTiming(stage.setupTimeSec, stationObj, 'setupTimeSec', stageObjects)
     : 0;
 
   let effSum = 0;

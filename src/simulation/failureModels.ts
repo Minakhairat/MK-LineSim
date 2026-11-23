@@ -92,7 +92,18 @@ export function resolveObjectFailureParams(
   const rawShape = Number(obj.operations.weibullShape ?? 1.5);
   const weibullShape = Number.isFinite(rawShape) ? Math.max(0.2, rawShape) : 1.5;
 
-  if (!config.enableBreakdowns || (obj.kind !== 'machine' && obj.kind !== 'workstation')) {
+  const rawAvail = Number(obj.operations.availability ?? 1);
+  const avail = Number.isFinite(rawAvail) ? Math.min(1, Math.max(0, rawAvail)) : 1;
+  const rawMtbfVal = Number(obj.operations.mtbfSec || 0);
+  const rawMttrVal = Number(obj.operations.mttrSec || 0);
+  const rawScaleVal = Number(obj.operations.weibullScaleSec || 0);
+  const isConveyorWithExplicitFailure =
+    obj.kind === 'conveyor' && ((rawMtbfVal > 0 && rawMttrVal > 0) || avail <= 0);
+
+  if (
+    !config.enableBreakdowns ||
+    (obj.kind !== 'machine' && obj.kind !== 'workstation' && !isConveyorWithExplicitFailure)
+  ) {
     return {
       enabled: false,
       failureModel,
@@ -105,12 +116,6 @@ export function resolveObjectFailureParams(
       availability: 1,
     };
   }
-
-  const rawAvail = Number(obj.operations.availability ?? 1);
-  const avail = Number.isFinite(rawAvail) ? Math.min(1, Math.max(0, rawAvail)) : 1;
-  const rawMtbfVal = Number(obj.operations.mtbfSec || 0);
-  const rawMttrVal = Number(obj.operations.mttrSec || 0);
-  const rawScaleVal = Number(obj.operations.weibullScaleSec || 0);
   const rawMtbf = Number.isFinite(rawMtbfVal) ? Math.max(0, rawMtbfVal) : 0;
   const rawMttr = Number.isFinite(rawMttrVal) ? Math.max(0, rawMttrVal) : 0;
   const rawScale = Number.isFinite(rawScaleVal) ? Math.max(0, rawScaleVal) : 0;

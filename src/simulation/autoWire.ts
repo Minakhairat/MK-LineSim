@@ -159,7 +159,7 @@ export function computeFlowchartReachableStages(
  * Synchronizes `product.routeStageIds` and `project.routes` with the active stages.
  * Respects `routingMode === 'manual'` so user-authored flowchart routes are never overwritten.
  */
-export function syncProductRoutes(draft: ProjectData): void {
+export function syncProductRoutes(draft: ProjectData, appendMissingStages = false): void {
   const allStageIds = draft.stages.map((s) => s.id);
   const allStageSet = new Set(allStageIds);
   const updatedRoutes: ProductionRoute[] = [];
@@ -177,7 +177,7 @@ export function syncProductRoutes(draft: ProjectData): void {
       prod.routeStageIds = prod.routeStageIds.filter((id) => allStageSet.has(id));
       if (prod.routeStageIds.length === 0) {
         prod.routeStageIds = [...allStageIds];
-      } else if (allStageIds.length > prod.routeStageIds.length) {
+      } else if (appendMissingStages && allStageIds.length > prod.routeStageIds.length) {
         // Automatically append newly added floor stages in auto-routing mode
         for (const sid of allStageIds) {
           if (!prod.routeStageIds.includes(sid)) {
@@ -293,7 +293,7 @@ export function importFlowchartToSimulationData(project: ProjectData): {
       }
     }
 
-    if (st.bufferCapacity < 1) st.bufferCapacity = 4;
+    if (!Number.isFinite(st.bufferCapacity) || st.bufferCapacity < 0) st.bufferCapacity = 4;
   }
 
   // Ensure active product preserves manual flowchart entry & reachable graph
@@ -607,7 +607,7 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
           stObj.connectedToIds = [];
         }
       }
-      if (st.bufferCapacity < 1) st.bufferCapacity = 4;
+      if (!Number.isFinite(st.bufferCapacity) || st.bufferCapacity < 0) st.bufferCapacity = 4;
     }
   } else {
     // Manual flowchart active: only fix missing conveyor links and sync object arrows from existing stage.successorIds
@@ -620,7 +620,7 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
           st.conveyorObjectId = conv.id;
         }
       }
-      if (st.bufferCapacity < 1) st.bufferCapacity = 4;
+      if (!Number.isFinite(st.bufferCapacity) || st.bufferCapacity < 0) st.bufferCapacity = 4;
     }
     syncStagePredecessorsAndObjectLinks(draft);
   }
@@ -666,7 +666,7 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
     }
   }
 
-  syncProductRoutes(draft);
+  syncProductRoutes(draft, stagesCreated > 0 || forceSequential);
 
   return { updated: draft, stagesCreated, workersCreated };
 }

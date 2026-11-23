@@ -84,6 +84,12 @@ interface ConveyorTransit {
   waypoints: Vec3[];
   cumLengths: number[];
   totalLength: number;
+  transferToken?: number;
+  paused?: boolean;
+  pausedAt?: number;
+  pausedProgress?: number;
+  remainingBeforeStartSec?: number;
+  remainingTransitSec?: number;
 }
 
 interface HeldBatchItem {
@@ -107,7 +113,31 @@ interface PendingWalkJob {
   isConveyorNode: boolean;
   workDurationSec?: number;
   dispatchDelaySec: number;
+  remainingDispatchDelaySec?: number;
   startAt: number;
+}
+
+export interface DesMaterialConservationBreakdown {
+  totalReleasedUnits: number;
+  completedUnits: number;
+  scrappedUnits: number;
+  activeWipUnits: number;
+  waitingInQueueUnits: number;
+  batchBufferUnits: number;
+  underProcessingUnits: number;
+  inTransitUnits: number;
+  blockedAtStationUnits: number;
+  pendingArrivalUnits: number;
+  absorbedChildEntities: number;
+  unaccountedUnits: number;
+}
+
+export interface DesInvariantAuditResult {
+  ok: boolean;
+  clockSec: number;
+  violations: string[];
+  conservation: DesMaterialConservationBreakdown;
+  deadlocks: Array<{ stageIds: string[]; objectIds: string[]; entityIds: string[] }>;
 }
 
 interface ActiveJobRecord {
@@ -987,20 +1017,22 @@ export class DiscreteEventSimulationEngine {
     let delay = 0;
 
     // Enforce global conveyor entry cadence + physical clearance against entities already on the belt
-    for (let pass = 0; pass < 4; pass++) {
+    const maxPasses = Math.max(16, this.conveyorTransits.size + 4);
+    for (let pass = 0; pass < maxPasses; pass++) {
       const candidateTime = now + delay;
       let pushed = false;
 
       for (const tr of this.conveyorTransits.values()) {
         if (tr.conveyorId !== conv.id) continue;
-        if (tr.endTime <= candidateTime + 1e-4) continue;
+        if (!tr.paused && tr.endTime <= candidateTime + 1e-4) continue;
         const otherEnt = this.entities.get(tr.entityId);
         if (!otherEnt) continue;
         const otherSz = this.getEntityPhysicalSize(otherEnt);
         const reqPitch = (sz.length + otherSz.length) / 2 + spacing;
 
         const span = Math.max(0.001, tr.endTime - tr.startTime);
-        const tOther = Math.max(0, Math.min(1, (candidateTime - tr.startTime) / span));
+        const effTime = tr.paused ? (tr.pausedAt ?? tr.startTime) : candidateTime;
+        const tOther = Math.max(0, Math.min(1, (effTime - tr.startTime) / span));
         const { pos: posOther } = this.evalPolylineAt(tr.waypoints, tr.cumLengths, tOther * tr.totalLength);
         const axOther = this.getConveyorAxisMetrics(conv, posOther);
         if (Math.abs(axOther.perpBelt - perpEnter) > convW * 0.75) continue;
@@ -1368,6 +1400,9 @@ export class DiscreteEventSimulationEngine {
         if (st.status !== 'down' && st.status !== 'maintenance') {
           this.preemptPendingWalkJobs(obj.id, now);
           this.preemptActiveJobs(obj.id, now);
+          if (obj.kind === 'conveyor') {
+            this.pauseConveyorTransits(obj.id, now);
+          }
           this.setObjectStatus(obj.id, 'maintenance', now);
         }
       } else if (avail.available) {
@@ -1376,14 +1411,27 @@ export class DiscreteEventSimulationEngine {
           if (st.status !== 'down') {
             this.preemptPendingWalkJobs(obj.id, now);
             this.preemptActiveJobs(obj.id, now);
+            if (obj.kind === 'conveyor') {
+              this.pauseConveyorTransits(obj.id, now);
+            }
             this.setObjectStatus(obj.id, 'down', now);
           }
         } else if (st.status === 'maintenance' || st.status === 'unavailable') {
+          if (obj.kind === 'conveyor') {
+            this.resumeConveyorTransits(obj.id, now);
+          }
           this.resumePausedJobs(obj.id, now);
           this.resumePausedWalkJobs(obj.id, now);
           this.setObjectStatus(obj.id, this.resolveObjectActiveOrIdleStatus(obj.id, now), now);
+          if (obj.kind === 'conveyor') {
+            this.syncRecoveredConveyorState(obj.id, now);
+            this.retryBlockedUpstreamAll(now);
+          }
         } else {
           // Even if machine was already available, a paused job waiting on a worker may now resume
+          if (obj.kind === 'conveyor') {
+            this.resumeConveyorTransits(obj.id, now);
+          }
           if ((this.pausedJobs.get(obj.id)?.length || 0) > 0) {
             this.resumePausedJobs(obj.id, now);
           }
@@ -1392,6 +1440,10 @@ export class DiscreteEventSimulationEngine {
           }
           if ((this.activeJobs.get(obj.id)?.length || 0) === 0 && st.status !== 'down' && st.status !== 'blocked') {
             this.setObjectStatus(obj.id, this.resolveObjectActiveOrIdleStatus(obj.id, now), now);
+          }
+          if (obj.kind === 'conveyor') {
+            this.syncRecoveredConveyorState(obj.id, now);
+            this.retryBlockedUpstreamAll(now);
           }
         }
       } else {
@@ -1404,11 +1456,138 @@ export class DiscreteEventSimulationEngine {
         this.preemptPendingWalkJobs(obj.id, now);
         if (policy === 'stop_immediately') {
           this.preemptActiveJobs(obj.id, now);
+          if (obj.kind === 'conveyor') {
+            this.pauseConveyorTransits(obj.id, now);
+          }
         }
 
         if (st.status !== 'down' && st.status !== 'blocked') {
           this.setObjectStatus(obj.id, this.resolveObjectActiveOrIdleStatus(obj.id, now), now);
         }
+      }
+    }
+  }
+
+  private isConveyorAvailableForTransport(conv: LayoutObject, now: number): boolean {
+    const st = this.objectStates.get(conv.id);
+    if (!st) return false;
+    if (
+      st.status === 'down' ||
+      st.status === 'maintenance' ||
+      st.status === 'unavailable' ||
+      st.status === 'blocked'
+    ) {
+      return false;
+    }
+    const fp = resolveObjectFailureParams(conv, this.project.simulationConfig);
+    if (fp.enabled && fp.availability <= 0) return false;
+    return this.calendarEngine.getObjectAvailabilityAt(conv, now).available;
+  }
+
+  private syncRecoveredConveyorState(convId: string, now: number): void {
+    const cState = this.objectStates.get(convId);
+    const conv = this.objectsMap.get(convId);
+    if (!cState || !conv || conv.kind !== 'conveyor') return;
+    if (
+      cState.status === 'down' ||
+      cState.status === 'maintenance' ||
+      cState.status === 'unavailable' ||
+      cState.status === 'blocked'
+    ) {
+      return;
+    }
+    let hasActiveMovement = (this.activeJobs.get(convId)?.length || 0) > 0;
+    if (!hasActiveMovement) {
+      for (const tr of this.conveyorTransits.values()) {
+        if (tr.conveyorId === convId && !tr.paused && tr.startTime <= now + 1e-6) {
+          hasActiveMovement = true;
+          break;
+        }
+      }
+    }
+    this.stateTracker.transitionConveyor(
+      convId,
+      hasActiveMovement ? 'moving' : 'stopped',
+      now,
+      cState
+    );
+  }
+
+  private pauseConveyorTransits(convId: string, now: number): void {
+    for (const tr of this.conveyorTransits.values()) {
+      if (tr.conveyorId !== convId || tr.paused) continue;
+      if (tr.endTime <= now + 1e-6) continue;
+      if (tr.transferToken !== undefined) {
+        this.validJobTokens.delete(tr.transferToken);
+      }
+      if (now < tr.startTime) {
+        tr.remainingBeforeStartSec = Math.max(0, tr.startTime - now);
+        tr.remainingTransitSec = Math.max(0, tr.endTime - tr.startTime);
+        tr.pausedProgress = 0;
+      } else {
+        tr.remainingBeforeStartSec = 0;
+        tr.remainingTransitSec = Math.max(0, tr.endTime - now);
+        const span = tr.endTime - tr.startTime;
+        tr.pausedProgress =
+          span > 1e-9 ? Math.max(0, Math.min(1, (now - tr.startTime) / span)) : 1;
+      }
+      tr.paused = true;
+      tr.pausedAt = now;
+    }
+  }
+
+  private resumeConveyorTransits(convId: string, now: number): void {
+    const conv = this.objectsMap.get(convId);
+    const cState = this.objectStates.get(convId);
+    if (!conv || !cState || cState.status === 'down') return;
+    if (!this.calendarEngine.getObjectAvailabilityAt(conv, now).available) return;
+
+    let resumedAnyTransfer = false;
+    for (const tr of this.conveyorTransits.values()) {
+      if (tr.conveyorId !== convId || !tr.paused) continue;
+      const totalSpan = Math.max(0, tr.endTime - tr.startTime);
+      const remBefore = tr.remainingBeforeStartSec ?? 0;
+      const remTransit = tr.remainingTransitSec ?? totalSpan;
+      if (remBefore > 1e-9) {
+        tr.startTime = now + remBefore;
+        tr.endTime = tr.startTime + remTransit;
+      } else {
+        const elapsedTransit = Math.max(0, totalSpan - remTransit);
+        tr.startTime = now - elapsedTransit;
+        tr.endTime = now + remTransit;
+      }
+      tr.paused = false;
+      tr.pausedAt = undefined;
+      tr.pausedProgress = undefined;
+      tr.remainingBeforeStartSec = undefined;
+      tr.remainingTransitSec = undefined;
+
+      if (tr.transferToken !== undefined) {
+        const newToken = ++this.jobTokenCounter;
+        this.validJobTokens.add(newToken);
+        tr.transferToken = newToken;
+        resumedAnyTransfer = true;
+        const nextStage = this.stagesMap.get(tr.toStageId);
+        this.schedule(tr.endTime, 'ProductTransferred', {
+          entityId: tr.entityId,
+          stageId: tr.toStageId,
+          objectId: convId,
+          details: `${tr.entityId} resumed conveying to ${nextStage?.name || tr.toStageId}`,
+          payload: { transferConveyorId: convId, token: newToken },
+        });
+      }
+    }
+    if (resumedAnyTransfer) {
+      this.syncRecoveredConveyorState(convId, now);
+    }
+  }
+
+  private retryBlockedUpstreamAll(now: number): void {
+    const stageIds = Array.from(this.blockedOutbox.keys());
+    for (const sid of stageIds) {
+      const outbox = this.blockedOutbox.get(sid);
+      if (outbox && outbox.length > 0) {
+        this.retryBlockedUpstreamForStage(sid, now);
       }
     }
   }
@@ -1425,6 +1604,7 @@ export class DiscreteEventSimulationEngine {
         continue;
       }
       this.validJobTokens.delete(pj.token);
+      pj.remainingDispatchDelaySec = Math.max(0, pj.startAt - now);
       for (const wid of pj.workerIds) {
         const endAt = pj.walkEndByWorker.get(wid) ?? now;
         pj.walkRemainingByWorker.set(wid, Math.max(0, endAt - now));
@@ -1457,6 +1637,7 @@ export class DiscreteEventSimulationEngine {
         continue;
       }
       this.validJobTokens.delete(pj.token);
+      pj.remainingDispatchDelaySec = Math.max(0, pj.startAt - now);
       for (const wid of pj.workerIds) {
         const endAt = pj.walkEndByWorker.get(wid) ?? now;
         pj.walkRemainingByWorker.set(wid, Math.max(0, endAt - now));
@@ -1571,14 +1752,16 @@ export class DiscreteEventSimulationEngine {
           }
         }
       }
+      const remHeadway = Math.max(0, pj.remainingDispatchDelaySec ?? 0);
+      const effectiveDelay = Math.max(maxRemWalk, remHeadway);
       const newToken = ++this.jobTokenCounter;
       pj.token = newToken;
-      pj.startAt = now + maxRemWalk;
+      pj.startAt = now + effectiveDelay;
       this.validJobTokens.add(newToken);
 
       for (const wid of pj.workerIds) {
         const rem = pj.walkRemainingByWorker.get(wid) ?? 0;
-        if (rem > 1e-6 && rem < maxRemWalk - 1e-6) {
+        if (rem > 1e-6 && rem < effectiveDelay - 1e-6) {
           this.schedule(now + rem, 'WorkerAssigned', {
             entityId: pj.entityId,
             stageId: pj.stageId,
@@ -1590,7 +1773,7 @@ export class DiscreteEventSimulationEngine {
         }
       }
 
-      if (maxRemWalk > 1e-6) {
+      if (effectiveDelay > 1e-6) {
         pending.push(pj);
       }
       if (pj.phase === 'setup') {
@@ -1748,12 +1931,18 @@ export class DiscreteEventSimulationEngine {
 
   public stepNextEvent(): boolean {
     if (this.queue.size === 0) {
+      this.updateWipIntegral(this.clockSec);
+      this.updateInterpolatedPositions(this.clockSec);
       this.finalizeAt(this.clockSec);
       return false;
     }
     const next = this.queue.peek()!;
     if (next.timestamp > this.project.simulationConfig.durationSec) {
-      this.finalizeAt(this.project.simulationConfig.durationSec);
+      const horizon = this.project.simulationConfig.durationSec;
+      this.updateWipIntegral(horizon);
+      this.clockSec = horizon;
+      this.updateInterpolatedPositions(horizon);
+      this.finalizeAt(horizon);
       return false;
     }
     const ev = this.queue.pop()!;
@@ -1807,12 +1996,15 @@ export class DiscreteEventSimulationEngine {
       for (const tr of list) {
         const ent = this.entities.get(tr.entityId);
         if (!ent) continue;
-        if (now < tr.startTime - 1e-6) {
+        const effNow = tr.paused ? (tr.pausedAt ?? tr.startTime) : now;
+        if (effNow < tr.startTime - 1e-6) {
           waitingPreEntry.push({ tr, ent });
           continue;
         }
         const span = Math.max(0.001, tr.endTime - tr.startTime);
-        const t = Math.max(0, Math.min(1, (now - tr.startTime) / span));
+        const t = tr.paused && tr.pausedProgress !== undefined
+          ? tr.pausedProgress
+          : Math.max(0, Math.min(1, (effNow - tr.startTime) / span));
         const rawDist = t * tr.totalLength;
         const { pos } = this.evalPolylineAt(tr.waypoints, tr.cumLengths, rawDist);
         const sz = this.getEntityPhysicalSize(ent);
@@ -2106,6 +2298,7 @@ export class DiscreteEventSimulationEngine {
             ev.timestamp,
             false
           );
+          this.tryDispatchAllStages(ev.timestamp);
         }
         break;
       }
@@ -2270,6 +2463,7 @@ export class DiscreteEventSimulationEngine {
         scrapped: false,
         reworkCount: 0,
         currentStageId: firstStageId,
+        routeStepIndex: 0,
         locationKind: 'source',
         worldPosition: startPos,
         waitingTimeSec: 0,
@@ -2362,6 +2556,7 @@ export class DiscreteEventSimulationEngine {
       scrapped: false,
       reworkCount: 0,
       currentStageId: stageId,
+      routeStepIndex: firstChild.routeStepIndex ?? 0,
       locationKind: 'buffer',
       worldPosition: stationObj
         ? {
@@ -2486,6 +2681,7 @@ export class DiscreteEventSimulationEngine {
           scrapped: false,
           reworkCount: 0,
           currentStageId: stageId,
+          routeStepIndex: ent.routeStepIndex ?? 0,
           locationKind: 'buffer',
           worldPosition: stationObj
             ? {
@@ -2567,7 +2763,8 @@ export class DiscreteEventSimulationEngine {
   private findAvailableStation(
     stage: ProductionStage,
     prod?: ProductDefinition,
-    now = this.clockSec
+    now = this.clockSec,
+    ent?: ProductEntityState
   ): LayoutObject | undefined {
     const seen = new Set<string>();
     const uniqueObjs: LayoutObject[] = [];
@@ -2589,7 +2786,17 @@ export class DiscreteEventSimulationEngine {
         ? conveyorNodes
         : uniqueObjs.filter((o) => o.kind !== 'storage' && o.kind !== 'vehicle');
 
-    for (const obj of candidates) {
+    const eligible: Array<{
+      obj: LayoutObject;
+      loadRatio: number;
+      serverCycle: number;
+      processedCount: number;
+      runningTime: number;
+      idx: number;
+    }> = [];
+
+    for (let idx = 0; idx < candidates.length; idx++) {
+      const obj = candidates[idx];
       const st = this.objectStates.get(obj.id);
       if (!st) continue;
       if (st.status === 'down' || st.status === 'blocked' || st.status === 'maintenance') continue;
@@ -2600,14 +2807,35 @@ export class DiscreteEventSimulationEngine {
 
       const cap =
         obj.kind === 'conveyor'
-          ? this.getConveyorPhysicalCapacity(obj, prod)
+          ? this.getConveyorPhysicalCapacity(obj, prod, ent)
           : Math.max(1, obj.operations.capacity);
       if (cap <= 0) continue;
       if (st.busyUnitIds.length < cap) {
-        return obj;
+        const serverCycle =
+          obj.kind === 'conveyor'
+            ? computeConveyorMetrics(obj, prod).traversalTimeSec
+            : computeStageProcessingTimeSec(stage, obj, [], false, prod, uniqueObjs);
+        const runningTime = this.stateTracker.getMachineTotals(obj.id, now).running;
+        eligible.push({
+          obj,
+          loadRatio: st.busyUnitIds.length / cap,
+          serverCycle,
+          processedCount: st.processedCount,
+          runningTime,
+          idx,
+        });
       }
     }
-    return undefined;
+
+    if (eligible.length === 0) return undefined;
+    eligible.sort((a, b) => {
+      if (Math.abs(a.loadRatio - b.loadRatio) > 1e-9) return a.loadRatio - b.loadRatio;
+      if (Math.abs(a.serverCycle - b.serverCycle) > 1e-9) return a.serverCycle - b.serverCycle;
+      if (a.processedCount !== b.processedCount) return a.processedCount - b.processedCount;
+      if (Math.abs(a.runningTime - b.runningTime) > 1e-9) return a.runningTime - b.runningTime;
+      return a.idx - b.idx;
+    });
+    return eligible[0].obj;
   }
 
   private findAvailableWorkers(
@@ -2654,10 +2882,14 @@ export class DiscreteEventSimulationEngine {
     const acc = this.stageAcc.get(stageId);
     if (!stage || !buf || !acc || buf.length === 0) return;
 
+    const stageAssignedObjs = stage.assignedObjectIds
+      .map((oid) => this.objectsMap.get(oid))
+      .filter((o): o is LayoutObject => Boolean(o));
+
     while (buf.length > 0) {
       const nextEnt = this.entities.get(buf[0]);
       const nextProd = nextEnt ? this.productsMap.get(nextEnt.productId) : undefined;
-      const stationObj = this.findAvailableStation(stage, nextProd, now);
+      const stationObj = this.findAvailableStation(stage, nextProd, now, nextEnt);
       if (!stationObj) break;
 
       const hasConveyorWork =
@@ -2706,7 +2938,7 @@ export class DiscreteEventSimulationEngine {
           (stage.setupTimeSec || 0) > 0;
         if (needsSetup) this.setupDoneObjects.add(stationObj.id);
         const convWorkSec = hasConveyorWork
-          ? computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, needsSetup, nextProd)
+          ? computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, needsSetup, nextProd, stageAssignedObjs)
           : 0;
         const activeWorkers = convWorkSec > 0 ? chosenWorkers : [];
 
@@ -2725,7 +2957,7 @@ export class DiscreteEventSimulationEngine {
         const beltTime = convMetrics.traversalTimeSec;
         const totalConvNodeSec = beltTime + convWorkSec;
         const minGapSec = convMetrics.minHeadwaySec;
-        const halfL = Math.max(0.05, beltLen / 2 - Math.min(0.15, beltLen * 0.2));
+        const halfL = beltLen / 2;
         const pEntry: Vec3 = {
           x: stationObj.geometry.position.x - ux * halfL,
           y: stationObj.geometry.dimensions.height,
@@ -2779,8 +3011,16 @@ export class DiscreteEventSimulationEngine {
         }
 
         const lastEntry = this.conveyorLastEntryTime.get(stationObj.id) ?? -Infinity;
-        const mergeClearDelay = this.computeConveyorEntryDelay(stationObj, 0, 0, ent, now);
-        const entryDelay = Math.max(0, lastEntry + minGapSec - now, mergeClearDelay);
+        const earliestEntry = Math.max(now, lastEntry + minGapSec);
+        const entryAx = this.getConveyorAxisMetrics(stationObj, pEntry);
+        const mergeClearDelay = this.computeConveyorEntryDelay(
+          stationObj,
+          entryAx.sBelt,
+          entryAx.perpBelt,
+          ent,
+          earliestEntry
+        );
+        const entryDelay = Math.max(0, earliestEntry + mergeClearDelay - now);
         const dispatchDelay = Math.max(entryDelay, maxWalkTime);
         this.conveyorLastEntryTime.set(stationObj.id, now + dispatchDelay);
 
@@ -2922,8 +3162,8 @@ export class DiscreteEventSimulationEngine {
 
       const needsSetup = !this.setupDoneObjects.has(stationObj.id) && (stage.setupTimeSec || 0) > 0;
       if (needsSetup) this.setupDoneObjects.add(stationObj.id);
-      const setupSec = needsSetup ? computeStageSetupDurationSec(stage, stationObj, chosenWorkers) : 0;
-      const procBase = computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, false, nextProd);
+      const setupSec = needsSetup ? computeStageSetupDurationSec(stage, stationObj, chosenWorkers, stageAssignedObjs) : 0;
+      const procBase = computeStageProcessingTimeSec(stage, stationObj, chosenWorkers, false, nextProd, stageAssignedObjs);
       const startAt = now + maxWalkTime;
 
       let walkToken: number | undefined;
@@ -3296,6 +3536,7 @@ export class DiscreteEventSimulationEngine {
     const obj = this.objectsMap.get(objId);
     const stState = this.objectStates.get(objId);
     if (!obj || !stState) return;
+    if (stState.status === 'down') return;
 
     const failureParams = resolveObjectFailureParams(obj, this.project.simulationConfig);
     if (!failureParams.enabled) return;
@@ -3328,6 +3569,9 @@ export class DiscreteEventSimulationEngine {
 
     this.preemptPendingWalkJobs(objId, ev.timestamp);
     this.preemptActiveJobs(objId, ev.timestamp);
+    if (obj.kind === 'conveyor') {
+      this.pauseConveyorTransits(objId, ev.timestamp);
+    }
     this.setObjectStatus(objId, 'down', ev.timestamp);
 
     const repairDur = sampleRepairDurationSec(failureParams, this.rng);
@@ -3367,15 +3611,24 @@ export class DiscreteEventSimulationEngine {
         return;
       }
       this.setObjectStatus(objId, this.resolveIdleOrStarvedStatus(objId, ev.timestamp), ev.timestamp);
+      if (obj?.kind === 'conveyor') {
+        this.resumeConveyorTransits(objId, ev.timestamp);
+      }
       this.resumePausedJobs(objId, ev.timestamp);
       this.resumePausedWalkJobs(objId, ev.timestamp);
       this.setObjectStatus(objId, this.resolveObjectActiveOrIdleStatus(objId, ev.timestamp), ev.timestamp);
+      if (obj?.kind === 'conveyor') {
+        this.syncRecoveredConveyorState(objId, ev.timestamp);
+      }
     }
 
     const stgId = ev.stageId || obj?.stageId;
     if (stgId) {
       this.retryBlockedUpstreamForStage(stgId, ev.timestamp);
       this.tryStartStage(stgId, ev.timestamp);
+    }
+    if (obj?.kind === 'conveyor') {
+      this.retryBlockedUpstreamAll(ev.timestamp);
     }
     this.tryDispatchAllStages(ev.timestamp);
     this.resumeWaitingSourceIfReady(ev.timestamp);
@@ -3621,11 +3874,24 @@ export class DiscreteEventSimulationEngine {
       nextStageId = this.pickBestBranchStage(branchCandidates);
     } else {
       const routeIds = prod?.routeStageIds || this.project.stages.map((s) => s.id);
-      const currentIdx = routeIds.indexOf(stageId);
-      nextStageId =
-        currentIdx >= 0 && currentIdx + 1 < routeIds.length
-          ? routeIds[currentIdx + 1]
-          : this.pickBestBranchStage(stage.successorIds);
+      const rawStepIdx = ent.routeStepIndex;
+      const currentIdx =
+        rawStepIdx !== undefined &&
+        rawStepIdx >= 0 &&
+        rawStepIdx < routeIds.length &&
+        routeIds[rawStepIdx] === stageId
+          ? rawStepIdx
+          : routeIds.indexOf(stageId);
+      if (currentIdx >= 0) {
+        if (currentIdx + 1 < routeIds.length) {
+          nextStageId = routeIds[currentIdx + 1];
+          ent.routeStepIndex = currentIdx + 1;
+        } else {
+          nextStageId = undefined;
+        }
+      } else {
+        nextStageId = this.pickBestBranchStage(stage.successorIds);
+      }
     }
 
     if (!nextStageId) {
@@ -3687,7 +3953,7 @@ export class DiscreteEventSimulationEngine {
     const toObj = this.objectsMap.get(nextStage.assignedObjectIds[0]);
     const ent = this.entities.get(entId);
     const prod = ent ? this.productsMap.get(ent.productId) : undefined;
-    const freeDestStation = this.findAvailableStation(nextStage, prod, now);
+    const freeDestStation = this.findAvailableStation(nextStage, prod, now, ent);
     const hasFreeDestSlot =
       Boolean(freeDestStation) &&
       (nextStage.requiredWorkers <= 0 ||
@@ -3708,22 +3974,64 @@ export class DiscreteEventSimulationEngine {
     const allConveyors = this.project.layoutObjects.filter(
       (o) => o.kind === 'conveyor' && o.rendering.visible
     );
-    const transferConvCandidate = explicitConveyorStage
-      ? undefined
-      : fromStage?.conveyorObjectId
-      ? this.objectsMap.get(fromStage.conveyorObjectId)
-      : allConveyors.reduce<LayoutObject | undefined>((best, c) => {
-          if (!best) return c;
-          return distance2D(rawStartCheck, c.geometry.position) <
-            distance2D(rawStartCheck, best.geometry.position)
-            ? c
-            : best;
-        }, undefined);
+    const findNearestConveyor = (pos: Vec3, preferredId?: string): LayoutObject | undefined => {
+      if (allConveyors.length === 0) return undefined;
+      if (preferredId) {
+        const pref = this.objectsMap.get(preferredId);
+        if (pref && pref.kind === 'conveyor') return pref;
+      }
+      let best = allConveyors[0];
+      let bestD = Infinity;
+      for (const c of allConveyors) {
+        const d = distance2D(pos, c.geometry.position);
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+      return best;
+    };
 
+    const getConvEnd = (c: LayoutObject, isExit: boolean): Vec3 => {
+      const rad = (c.geometry.rotationDeg * Math.PI) / 180;
+      const dir = c.operations.direction === -1 ? -1 : 1;
+      const halfL = Math.max(0.25, c.geometry.dimensions.length / 2 - 0.15);
+      const sign = isExit ? 1 : -1;
+      return {
+        x: c.geometry.position.x + Math.cos(rad) * dir * halfL * sign,
+        y: c.geometry.dimensions.height,
+        z: c.geometry.position.z + Math.sin(rad) * dir * halfL * sign,
+      };
+    };
+
+    const rawStart: Vec3 =
+      fromObj?.kind === 'conveyor'
+        ? getConvEnd(fromObj, true)
+        : rawStartCheck;
+    const rawEnd: Vec3 =
+      toObj?.kind === 'conveyor'
+        ? getConvEnd(toObj, false)
+        : toObj
+        ? { x: toObj.geometry.position.x, y: toObj.geometry.dimensions.height, z: toObj.geometry.position.z }
+        : rawStart;
+
+    const fromConv = explicitConveyorStage ? undefined : findNearestConveyor(rawStart, fromStage?.conveyorObjectId);
+    const toConv = explicitConveyorStage ? undefined : findNearestConveyor(rawEnd, nextStage.conveyorObjectId);
+
+    const transferConvCandidate = fromConv;
     const transferConvFull =
       transferConvCandidate?.kind === 'conveyor' &&
       (this.conveyorOccupancy.get(transferConvCandidate.id) || 0) >=
         this.getConveyorPhysicalCapacity(transferConvCandidate, prod, ent);
+
+    const transferConvUnavailable =
+      (transferConvCandidate?.kind === 'conveyor' &&
+        (transferConvCandidate.operations.speedMps || 0) > 0 &&
+        !this.isConveyorAvailableForTransport(transferConvCandidate, now)) ||
+      (toConv?.kind === 'conveyor' &&
+        toConv.id !== transferConvCandidate?.id &&
+        (toConv.operations.speedMps || 0) > 0 &&
+        !this.isConveyorAvailableForTransport(toConv, now));
 
     const nextStagingAllowance =
       nextBatchCfg?.batchMode === 'collect_batch' ? nextBatchCfg.batchSize : 1;
@@ -3737,7 +4045,8 @@ export class DiscreteEventSimulationEngine {
         nextStagingAllowance
       ) ||
       nextConvFull ||
-      transferConvFull
+      transferConvFull ||
+      transferConvUnavailable
     ) {
       this.blockedEntitySet.add(entId);
       if (fromObj?.kind === 'conveyor') {
@@ -3757,7 +4066,9 @@ export class DiscreteEventSimulationEngine {
         entityId: entId,
         stageId: nextStageId,
         objectId: fromObjId,
-        details: `${nextStage.name} buffer full (${effectiveBufferUsed}/${nextBufferCap}); upstream blocked`,
+        details: transferConvUnavailable
+          ? `Transfer conveyor unavailable for ${nextStage.name}; upstream blocked`
+          : `${nextStage.name} buffer full (${effectiveBufferUsed}/${nextBufferCap}); upstream blocked`,
       });
       return false;
     }
@@ -3787,24 +4098,6 @@ export class DiscreteEventSimulationEngine {
       return false;
     }
 
-    const findNearestConveyor = (pos: Vec3, preferredId?: string): LayoutObject | undefined => {
-      if (allConveyors.length === 0) return undefined;
-      if (preferredId) {
-        const pref = this.objectsMap.get(preferredId);
-        if (pref && pref.kind === 'conveyor') return pref;
-      }
-      let best = allConveyors[0];
-      let bestD = Infinity;
-      for (const c of allConveyors) {
-        const d = distance2D(pos, c.geometry.position);
-        if (d < bestD) {
-          bestD = d;
-          best = c;
-        }
-      }
-      return best;
-    };
-
     const projectOntoConveyor = (pos: Vec3, conv: LayoutObject): Vec3 => {
       const rad = (conv.geometry.rotationDeg * Math.PI) / 180;
       const ux = Math.cos(rad);
@@ -3819,34 +4112,6 @@ export class DiscreteEventSimulationEngine {
         z: conv.geometry.position.z + uz * proj,
       };
     };
-
-    const getConvEnd = (c: LayoutObject, isExit: boolean): Vec3 => {
-      const rad = (c.geometry.rotationDeg * Math.PI) / 180;
-      const dir = c.operations.direction === -1 ? -1 : 1;
-      const halfL = Math.max(0.25, c.geometry.dimensions.length / 2 - 0.15);
-      const sign = isExit ? 1 : -1;
-      return {
-        x: c.geometry.position.x + Math.cos(rad) * dir * halfL * sign,
-        y: c.geometry.dimensions.height,
-        z: c.geometry.position.z + Math.sin(rad) * dir * halfL * sign,
-      };
-    };
-
-    const rawStart: Vec3 =
-      fromObj?.kind === 'conveyor'
-        ? getConvEnd(fromObj, true)
-        : fromObj
-        ? { x: fromObj.geometry.position.x, y: fromObj.geometry.dimensions.height, z: fromObj.geometry.position.z }
-        : ent.worldPosition;
-    const rawEnd: Vec3 =
-      toObj?.kind === 'conveyor'
-        ? getConvEnd(toObj, false)
-        : toObj
-        ? { x: toObj.geometry.position.x, y: toObj.geometry.dimensions.height, z: toObj.geometry.position.z }
-        : rawStart;
-
-    const fromConv = explicitConveyorStage ? undefined : findNearestConveyor(rawStart, fromStage?.conveyorObjectId);
-    const toConv = explicitConveyorStage ? undefined : findNearestConveyor(rawEnd, nextStage.conveyorObjectId);
 
     let transportTime = 1.6;
     if (fromConv && fromConv.operations.speedMps && fromConv.operations.speedMps > 0) {
@@ -3914,15 +4179,16 @@ export class DiscreteEventSimulationEngine {
       const minGapSec = cMetrics.minHeadwaySec;
       const laneKey = `${fromConv.id}:${fromStageId}`;
       const lastEntry = this.conveyorLastEntryTime.get(laneKey) ?? -Infinity;
+      const earliestEntry = Math.max(now, lastEntry + minGapSec);
       const entryAx = this.getConveyorAxisMetrics(fromConv, pStart);
       const mergeDelay = this.computeConveyorEntryDelay(
         fromConv,
         entryAx.sBelt,
         entryAx.perpBelt,
         ent,
-        now
+        earliestEntry
       );
-      const entryDelay = Math.max(0, lastEntry + minGapSec - now, mergeDelay);
+      const entryDelay = Math.max(0, earliestEntry + mergeDelay - now);
       this.conveyorLastEntryTime.set(laneKey, now + entryDelay);
 
       const fromStageAcc = this.stageAcc.get(fromStageId);
@@ -3935,6 +4201,8 @@ export class DiscreteEventSimulationEngine {
       const startTime = now + entryDelay + batchTransferSec;
       const endTime = startTime + transportTime;
       const unitCount = Math.max(1, ent.batchCount ?? 1);
+      const transferToken = ++this.jobTokenCounter;
+      this.validJobTokens.add(transferToken);
 
       ent.locationKind = 'conveyor';
       ent.currentObjectId = fromConv.id;
@@ -3955,6 +4223,7 @@ export class DiscreteEventSimulationEngine {
         waypoints,
         cumLengths,
         totalLength: totalLen,
+        transferToken,
       });
 
       this.schedule(endTime, 'ProductTransferred', {
@@ -3962,7 +4231,7 @@ export class DiscreteEventSimulationEngine {
         stageId: nextStageId,
         objectId: fromConv.id,
         details: `${entId} conveyed to ${nextStage.name} (${totalLen.toFixed(2)}m @ ${cMetrics.speedMps} m/s = ${transportTime.toFixed(2)}s)`,
-        payload: { transferConveyorId: fromConv.id },
+        payload: { transferConveyorId: fromConv.id, token: transferToken },
       });
       return true;
     }
@@ -3984,6 +4253,11 @@ export class DiscreteEventSimulationEngine {
   }
 
   private handleProductTransferred(ev: InternalEvent): void {
+    const token = ev.payload?.token as number | undefined;
+    if (token !== undefined) {
+      if (!this.validJobTokens.has(token)) return;
+      this.validJobTokens.delete(token);
+    }
     if (!ev.entityId || !ev.stageId) return;
     const prevTransitCount = this.stageInTransitCounts.get(ev.stageId) || 0;
     this.stageInTransitCounts.set(ev.stageId, Math.max(0, prevTransitCount - 1));
@@ -4005,6 +4279,7 @@ export class DiscreteEventSimulationEngine {
         stageId: ev.stageId,
         details: `Transfer conveyor slot freed`,
       });
+      this.retryBlockedUpstreamAll(ev.timestamp);
     }
     this.conveyorTransits.delete(ev.entityId);
     const ent = this.entities.get(ev.entityId);
@@ -4156,6 +4431,397 @@ export class DiscreteEventSimulationEngine {
 
   public getAllEvents(): SimEvent[] {
     return this.eventLog;
+  }
+
+  public auditInvariants(): DesInvariantAuditResult {
+    const violations: string[] = [];
+    const now = this.clockSec;
+
+    // 1. Check queues & occupancy non-negative
+    for (const [sid, buf] of this.stageBuffers.entries()) {
+      if (buf.length < 0) violations.push(`Negative queue length at stage ${sid}`);
+      const inTr = this.stageInTransitCounts.get(sid) || 0;
+      if (inTr < 0) violations.push(`Negative in-transit count (${inTr}) at stage ${sid}`);
+    }
+    for (const [cid, occ] of this.conveyorOccupancy.entries()) {
+      if (occ < 0) violations.push(`Negative conveyor occupancy (${occ}) on ${cid}`);
+    }
+
+    // 2. Check resource capacity overflow, duplicate busy IDs, and unavailable resource processing
+    const entityLocationSets = new Map<string, string[]>();
+    const recordLoc = (entId: string, label: string) => {
+      const list = entityLocationSets.get(entId) || [];
+      list.push(label);
+      entityLocationSets.set(entId, list);
+    };
+
+    for (const [objId, st] of this.objectStates.entries()) {
+      const obj = this.objectsMap.get(objId);
+      const uniqueBusy = new Set(st.busyUnitIds);
+      if (uniqueBusy.size !== st.busyUnitIds.length) {
+        violations.push(`Duplicate entity in busyUnitIds on ${objId}`);
+      }
+      for (const eid of st.busyUnitIds) {
+        recordLoc(eid, obj?.kind === 'conveyor' ? `conveyor_busy:${objId}` : `station_busy:${objId}`);
+      }
+      if (obj && obj.kind !== 'conveyor') {
+        const cap = Math.max(1, obj.operations.capacity);
+        if (st.busyUnitIds.length > cap) {
+          violations.push(`Capacity overflow on ${objId}: ${st.busyUnitIds.length} > ${cap}`);
+        }
+      }
+
+      const activeList = this.activeJobs.get(objId) || [];
+      const nonCompletingActive = activeList.filter((j) => j.expectedEndAt > now + 1e-6);
+      const pendingList = this.pendingWalkJobs.get(objId) || [];
+      if (activeList.length > st.busyUnitIds.length) {
+        violations.push(`Active jobs (${activeList.length}) exceed busyUnitIds (${st.busyUnitIds.length}) on ${objId}`);
+      }
+
+      if (
+        st.status === 'down' ||
+        st.status === 'maintenance' ||
+        st.status === 'unavailable'
+      ) {
+        if (nonCompletingActive.length > 0) {
+          violations.push(`Active processing (${nonCompletingActive.length}) on ${st.status} resource ${objId} at t=${now}`);
+        }
+        if (pendingList.length > 0) {
+          violations.push(`Pending walk jobs (${pendingList.length}) on ${st.status} resource ${objId} at t=${now}`);
+        }
+      }
+      if (obj && nonCompletingActive.length > 0) {
+        const fp = resolveObjectFailureParams(obj, this.project.simulationConfig);
+        if (fp.enabled && fp.availability <= 0) {
+          violations.push(`Processing on zero-availability resource ${objId} at t=${now}`);
+        }
+        const avail = this.calendarEngine.getObjectAvailabilityAt(obj, now);
+        if (!avail.available) {
+          const policy =
+            avail.reason === 'break'
+              ? this.getObjectBreakPolicy(obj)
+              : avail.reason === 'off_shift'
+              ? this.getObjectShiftEndPolicy(obj)
+              : 'stop_immediately';
+          if (policy === 'stop_immediately') {
+            violations.push(`Processing on unavailable resource ${objId} (${avail.reason}) under stop_immediately at t=${now}`);
+          }
+        }
+      }
+    }
+
+    // 3. Check conveyor transits, occupancy parity, and unavailable conveyor transport
+    const convActualCount = new Map<string, number>();
+    for (const [eid, tr] of this.conveyorTransits.entries()) {
+      convActualCount.set(tr.conveyorId, (convActualCount.get(tr.conveyorId) || 0) + 1);
+      const convObj = this.objectsMap.get(tr.conveyorId);
+      const convState = this.objectStates.get(tr.conveyorId);
+      // Only check unavailability if transit wasn't already recorded as conveyorNode busy
+      if (tr.transferToken !== undefined) {
+        recordLoc(eid, `transfer_conveyor:${tr.conveyorId}`);
+      }
+      if (!tr.paused && now >= tr.startTime - 1e-6) {
+        if (
+          convState &&
+          (convState.status === 'down' ||
+            convState.status === 'maintenance' ||
+            convState.status === 'unavailable')
+        ) {
+          violations.push(
+            `Unpaused transportation of ${eid} on ${convState.status} conveyor ${tr.conveyorId} at t=${now}`
+          );
+        }
+        if (convObj) {
+          const fp = resolveObjectFailureParams(convObj, this.project.simulationConfig);
+          if (fp.enabled && fp.availability <= 0) {
+            violations.push(`Transportation on zero-availability conveyor ${tr.conveyorId} at t=${now}`);
+          }
+        }
+      }
+    }
+    for (const [cid, bList] of this.blockedConveyorEntities.entries()) {
+      for (const bid of bList) {
+        if (!this.conveyorTransits.has(bid)) {
+          convActualCount.set(cid, (convActualCount.get(cid) || 0) + 1);
+        }
+      }
+    }
+    for (const [cid, occ] of this.conveyorOccupancy.entries()) {
+      const actual = convActualCount.get(cid) || 0;
+      if (occ !== actual) {
+        violations.push(`Conveyor ${cid} occupancy (${occ}) != actual transit/blocked entities (${actual})`);
+      }
+      const cObj = this.objectsMap.get(cid);
+      if (cObj && occ > 0) {
+        // Max capacity check against smallest carrier/entity on belt (pallet carrierLen >= 1m has fewer slots than 0.5m units)
+        let capMax = this.getConveyorPhysicalCapacity(cObj, this.project.products[0]);
+        for (const tr of this.conveyorTransits.values()) {
+          if (tr.conveyorId === cid) {
+            const trEnt = this.entities.get(tr.entityId);
+            const trProd = trEnt ? this.productsMap.get(trEnt.productId) : undefined;
+            capMax = Math.max(capMax, this.getConveyorPhysicalCapacity(cObj, trProd, trEnt));
+          }
+        }
+        if (occ > capMax) {
+          violations.push(`Conveyor ${cid} occupancy overflow: ${occ} > ${capMax}`);
+        }
+      }
+    }
+
+    // 4. Check stage buffers and batch holders
+    for (const [sid, buf] of this.stageBuffers.entries()) {
+      const seen = new Set<string>();
+      for (const eid of buf) {
+        if (seen.has(eid)) violations.push(`Duplicate entity ${eid} in queue for stage ${sid}`);
+        seen.add(eid);
+        recordLoc(eid, `queue:${sid}`);
+      }
+    }
+    for (const [sid, holder] of this.stageBatchHolders.entries()) {
+      const seen = new Set<string>();
+      for (const h of holder) {
+        if (seen.has(h.entityId)) violations.push(`Duplicate entity ${h.entityId} in batch holder for stage ${sid}`);
+        seen.add(h.entityId);
+        recordLoc(h.entityId, `batch_holder:${sid}`);
+      }
+    }
+
+    // 5. Check worker conflict / double-allocation invariant
+    const workerJobs = new Map<string, string[]>();
+    const addWorkerJob = (wid: string, tag: string) => {
+      const list = workerJobs.get(wid) || [];
+      list.push(tag);
+      workerJobs.set(wid, list);
+    };
+    for (const [objId, jobs] of this.activeJobs.entries()) {
+      for (const j of jobs) {
+        for (const wid of j.workerIds) addWorkerJob(wid, `active:${objId}:${j.entityId}`);
+      }
+    }
+    for (const [objId, pJobs] of this.pendingWalkJobs.entries()) {
+      for (const pj of pJobs) {
+        for (const wid of pj.workerIds) addWorkerJob(wid, `pending_walk:${objId}:${pj.entityId}`);
+      }
+    }
+    for (const [objId, jobs] of this.pausedJobs.entries()) {
+      for (const j of jobs) {
+        for (const wid of j.workerIds) addWorkerJob(wid, `paused:${objId}:${j.entityId}`);
+      }
+    }
+    for (const [objId, pJobs] of this.pausedWalkJobs.entries()) {
+      for (const pj of pJobs) {
+        for (const wid of pj.workerIds) addWorkerJob(wid, `paused_walk:${objId}:${pj.entityId}`);
+      }
+    }
+    for (const [wid, tags] of workerJobs.entries()) {
+      if (tags.length > 1) {
+        violations.push(`Worker ${wid} allocated to simultaneous conflicting jobs: ${tags.join(', ')}`);
+      }
+    }
+    for (const [wid, allocEnt] of this.workerAllocatedEntity.entries()) {
+      const tags = workerJobs.get(wid) || [];
+      const entityHeldInStationBusy =
+        allocEnt !== null &&
+        Array.from(this.objectStates.values()).some((st) => st.busyUnitIds.includes(allocEnt));
+      if (allocEnt !== null && tags.length === 0 && !entityHeldInStationBusy) {
+        violations.push(`Worker ${wid} still marked allocated to ${allocEnt} with no active/paused/dispatched job`);
+      }
+      if (allocEnt === null && tags.length > 0) {
+        violations.push(`Worker ${wid} has job allocation (${tags.join(', ')}) but workerAllocatedEntity is null`);
+      }
+    }
+
+    // 6. Full Material Conservation & No-Double-Completion Check
+    let completedUnits = 0;
+    let scrappedUnits = 0;
+    let activeWipUnits = 0;
+    let waitingInQueueUnits = 0;
+    let batchBufferUnits = 0;
+    let underProcessingUnits = 0;
+    let inTransitUnits = 0;
+    let blockedAtStationUnits = 0;
+    let pendingArrivalUnits = 0;
+    let absorbedChildEntities = 0;
+    const completedSeen = new Set<string>();
+    const activeWipSeen = new Set<string>();
+
+    for (const ent of this.entities.values()) {
+      if (ent.absorbedIntoEntityId) {
+        absorbedChildEntities++;
+        if (this.activeEntities.has(ent.id)) {
+          violations.push(`Absorbed entity ${ent.id} still present in activeEntities`);
+        }
+        const locs = entityLocationSets.get(ent.id);
+        if (locs && locs.length > 0) {
+          violations.push(`Absorbed entity ${ent.id} still occupies container: ${locs.join(', ')}`);
+        }
+        continue;
+      }
+
+      const units = Math.max(1, ent.batchCount ?? 1);
+      if (ent.completedAt !== undefined) {
+        if (completedSeen.has(ent.id)) {
+          violations.push(`Completed entity ${ent.id} counted twice`);
+        }
+        completedSeen.add(ent.id);
+        if (ent.scrapped) {
+          violations.push(`Entity ${ent.id} is both completed and scrapped`);
+        }
+        if (ent.completedAt < ent.createdAt - 1e-9) {
+          violations.push(`Entity ${ent.id} completedAt (${ent.completedAt}) < createdAt (${ent.createdAt})`);
+        }
+        if (this.activeEntities.has(ent.id)) {
+          violations.push(`Completed entity ${ent.id} still in activeEntities`);
+        }
+        const locs = entityLocationSets.get(ent.id);
+        if (locs && locs.length > 0) {
+          violations.push(`Completed entity ${ent.id} still in container: ${locs.join(', ')}`);
+        }
+        completedUnits += units;
+        continue;
+      }
+
+      if (ent.scrapped) {
+        if (this.activeEntities.has(ent.id)) {
+          violations.push(`Scrapped entity ${ent.id} still in activeEntities`);
+        }
+        const locs = entityLocationSets.get(ent.id);
+        if (locs && locs.length > 0) {
+          violations.push(`Scrapped entity ${ent.id} still in container: ${locs.join(', ')}`);
+        }
+        scrappedUnits += units;
+        continue;
+      }
+
+      // Active WIP entity
+      activeWipSeen.add(ent.id);
+      activeWipUnits += units;
+      if (!this.activeEntities.has(ent.id)) {
+        violations.push(`Active entity ${ent.id} missing from activeEntities`);
+      }
+
+      const locs = entityLocationSets.get(ent.id) || [];
+      if (locs.length > 1) {
+        violations.push(`Entity ${ent.id} in multiple places simultaneously: ${locs.join(', ')}`);
+      }
+      if (locs.length === 1) {
+        const loc = locs[0];
+        if (loc.startsWith('queue:')) {
+          waitingInQueueUnits += units;
+        } else if (loc.startsWith('batch_holder:')) {
+          batchBufferUnits += units;
+        } else if (loc.startsWith('transfer_conveyor:') || loc.startsWith('conveyor_busy:')) {
+          inTransitUnits += units;
+        } else if (loc.startsWith('station_busy:')) {
+          if (this.blockedEntitySet.has(ent.id)) {
+            blockedAtStationUnits += units;
+          } else {
+            underProcessingUnits += units;
+          }
+        }
+      } else {
+        // In immediate zero-duration handoff or batch-transferring between stages (ProductArrived/ProductTransferred in queue)
+        pendingArrivalUnits += units;
+      }
+    }
+
+    for (const [eid, ent] of this.activeEntities.entries()) {
+      if (!activeWipSeen.has(eid)) {
+        violations.push(`activeEntities contains stale entry ${eid} (completed=${ent.completedAt}, scrapped=${ent.scrapped}, absorbed=${ent.absorbedIntoEntityId})`);
+      }
+    }
+
+    if (completedUnits !== this.completedCount) {
+      violations.push(`completedUnits (${completedUnits}) !== completedCount (${this.completedCount})`);
+    }
+    if (scrappedUnits !== this.scrappedCount) {
+      violations.push(`scrappedUnits (${scrappedUnits}) !== scrappedCount (${this.scrappedCount})`);
+    }
+    const accountedTotal = completedUnits + scrappedUnits + activeWipUnits;
+    const unaccountedUnits = this.totalArrived - accountedTotal;
+    if (unaccountedUnits !== 0) {
+      violations.push(
+        `Material conservation violated: released=${this.totalArrived}, completed=${completedUnits}, scrapped=${scrappedUnits}, wip=${activeWipUnits}, diff=${unaccountedUnits}`
+      );
+    }
+
+    let prodRelSum = 0;
+    let prodCompSum = 0;
+    let prodScrapSum = 0;
+    for (const v of this.productReleasedCount.values()) prodRelSum += v;
+    for (const v of this.productCompletedCount.values()) prodCompSum += v;
+    for (const v of this.productScrappedCount.values()) prodScrapSum += v;
+    if (prodRelSum !== this.totalArrived) {
+      violations.push(`Per-product released sum (${prodRelSum}) !== totalArrived (${this.totalArrived})`);
+    }
+    if (prodCompSum !== this.completedCount) {
+      violations.push(`Per-product completed sum (${prodCompSum}) !== completedCount (${this.completedCount})`);
+    }
+    if (prodScrapSum !== this.scrappedCount) {
+      violations.push(`Per-product scrapped sum (${prodScrapSum}) !== scrappedCount (${this.scrappedCount})`);
+    }
+
+    // 7. Routing / circular wait deadlock detection across blockedOutbox
+    const waitGraph = new Map<string, { nextStageId: string; objectId: string; entityId: string }>();
+    for (const [nextSid, items] of this.blockedOutbox.entries()) {
+      for (const item of items) {
+        const fromStage = Array.from(this.stagesMap.values()).find((s) =>
+          s.assignedObjectIds.includes(item.objectId)
+        );
+        if (fromStage && !waitGraph.has(fromStage.id)) {
+          waitGraph.set(fromStage.id, {
+            nextStageId: nextSid,
+            objectId: item.objectId,
+            entityId: item.entityId,
+          });
+        }
+      }
+    }
+    const deadlocks: Array<{ stageIds: string[]; objectIds: string[]; entityIds: string[] }> = [];
+    const seenCycleKeys = new Set<string>();
+    for (const startSid of waitGraph.keys()) {
+      const path: string[] = [];
+      const visitedIdx = new Map<string, number>();
+      let cur: string | undefined = startSid;
+      while (cur && !visitedIdx.has(cur)) {
+        visitedIdx.set(cur, path.length);
+        path.push(cur);
+        cur = waitGraph.get(cur)?.nextStageId;
+      }
+      if (cur && visitedIdx.has(cur)) {
+        const cycle = path.slice(visitedIdx.get(cur)!);
+        const key = [...cycle].sort().join('|');
+        if (!seenCycleKeys.has(key)) {
+          seenCycleKeys.add(key);
+          deadlocks.push({
+            stageIds: cycle,
+            objectIds: cycle.map((s) => waitGraph.get(s)!.objectId),
+            entityIds: cycle.map((s) => waitGraph.get(s)!.entityId),
+          });
+        }
+      }
+    }
+
+    return {
+      ok: violations.length === 0,
+      clockSec: now,
+      violations,
+      conservation: {
+        totalReleasedUnits: this.totalArrived,
+        completedUnits,
+        scrappedUnits,
+        activeWipUnits,
+        waitingInQueueUnits,
+        batchBufferUnits,
+        underProcessingUnits: underProcessingUnits + blockedAtStationUnits,
+        inTransitUnits,
+        blockedAtStationUnits,
+        pendingArrivalUnits,
+        absorbedChildEntities,
+        unaccountedUnits,
+      },
+      deadlocks,
+    };
   }
 
   public buildResult(): SimulationResult {
