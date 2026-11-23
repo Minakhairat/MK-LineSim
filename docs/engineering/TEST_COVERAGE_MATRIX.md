@@ -1,8 +1,8 @@
 # MK LineSim — Test Coverage Matrix & Verification Gaps
 
-**Program Phase:** Phase 0, 0.1, 0.2, 0.2.1 & 0.2.2 (Engineering Baseline, Evidence Reconciliation & Lockfile/CI Hardening)  
+**Program Phase:** Phase 0, 0.1, 0.2, 0.2.2 & 0.2.3 (Engineering Baseline, Lockfile Reconciliation & CI Evidence Closure)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
-**Execution Evidence:** `npm test` (`tsx --test tests/*.test.ts`) -> **`57/57` passed, `0` failed, `0` skipped (`3436.99 ms` post-`npm ci`, exit code `0`)**.
+**Execution Evidence:** Local `npm test` (`tsx --test tests/*.test.ts`, Phase 0.2.2) -> **`57/57` passed, `0` failed, `0` skipped (`4051.55 ms`, exit code `0`)**; Remote GitHub Actions `Deploy MK LineSim to GitHub Pages` Run `#17` (commit `a36d723`, `main`) -> **`Success` (`47s`)**.
 
 ---
 
@@ -68,14 +68,14 @@
 | **9. Web Worker Execution (`simWorker.ts`)** | Low (`1` fallback test) | `Missing verification` | `workerClient.ts` executes synchronous fallback in Node (`Worker === undefined`); real Web Worker sliced `advanceTo()` (20 slices + progress + cancellation + `validateProject` gate) has **zero** automated verification against `runToCompletion()`. |
 | **10. Procedural Layout, Exports & Storage** | None (`0` tests) | `Missing verification` | Zero unit/integration tests for `layoutGenerator.ts`, `indexedDb.ts` (save/load/corruption handling), `cadExporter.ts` (DXF output), `reportExporter.ts` (PDF generation), or `mediaCapture.ts`. |
 | **11. UI, Store (`useAppStore`) & E2E Browser** | None (`0` tests) | `Missing verification` | Zero automated React/DOM component tests, Zustand store action tests, 2D SVG / 3D Three.js viewport rendering tests, or Playwright/Cypress browser E2E tests. |
-| **12. CI Verification Gates** | Workspace `npm ci --legacy-peer-deps`, `lint`, `test`, `build` pass; exported ZIP & remote CI runner unverified | `Verified behavior` (workspace config & local parity) / `Missing verification` (exported ZIP & remote GitHub Actions run) | Phase 0.2 hardened `/.github/workflows/deploy.yml` to enforce `npm ci --legacy-peer-deps`, `npm run lint`, and `npm test` before `npm run build` and Pages deployment. Post-0.2.2 exported ZIP inspection (`bun.lock` absence in archive) and live GitHub Actions execution (`ubuntu-latest`, Node `"20"`) could not be performed inside `/app/applet`. |
+| **12. CI Verification Gates** | Local `npm ci --legacy-peer-deps`, `lint`, `test` (`57/57`), `build` & GitHub Run `#17` (`47s`) pass | `Verified behavior` (CI pipeline, Run `#17`, & archive) / `Missing verification` (browser/E2E & simulation validity) | `/.github/workflows/deploy.yml` enforces `npm ci --legacy-peer-deps`, `npm run lint`, and `npm test` before `npm run build` and Pages deploy. Verified via GitHub Actions Run `#17` (commit `a36d723`, `main`, `"Delete bun.lock"`, `Success`, `47s`) and independent Phase 0.2.3 archive inspection (`no bun.lock`, `package-lock.json` present). CI pass covers build/types/`57` unit tests only and does not close domains 1–11 gaps. |
 
 ---
 
-## 4. CI Verification Stages & Scope Boundaries (Phase 0.2)
+## 4. CI Verification Stages & Scope Boundaries (Phase 0.2 & 0.2.3)
 
 1. **Deterministic Dependency Install (`npm ci --legacy-peer-deps`)**:
-   - Consumes `/package-lock.json` (`lockfileVersion: 3`, `652` entries matching `package.json`) with the unpinned `|| npm install` fallback removed.
+   - Consumes `/package-lock.json` (`lockfileVersion: 3`, `652` entries matching `package.json`, SHA-256 `a38a71a4f7b7d1690f40c177835be1cb2d80f9a6dde9e092d756d978d2d5e16b`) with the unpinned `|| npm install` fallback removed.
    - `--legacy-peer-deps` is retained solely because `vite@8.3.8` declares `peerOptional esbuild@"^0.27.0 || ^0.28.0"` against `devDependencies.esbuild: "^0.25.0"` in `package.json`.
 2. **Static TypeScript Check (`npm run lint` -> `tsc --noEmit`)**:
    - Verifies compile-time TypeScript consistency across `src/` and `tests/` (`exit 0`).
@@ -85,5 +85,8 @@
    - **Boundary:** Passing `npm test` verifies existing software regression checks only; it does **not** establish complete physical/real-world simulation validity, Web Worker sliced execution parity (`simWorker.ts`), DOM/UI component behavior, or WebGL/CAD rendering.
 4. **Production Bundle & PWA Verification (`npm run build` -> `vite build`)**:
    - Verifies Vite client + worker bundling and `vite-plugin-pwa` Service Worker generation (`dist/sw.js`).
-5. **Automated Browser / E2E Testing**:
-   - Remains **`0` tests (`Missing verification`)**; UI and browser workflows are not covered by CI gates.
+5. **Remote GitHub Actions & Archive Closure (Phase 0.2.3 Evidence)**:
+   - GitHub Actions workflow `Deploy MK LineSim to GitHub Pages` Run `#17` (branch `main`, commit `a36d723`, `"Delete bun.lock"`) completed with status **`Success` in `47 seconds`**, running steps 1–4 above followed by GitHub Pages deployment gated on the build job.
+   - Independent Phase 0.2.3 inspection of the exported project archive confirmed zero `bun.lock` files alongside `package-lock.json`, `.github/workflows/deploy.yml`, and `docs/engineering/`.
+6. **Automated Browser / E2E Testing**:
+   - Remains **`0` tests (`Missing verification`)**; UI, Zustand store actions, `simWorker.ts` real Web Worker execution, CAD/PDF exports, and browser workflows are not covered by CI gates.
