@@ -1,6 +1,6 @@
-# MK LineSim — Phase 0: Engineering Baseline & Repository Audit
+# MK LineSim — Phase 0 & 0.1: Engineering Baseline, Repository Audit & Evidence Reconciliation
 
-**Program Phase:** Phase 0 (Read-Only Engineering Baseline & Repository Audit)  
+**Program Phase:** Phase 0 / Phase 0.1 (Read-Only Engineering Baseline Audit & Evidence Reconciliation)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
 **Stated Baseline Commit:** `dc8f6557912bf2fb8c1a78437ab331f485aea2d8`  
 **Audit Date:** 2026-11-23  
@@ -8,24 +8,25 @@
 
 ---
 
-## 1. Baseline Identity, Version & Repository Provenance (Task 1)
+## 1. Baseline Identity, Version & Repository Provenance (Task 1 & Phase 0.1)
 
 | Attribute | Observed Value | Source / Command Evidence | Classification |
 | :--- | :--- | :--- | :--- |
 | Stated Baseline Commit | `dc8f6557912bf2fb8c1a78437ab331f485aea2d8` | User prompt baseline specification | `Design assumption` |
-| Local `.git` Directory Status | `fatal: not a git repository (or any of the parent directories): .git` | `git rev-parse HEAD` in `/app/applet` | `Potential defect` — Workspace snapshot lacks `.git` metadata, so commit hash cannot be locally re-verified via `git` CLI |
+| Local `.git` Directory Status | `fatal: not a git repository (or any of the parent directories): .git` | `git rev-parse HEAD` in `/app/applet` | `Potential defect` — AI Studio workspace lacks `.git` metadata, so commit hash cannot be locally re-verified via `git` CLI |
 | Package Name (`package.json`) | `"react-example"` | `/package.json:2` | `Confirmed defect` — Placeholder package name diverges from application branding |
 | Package Version (`package.json`) | `"0.0.0"` | `/package.json:4` | `Potential defect` — Semantic version is unbumped (`0.0.0`) |
 | App Metadata (`metadata.json`) | `name: "MK LineSim"` | `/metadata.json` | `Verified behavior` |
 | Node.js Runtime | `v22.23.2` | `node -v` | `Verified behavior` |
 | npm CLI Version | `10.9.8` | `npm -v` | `Verified behavior` |
-| Lockfiles Present | `bun.lock` (`166,801` bytes); **`package-lock.json` missing** | `ls -la package-lock.json bun.lock` | `Confirmed defect` — CI uses `npm` without `package-lock.json` |
+| `bun.lock` Status (Workspace `/app/applet`) | **Present** (`166,801` bytes, `lockfileVersion: 2`, `configVersion: 1`, `Nov 23 09:22`) | `ls -la bun.lock` and `node` JSONC parse in `/app/applet` | `Verified behavior` (also attested in supplied archive) |
+| `package-lock.json` Status | **Absent in AI Studio workspace `/app/applet`** (`No such file or directory`; no `node_modules/.package-lock.json`, no `.zip` mounted); **attested present in upstream GitHub repo & supplied ZIP archive** | `ls -la`, `find /app -maxdepth 3 -name "*package-lock*"`, and Phase 0.1 user correction | `Missing verification` — Present per repo/archive attestation, but omitted from `/app/applet` import and therefore not locally inspectable |
 
 ---
 
-## 2. Build, TypeScript, Dependency & CI Inspection (Tasks 9 & 10)
+## 2. Build, TypeScript, Dependency & CI Inspection (Tasks 9, 10 & Phase 0.1)
 
-### 2.1 `package.json`, Dependencies & Unused Packages
+### 2.1 `package.json`, Dependency Comparison & Unused Packages
 - **Scripts (`/package.json:6-13`)**:
   - `dev`: `vite --port=3000 --host=0.0.0.0`
   - `build`: `vite build`
@@ -34,9 +35,15 @@
   - `lint`: `tsc --noEmit`
   - `test`: `tsx --test tests/*.test.ts`
 - **Unused / Orphaned Dependencies (`/package.json:15,21,32`)** [`Potential defect`]: `@google/genai` (`^2.4.0`), `express` (`^4.21.2`), and `@types/express` (`^4.17.21`) are declared in `package.json`, and `metadata.json` lists `MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API`, yet `grep -rnE "@google/genai|express"` across `src/` and `tests/` returned zero usages and no `server.ts` exists.
-- **Lockfile / Toolchain Mismatch (`/package.json`, `/bun.lock`, `/.github/workflows/deploy.yml:28-33`)** [`Confirmed defect`]:
-  - `bun.lock` (`166,801` bytes) is checked in, while `package-lock.json` is absent.
-  - `.github/workflows/deploy.yml:28-33` checks `if [ -f package-lock.json ]` and falls back to `npm install --legacy-peer-deps`, causing unpinned dependency resolution on Node 20 in GitHub Actions.
+- **`package.json` vs. `bun.lock` Comparison (`/package.json`, `/bun.lock`)** [`Verified behavior`]:
+  - `package.json` declares **25 packages** (`15` `dependencies` + `10` `devDependencies`).
+  - `bun.lock` (`lockfileVersion: 2`, `configVersion: 1`) declares the exact same **25** semver ranges under `workspaces[""]` (`0` mismatches) and locks **647** total transitive/workspace packages:
+    - Key resolved runtime packages in `bun.lock`: `@google/genai@2.32.0`, `@tailwindcss/vite@4.3.5`, `@types/three@0.187.0`, `@vitejs/plugin-react@6.3.0`, `chart.js@4.6.1`, `dotenv@17.4.2`, `express@4.22.3`, `jspdf@4.2.1`, `lucide-react@0.546.0`, `motion@12.43.0`, `react@19.3.1`, `react-dom@19.3.1`, `three@0.187.0`, `vite@8.3.8`, `zustand@5.1.0`.
+    - Key resolved dev packages in `bun.lock`: `@types/express@4.17.25`, `@types/node@22.20.5`, `@types/react@19.3.0`, `@types/react-dom@19.3.0`, `autoprefixer@10.7.0`, `esbuild@0.25.12`, `tailwindcss@4.3.5`, `tsx@4.23.15`, `typescript@7.0.2`, `vite-plugin-pwa@2.0.0`.
+- **`package.json` vs. `package-lock.json` Comparison** [`Missing verification`]:
+  - Because `package-lock.json` is not present in `/app/applet` (and no `.zip` archive or `.git` checkout is mounted locally), `package-lock.json` integrity, resolved npm versions, and parity with `bun.lock` could **not** be independently verified in this workspace.
+- **Dual-Lockfile Maintenance Risk (`package-lock.json` + `bun.lock`)** [`Potential defect`]:
+  - Maintaining both `package-lock.json` (used by `npm` / GitHub Actions) and `bun.lock` (used by Bun / AI Studio container bootstrap) risks silent version divergence if a dependency change updates only one lockfile.
 
 ### 2.2 TypeScript Configuration (`/tsconfig.json`)
 - **Non-Strict Compiler Settings (`/tsconfig.json:1-28`)** [`Design assumption` / `Potential defect`]:
@@ -51,9 +58,22 @@
   - Emits main chunk size warning: `dist/assets/index-CVu68wF1.js` is `2,463.77 kB` (`gzip: 660.84 kB`).
 
 ### 2.4 GitHub Actions Workflow (`/.github/workflows/deploy.yml`)
+- **Package Manager Used in CI (`/.github/workflows/deploy.yml:23-40`)** [`Verified behavior`]:
+  - Workflow sets up Node.js `"20"` (`actions/setup-node@v4`) and uses **`npm`** exclusively (`npm ci`, `npm install`, `npm run build`). It does **not** install or invoke `bun` and ignores `bun.lock`.
+- **`npm ci` Fallback Behavior (`/.github/workflows/deploy.yml:28-33`)** [`Potential defect`]:
+  ```bash
+  if [ -f package-lock.json ]; then
+    npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+  else
+    npm install --legacy-peer-deps
+  fi
+  ```
+  - **When `package-lock.json` is present** (upstream GitHub repository / archive state): executes `npm ci --legacy-peer-deps`. However, if `npm ci` fails (e.g., lockfile out of sync with `package.json`, peer conflict, or integrity mismatch), the `|| npm install --legacy-peer-deps` fallback **catches the non-zero exit code and runs an unpinned `npm install`** instead of failing the workflow.
+  - **When `package-lock.json` is absent** (e.g., workspace export missing `package-lock.json`): executes `npm install --legacy-peer-deps` directly.
 - **Missing Verification Gates (`/.github/workflows/deploy.yml:17-55`)** [`Confirmed defect`]:
-  - `deploy.yml` runs on push to `main` (Node `"20"`) and executes only `npm install --legacy-peer-deps` (`lines 28-33`) and `npm run build` (`line 40`), followed by GitHub Pages upload/deploy.
+  - `deploy.yml` executes only dependency installation and `npm run build` (`line 40`) before GitHub Pages upload/deploy.
   - **`npm test` and `npm run lint` are completely absent from CI**, allowing failing tests or TypeScript errors to reach production deployment undetected.
+  - *Note*: Live GitHub Actions runner execution was not triggered or observed in this local audit (`Missing verification`).
 
 ### 2.5 Reproducible Commands & Observed Results (Task 10)
 
@@ -61,7 +81,7 @@ All commands below were actually executed in `/app/applet` during this audit:
 
 | Step | Reproducible Command | Exit Code | Actual Observed Output Summary |
 | :--- | :--- | :--- | :--- |
-| Dependency Install | `npm install --legacy-peer-deps` | N/A (pre-installed in workspace; matches `deploy.yml:32`) | Workspace `node_modules` pre-populated; `package-lock.json` absent (`bun.lock` present). |
+| Dependency Install | Workspace pre-installed (`bun.lock` + `node_modules/` present); CI uses `npm ci --legacy-peer-deps \|\| npm install --legacy-peer-deps` | N/A (not re-run to keep `node_modules` unmodified) | `bun.lock` (`166,801` bytes, `647` packages) matches `package.json`; `package-lock.json` absent in `/app/applet`. |
 | Unit & Regression Tests | `npm test` (`tsx --test tests/*.test.ts`) | `0` (`TEST_EXIT=0`) | TAP output: `57` tests, `0` suites, `57` pass, `0` fail, `0` cancelled/skipped/todo; total duration `3802.94 ms`. |
 | Type Checking | `npm run lint` (`tsc --noEmit`) | `0` (`LINT_EXIT=0`) | Clean pass with zero diagnostics (`strict: false`). |
 | Production Build | `npm run build` (`vite build`) | `0` (`BUILD_EXIT=0`) | `1919` modules transformed in `1.61s`; PWA precache `21` entries (`3031.51 KiB`); generates `dist/sw.js` & `dist/workbox-7e5eb42b.js`; warns on `__dirname` (`vite.config.ts:93`) and chunk size (`dist/assets/index-CVu68wF1.js` `2,463.77 kB`). |
@@ -144,7 +164,7 @@ Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813
 
 ### 3.5 Test Suite (`/tests/*.test.ts`)
 
-14 test files (`3,646` `wc -l` total, `57` top-level `test()` cases executed by `node`/`tsx --test`; full classification in `TEST_COVERAGE_MATRIX.md`):
+14 test files (`3,610` `wc -l` total across `tests/*.test.ts`; combined `src/` + `tests/` = `36,813` lines, `57` top-level `test()` cases executed by `node`/`tsx --test`; full classification in `TEST_COVERAGE_MATRIX.md`):
 - `benchmarksAndRegression.test.ts` (52 lines, 2 tests)
 - `capacityEngine.regression.test.ts` (172 lines, 2 tests)
 - `conveyorAndOee.test.ts` (429 lines, 6 tests)
@@ -159,6 +179,21 @@ Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813
 - `resourceSpecificCalendar.test.ts` (244 lines, 3 tests)
 - `resourceStateAccounting.test.ts` (184 lines, 2 tests)
 - `resourceStateTracker.test.ts` (86 lines, 3 tests)
+
+### 3.6 Repository Files vs. AI Studio Execution Workspace Provenance (Phase 0.1)
+
+| Path / Artifact | Present in `/app/applet`? | Timestamp / Size in Workspace | Origin / Classification |
+| :--- | :---: | :--- | :--- |
+| `.github/workflows/deploy.yml`, `.gitignore`, `LICENSE`, `README.md`, `index.html`, `metadata.json`, `package.json`, `tsconfig.json`, `vite.config.ts` | Yes | `Nov 23 09:21` | Repository source & build configuration files imported into workspace |
+| `public/` (6 icon assets), `src/` (50 files, `33,203` lines), `tests/` (14 files, `3,610` lines) | Yes | `Nov 23 09:21` | Repository application, engineering, simulation, and test code |
+| `dev-dist/sw.js`, `dev-dist/workbox-7e5eb42b.js` | Yes | Initial tree `09:21`; updated `10:42` (`2,820` B / `129,442` B) | Generated by `vite-plugin-pwa` dev mode (`vite.config.ts:78-81`); present in imported tree and regenerated by running dev server |
+| `bun.lock` | Yes | `Nov 23 09:22` (`166,801` B, `root:root`) | Present in supplied archive per user attestation AND materialized/updated in AI Studio container bootstrap |
+| `.env.example` | Yes | `Nov 23 09:22` (`33` B, `root:root`) | AI Studio execution workspace environment template (`GEMINI_API_KEY=`, `VITE_BASE_PATH=/`) |
+| `node_modules/` | Yes | `Nov 23 09:22` (`root:root`) | Installed runtime workspace dependencies (`.gitignore` excluded) |
+| `dist/` | Yes | `Nov 23 10:33` (`root:root`) | Production bundle generated by `npm run build` during audit (`.gitignore` excluded) |
+| `docs/engineering/*.md` | Yes | `Nov 23 10:36+` | Phase 0 / Phase 0.1 audit deliverables created in-session |
+| `package-lock.json` | **No** | Absent in `/app/applet` & Turn 1 initial tree | **Repository/Archive file omitted from AI Studio workspace** (user-attested present in GitHub repo & ZIP archive; unverified locally) |
+| `.git/` | **No** | Absent in `/app/applet` | **Repository VCS metadata omitted from AI Studio workspace** (`git rev-parse HEAD` fails locally) |
 
 ---
 

@@ -1,6 +1,6 @@
 # MK LineSim — Test Coverage Matrix & Verification Gaps
 
-**Program Phase:** Phase 0 (Engineering Baseline & Repository Audit)  
+**Program Phase:** Phase 0 & 0.1 (Engineering Baseline Audit & Evidence Reconciliation)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
 **Execution Evidence:** `npm test` (`tsx --test tests/*.test.ts`) -> **`57/57` passed, `0` failed, `0` skipped (`3802.94 ms`, exit code `0`)**.
 
@@ -24,7 +24,7 @@
 | `tests/resourceSpecificCalendar.test.ts` | 244 | 3 | Resource-Specific Shifts & Conveyor Manual Stages | Invalid explicit `shiftId`/`operatingSchedule` stays unavailable (no plant fallback); `heatmap.ts` per-resource denominator; manual inspection/work on conveyor stages via `importFlowchartToSimulationData` & DES. |
 | `tests/resourceStateAccounting.test.ts` | 184 | 2 | State Conservation & Off-Shift/Break Attribution | `ResourceStateTracker` `unavailable` separation & idempotent `finalizeAt`; Scenario C1 DES off-shift/break horizon conservation (`total === horizon`). |
 | `tests/resourceStateTracker.test.ts` | 86 | 3 | State Tracker Boundary Safety | Unfinished interval closure at horizon, non-monotonic/out-of-horizon guards, worker & conveyor state totals. |
-| **Total** | **3,628 (`wc -l`)** | **57** | **10 Engineering Domains** | **57/57 passing (`0` fail, `0` skip) via `npm test`** |
+| **Total** | **3,610 (`wc -l`)** | **57** | **10 Engineering Domains** | **57/57 passing (`0` fail, `0` skip) via `npm test`** |
 
 ---
 
