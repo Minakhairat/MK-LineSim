@@ -107,7 +107,7 @@ export function resolveObjectFailureParams(
   }
 
   const rawAvail = Number(obj.operations.availability ?? 1);
-  const avail = Number.isFinite(rawAvail) ? Math.min(1, Math.max(0.01, rawAvail)) : 1;
+  const avail = Number.isFinite(rawAvail) ? Math.min(1, Math.max(0, rawAvail)) : 1;
   const rawMtbfVal = Number(obj.operations.mtbfSec || 0);
   const rawMttrVal = Number(obj.operations.mttrSec || 0);
   const rawScaleVal = Number(obj.operations.weibullScaleSec || 0);
@@ -124,18 +124,30 @@ export function resolveObjectFailureParams(
   } else if (failureModel === 'weibull' && rawScale > 0 && rawMttr > 0) {
     mttrSec = rawMttr;
     mtbfSec = rawScale * gammaFn(1 + 1 / weibullShape);
+  } else if (avail <= 0) {
+    return {
+      enabled: true,
+      failureModel,
+      repairModel,
+      mtbfSec: 0,
+      mttrSec: Infinity,
+      mttrStdDevSec: 0,
+      weibullShape,
+      weibullScaleSec: 0,
+      availability: 0,
+    };
   } else if (avail < 0.9999) {
     if (rawMtbf > 0) {
       mtbfSec = rawMtbf;
-      mttrSec = Math.max(0.1, (rawMtbf * (1 - avail)) / Math.max(1e-4, avail));
+      mttrSec = Math.max(0.1, (rawMtbf * (1 - avail)) / avail);
     } else if (rawMttr > 0) {
       mttrSec = rawMttr;
-      mtbfSec = Math.max(1, (rawMttr * avail) / Math.max(1e-4, 1 - avail));
+      mtbfSec = Math.max(1, (rawMttr * avail) / (1 - avail));
     } else {
       const proc = Number(obj.operations.processingTimeSec);
       const baseProc = Number.isFinite(proc) && proc > 0 ? proc : 30;
       mttrSec = Math.max(10, baseProc * 3);
-      mtbfSec = Math.max(1, (mttrSec * avail) / Math.max(1e-4, 1 - avail));
+      mtbfSec = Math.max(1, (mttrSec * avail) / (1 - avail));
     }
   } else {
     return {
@@ -180,7 +192,9 @@ export function sampleTimeToFailureSec(
   params: FailureModelParams,
   rng: () => number
 ): number {
-  if (!params.enabled || params.mtbfSec <= 0) return Infinity;
+  if (!params.enabled) return Infinity;
+  if (params.availability <= 0) return 0;
+  if (params.mtbfSec <= 0) return Infinity;
   if (params.failureModel === 'fixed') {
     return Math.max(0.1, params.mtbfSec);
   }
@@ -204,7 +218,9 @@ export function sampleRepairDurationSec(
   params: FailureModelParams,
   rng: () => number
 ): number {
-  if (!params.enabled || params.mttrSec <= 0) return 0;
+  if (!params.enabled) return 0;
+  if (params.availability <= 0 || !Number.isFinite(params.mttrSec)) return Infinity;
+  if (params.mttrSec <= 0) return 0;
   if (params.repairModel === 'fixed') {
     return Math.max(0.1, params.mttrSec);
   }

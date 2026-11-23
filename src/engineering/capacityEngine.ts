@@ -185,17 +185,10 @@ export function computeStageCapacityProfile(
   const breakdown = resolveStageEquipmentBreakdown(stage, uniqueObjs);
   const parallelServers = breakdown.processingServerCount;
 
-  const divisorServers =
-    parallelServers > 0
-      ? parallelServers
-      : breakdown.conveyorChannelCount > 0 && baseTaskTimeSec > 0
-      ? breakdown.conveyorChannelCount
-      : 0;
-
   const totalCycleSec = baseTaskTimeSec + batchTransferTimeSec;
   const effectiveUnitCycleSec =
-    divisorServers > 0 && totalCycleSec > 0
-      ? totalCycleSec / (divisorServers * batchCfg.effectiveBatchDivisor)
+    parallelServers > 0 && totalCycleSec > 0
+      ? totalCycleSec / (parallelServers * batchCfg.effectiveBatchDivisor)
       : 0;
   const theoreticalCapacityPerHour =
     effectiveUnitCycleSec > 0 ? 3600 / effectiveUnitCycleSec : 0;

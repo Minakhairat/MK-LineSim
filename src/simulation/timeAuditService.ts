@@ -592,40 +592,109 @@ export function buildAuditedSimulationKPIs(params: {
   let lineOee: ReturnType<typeof computeOeeMetrics>;
 
   if (hasCustomOrHeterogeneousShifts) {
-    const n = activeRes.length;
-    const sumCT = activeRes.reduce((s, r) => s + r.calendarTimeSec, 0);
-    const sumPDT = activeRes.reduce((s, r) => s + r.plannedDowntimeSec, 0);
-    const sumSPT = activeRes.reduce((s, r) => s + r.scheduledProductionTimeSec, 0);
-    const sumUDT = activeRes.reduce((s, r) => s + r.unplannedDowntimeSec, 0);
-    const sumSET = activeRes.reduce((s, r) => s + r.setupTimeSec, 0);
-    const sumOT = activeRes.reduce((s, r) => s + r.operatingTimeSec, 0);
-    const sumIdealTime = activeRes.reduce(
-      (s, r) => s + (r.idealCycleTimeSec > 0 ? r.idealCycleTimeSec * r.processedCount : 0),
-      0
-    );
-    const availPct = sumSPT > 1e-6 ? Math.min(100, Math.max(0, (sumOT / sumSPT) * 100)) : 0;
-    const perfPct =
-      sumOT > 1e-6 && sumIdealTime > 0
-        ? Math.min(100, Math.max(0, (sumIdealTime / sumOT) * 100))
-        : 0;
-    const qualPct =
-      actualProduction > 0
-        ? Math.min(100, Math.max(0, (goodUnits / actualProduction) * 100))
-        : 0;
-    const oeePct = sumSPT > 1e-6 ? (availPct / 100) * (perfPct / 100) * (qualPct / 100) * 100 : 0;
-
-    lineOee = {
-      calendarTimeSec: sumCT / n,
-      plannedDowntimeSec: sumPDT / n,
-      scheduledProductionTimeSec: sumSPT / n,
-      unplannedDowntimeSec: sumUDT / n,
-      setupTimeSec: sumSET / n,
-      operatingTimeSec: sumOT / n,
-      availabilityPct: availPct,
-      performancePct: perfPct,
-      qualityPct: qualPct,
-      oeePct,
+    const resolveStageResources = (stageId: string): ResourceOeeAnalytics[] => {
+      const stageDef = project.stages.find((s) => s.id === stageId);
+      const assignedIds = new Set(stageDef?.assignedObjectIds || []);
+      const matched = activeRes.filter(
+        (r) => r.stageId === stageId || assignedIds.has(r.objectId)
+      );
+      const procMatched = matched.filter(
+        (r) => r.kind === 'machine' || r.kind === 'workstation'
+      );
+      return procMatched.length > 0 ? procMatched : matched;
     };
+
+    const resolveStageSchedSec = (sa: StageAnalytics): number => {
+      if (sa.scheduledTimeSec !== undefined && Number.isFinite(sa.scheduledTimeSec)) {
+        return Math.max(0, sa.scheduledTimeSec);
+      }
+      const resList = resolveStageResources(sa.stageId);
+      if (resList.length > 0) {
+        return (
+          resList.reduce((s, r) => s + r.scheduledProductionTimeSec, 0) /
+          resList.length
+        );
+      }
+      return shiftAudit.activeSimTimeSec;
+    };
+
+    // Identify the true line-level bottleneck stage (minimum scheduled capacity = SPT / effectiveUnitCycleSec)
+    let bnAnalytics: StageAnalytics | undefined;
+    let minShiftCapacity = Infinity;
+    let maxCycleForTie = -1;
+    const preferredBnId = params.bottleneckStageId || timingAudit.bottleneckStageId;
+
+    for (const sa of params.stageAnalytics) {
+      const tStage = timingByStage.get(sa.stageId);
+      const unitCycle = tStage?.effectiveUnitCycleSec ?? 0;
+      if (unitCycle <= 0) continue;
+      const schedSec = resolveStageSchedSec(sa);
+      const shiftCap = schedSec / unitCycle;
+      const isBetter =
+        shiftCap < minShiftCapacity - 1e-6 ||
+        (Math.abs(shiftCap - minShiftCapacity) <= 1e-6 &&
+          (unitCycle > maxCycleForTie + 1e-6 ||
+            (Math.abs(unitCycle - maxCycleForTie) <= 1e-6 && sa.stageId === preferredBnId)));
+      if (isBetter) {
+        minShiftCapacity = shiftCap;
+        maxCycleForTie = unitCycle;
+        bnAnalytics = sa;
+      }
+    }
+
+    if (!bnAnalytics) {
+      bnAnalytics =
+        params.stageAnalytics.find((s) => s.stageId === preferredBnId) ??
+        params.stageAnalytics[0];
+    }
+
+    const bnResources = bnAnalytics ? resolveStageResources(bnAnalytics.stageId) : [];
+    const bnTiming = bnAnalytics ? timingByStage.get(bnAnalytics.stageId) : undefined;
+    const lineIdealCycleSec =
+      bnTiming && bnTiming.effectiveUnitCycleSec > 0
+        ? bnTiming.effectiveUnitCycleSec
+        : timingAudit.bottleneckCycleSec > 0
+        ? timingAudit.bottleneckCycleSec
+        : 0;
+
+    let lineCalendarSec = shiftAudit.simTimeSec;
+    let linePlannedDownSec = shiftAudit.plannedDowntimeSec;
+    let lineUnplannedDownSec = 0;
+    let lineSetupSec = 0;
+
+    if (bnAnalytics && bnAnalytics.scheduledTimeSec !== undefined) {
+      lineCalendarSec = bnAnalytics.calendarTimeSec ?? shiftAudit.simTimeSec;
+      const lineScheduledSec = Math.max(0, bnAnalytics.scheduledTimeSec);
+      linePlannedDownSec =
+        bnAnalytics.plannedDowntimeSec ?? Math.max(0, lineCalendarSec - lineScheduledSec);
+      lineUnplannedDownSec = (bnAnalytics.downPct / 100) * lineScheduledSec;
+      lineSetupSec = ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec;
+    } else if (bnResources.length > 0) {
+      const n = bnResources.length;
+      lineCalendarSec = bnResources.reduce((s, r) => s + r.calendarTimeSec, 0) / n;
+      linePlannedDownSec = bnResources.reduce((s, r) => s + r.plannedDowntimeSec, 0) / n;
+      lineUnplannedDownSec = bnResources.reduce((s, r) => s + r.unplannedDowntimeSec, 0) / n;
+      lineSetupSec = bnResources.reduce((s, r) => s + r.setupTimeSec, 0) / n;
+    } else {
+      const stageCount = Math.max(1, params.stageAnalytics.length);
+      const lineScheduledSec = Math.max(1e-6, lineCalendarSec - linePlannedDownSec);
+      lineUnplannedDownSec = bnAnalytics
+        ? (bnAnalytics.downPct / 100) * lineScheduledSec
+        : params.totalDowntimeSec / stageCount;
+      lineSetupSec = bnAnalytics
+        ? ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec
+        : (params.totalSetupTimeSec ?? 0) / stageCount;
+    }
+
+    lineOee = computeOeeMetrics({
+      calendarTimeSec: lineCalendarSec,
+      plannedDowntimeSec: linePlannedDownSec,
+      unplannedDowntimeSec: lineUnplannedDownSec,
+      setupTimeSec: lineSetupSec,
+      idealCycleTimeSec: lineIdealCycleSec,
+      totalUnitsProcessed: actualProduction,
+      goodUnitsProduced: goodUnits,
+    });
   } else {
     const bnAnalytics =
       params.stageAnalytics.find((s) => s.stageId === (params.bottleneckStageId || timingAudit.bottleneckStageId)) ??

@@ -10,6 +10,14 @@ function isFiniteNonNeg(n: unknown): boolean {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0;
 }
 
+function isPositiveInteger(n: unknown): boolean {
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1;
+}
+
+function isNonNegInteger(n: unknown): boolean {
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0;
+}
+
 export function validateProject(project: ProjectData): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const { factory, layoutObjects, stages, workers, products, simulationConfig } = project;
@@ -124,13 +132,28 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
       });
     }
 
-    if (obj.operations.batchSize !== undefined && (!Number.isFinite(obj.operations.batchSize) || obj.operations.batchSize < 1)) {
+    if (obj.operations.batchSize !== undefined && !isPositiveInteger(obj.operations.batchSize)) {
       issues.push({
         id: `val_obj_batch_${obj.id}`,
         severity: 'error',
         code: 'INVALID_BATCH_SIZE',
-        message: `${obj.name} batch size must be at least 1.`,
-        messageAr: `حجم الدفعة لـ "${obj.name}" يجب أن يكون 1 على الأقل.`,
+        message: `${obj.name} batch size must be an integer >= 1.`,
+        messageAr: `حجم الدفعة لـ "${obj.name}" يجب أن يكون عدداً صحيحاً 1 على الأقل.`,
+        targetId: obj.id,
+        targetType: 'object',
+      });
+    }
+
+    if (
+      obj.operations.requiredOperators !== undefined &&
+      !isNonNegInteger(obj.operations.requiredOperators)
+    ) {
+      issues.push({
+        id: `val_obj_ops_${obj.id}`,
+        severity: 'error',
+        code: 'INVALID_RESOURCE_REQUIREMENT',
+        message: `${obj.name} required operators must be an integer >= 0.`,
+        messageAr: `عدد العمال المطلوب لـ "${obj.name}" يجب أن يكون عدداً صحيحاً >= 0.`,
         targetId: obj.id,
         targetType: 'object',
       });
@@ -152,13 +175,13 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
       });
     }
 
-    if (obj.kind === 'buffer' && !isFinitePositive(obj.operations.capacity)) {
+    if (obj.kind === 'buffer' && !isPositiveInteger(obj.operations.capacity)) {
       issues.push({
         id: `val_bufcap_${obj.id}`,
         severity: 'error',
         code: 'BUFFER_CAPACITY_VIOLATION',
-        message: `${obj.name} buffer capacity must be at least 1.`,
-        messageAr: `سعة التخزين المؤقت لـ "${obj.name}" يجب أن تكون 1 على الأقل.`,
+        message: `${obj.name} buffer capacity must be an integer >= 1.`,
+        messageAr: `سعة التخزين المؤقت لـ "${obj.name}" يجب أن تكون عدداً صحيحاً 1 على الأقل.`,
         targetId: obj.id,
         targetType: 'object',
       });
@@ -166,14 +189,14 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
 
     if (
       (obj.kind === 'machine' || obj.kind === 'workstation') &&
-      !isFinitePositive(obj.operations.capacity)
+      !isPositiveInteger(obj.operations.capacity)
     ) {
       issues.push({
         id: `val_cap_${obj.id}`,
         severity: 'error',
         code: 'INVALID_MACHINE_CAPACITY',
-        message: `${obj.name} processing capacity must be at least 1.`,
-        messageAr: `السعة التشغيلية للمحطة "${obj.name}" يجب أن تكون 1 على الأقل.`,
+        message: `${obj.name} processing capacity must be an integer >= 1.`,
+        messageAr: `السعة التشغيلية للمحطة "${obj.name}" يجب أن تكون عدداً صحيحاً 1 على الأقل.`,
         targetId: obj.id,
         targetType: 'object',
       });
@@ -251,35 +274,35 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
         targetType: 'stage',
       });
     }
-    if (!isFiniteNonNeg(stage.bufferCapacity)) {
+    if (!isNonNegInteger(stage.bufferCapacity)) {
       issues.push({
         id: `val_stg_buf_${stage.id}`,
         severity: 'error',
         code: 'INVALID_BUFFER_CAPACITY',
-        message: `Stage "${stage.name}" cannot have negative or invalid buffer capacity.`,
-        messageAr: `سعة المخزن المؤقت للمرحلة "${stage.name}" غير صالحة.`,
+        message: `Stage "${stage.name}" buffer capacity must be an integer >= 0.`,
+        messageAr: `سعة المخزن المؤقت للمرحلة "${stage.name}" يجب أن تكون عدداً صحيحاً >= 0.`,
         targetId: stage.id,
         targetType: 'stage',
       });
     }
-    if (!isFiniteNonNeg(stage.requiredWorkers) || !isFiniteNonNeg(stage.requiredMachines)) {
+    if (!isNonNegInteger(stage.requiredWorkers) || !isNonNegInteger(stage.requiredMachines)) {
       issues.push({
         id: `val_stg_req_${stage.id}`,
         severity: 'error',
         code: 'INVALID_RESOURCE_REQUIREMENT',
-        message: `Stage "${stage.name}" has invalid worker or machine requirement.`,
-        messageAr: `متطلبات العمال أو الآلات للمرحلة "${stage.name}" غير صالحة.`,
+        message: `Stage "${stage.name}" worker and machine requirements must be integers >= 0.`,
+        messageAr: `متطلبات العمال والآلات للمرحلة "${stage.name}" يجب أن تكون أعداداً صحيحة >= 0.`,
         targetId: stage.id,
         targetType: 'stage',
       });
     }
-    if (stage.batchSize !== undefined && (!Number.isFinite(stage.batchSize) || stage.batchSize < 1)) {
+    if (stage.batchSize !== undefined && !isPositiveInteger(stage.batchSize)) {
       issues.push({
         id: `val_stg_batch_${stage.id}`,
         severity: 'error',
         code: 'INVALID_BATCH_SIZE',
-        message: `Stage "${stage.name}" batch size must be at least 1.`,
-        messageAr: `حجم الدفعة للمرحلة "${stage.name}" يجب أن يكون 1 على الأقل.`,
+        message: `Stage "${stage.name}" batch size must be an integer >= 1.`,
+        messageAr: `حجم الدفعة للمرحلة "${stage.name}" يجب أن يكون عدداً صحيحاً 1 على الأقل.`,
         targetId: stage.id,
         targetType: 'stage',
       });
@@ -432,7 +455,7 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
         });
       }
       if (
-        !isFiniteNonNeg(prod.targetQuantity) ||
+        !isNonNegInteger(prod.targetQuantity) ||
         (prod.cycleTimeMultiplier !== undefined && !isFinitePositive(prod.cycleTimeMultiplier)) ||
         (prod.mixWeight !== undefined && !isFiniteNonNeg(prod.mixWeight))
       ) {
@@ -440,7 +463,7 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
           id: `val_prod_qty_${prod.id}`,
           severity: 'error',
           code: 'INVALID_PRODUCT_PARAMETERS',
-          message: `Product "${prod.name}" has invalid quantity, mix weight, or cycle multiplier.`,
+          message: `Product "${prod.name}" target quantity must be an integer >= 0, with valid mix weight and cycle multiplier.`,
           messageAr: `الكمية المستهدفة أو معامل الدورة للمنتج "${prod.name}" غير صالحة.`,
           targetId: prod.id,
           targetType: 'product',
@@ -490,13 +513,13 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
       targetType: 'shift',
     });
   }
-  if (!isFiniteNonNeg(simulationConfig.maxPlannedUnits)) {
+  if (!isNonNegInteger(simulationConfig.maxPlannedUnits)) {
     issues.push({
       id: 'val_sim_planned',
       severity: 'error',
       code: 'INVALID_PLANNED_UNITS',
-      message: 'Planned production units must be a finite number >= 0.',
-      messageAr: 'كمية الإنتاج المخططة يجب أن تكون رقماً صالحاً >= 0.',
+      message: 'Planned production units must be an integer >= 0.',
+      messageAr: 'كمية الإنتاج المخططة يجب أن تكون عدداً صحيحاً >= 0.',
       targetType: 'shift',
     });
   }

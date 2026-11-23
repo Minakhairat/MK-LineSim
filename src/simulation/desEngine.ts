@@ -364,8 +364,11 @@ export class DiscreteEventSimulationEngine {
         this.conveyorOccupancy.set(obj.id, 0);
       }
 
+      const failureParams = resolveObjectFailureParams(obj, cfg);
+      const isZeroAvail = failureParams.enabled && failureParams.availability <= 0;
       const initAvail = this.calendarEngine.getObjectAvailabilityAt(obj, 0);
-      const initStatus = availToMachineStatus(initAvail);
+      const initStatus =
+        isZeroAvail && initAvail.available ? 'down' : availToMachineStatus(initAvail);
       const initConvStatus = availToConveyorStatus(initAvail);
       this.stateTracker.initMachine(obj.id, initStatus, 0);
       if (obj.kind === 'conveyor') {
@@ -393,8 +396,7 @@ export class DiscreteEventSimulationEngine {
         lastStateChangeTime: 0,
       });
 
-      const failureParams = resolveObjectFailureParams(obj, cfg);
-      if (failureParams.enabled && failureParams.mtbfSec > 0) {
+      if (failureParams.enabled && failureParams.mtbfSec > 0 && failureParams.availability > 0) {
         const firstFail = sampleTimeToFailureSec(failureParams, this.rng);
         if (firstFail < cfg.durationSec) {
           this.schedule(firstFail, 'BreakdownStarted', {
@@ -1369,7 +1371,14 @@ export class DiscreteEventSimulationEngine {
           this.setObjectStatus(obj.id, 'maintenance', now);
         }
       } else if (avail.available) {
-        if (st.status === 'maintenance' || st.status === 'unavailable') {
+        const fp = resolveObjectFailureParams(obj, this.project.simulationConfig);
+        if (fp.enabled && fp.availability <= 0) {
+          if (st.status !== 'down') {
+            this.preemptPendingWalkJobs(obj.id, now);
+            this.preemptActiveJobs(obj.id, now);
+            this.setObjectStatus(obj.id, 'down', now);
+          }
+        } else if (st.status === 'maintenance' || st.status === 'unavailable') {
           this.resumePausedJobs(obj.id, now);
           this.resumePausedWalkJobs(obj.id, now);
           this.setObjectStatus(obj.id, this.resolveObjectActiveOrIdleStatus(obj.id, now), now);
@@ -2584,6 +2593,8 @@ export class DiscreteEventSimulationEngine {
       const st = this.objectStates.get(obj.id);
       if (!st) continue;
       if (st.status === 'down' || st.status === 'blocked' || st.status === 'maintenance') continue;
+      const fp = resolveObjectFailureParams(obj, this.project.simulationConfig);
+      if (fp.enabled && fp.availability <= 0) continue;
       const avail = this.calendarEngine.getObjectAvailabilityAt(obj, now);
       if (!avail.available) continue;
 
@@ -3319,11 +3330,13 @@ export class DiscreteEventSimulationEngine {
     this.preemptActiveJobs(objId, ev.timestamp);
     this.setObjectStatus(objId, 'down', ev.timestamp);
 
-    const repairDur = Math.max(0.5, sampleRepairDurationSec(failureParams, this.rng));
-    this.schedule(ev.timestamp + repairDur, 'RepairCompleted', {
+    const repairDur = sampleRepairDurationSec(failureParams, this.rng);
+    if (!Number.isFinite(repairDur)) return;
+    const boundedRepairDur = Math.max(0.5, repairDur);
+    this.schedule(ev.timestamp + boundedRepairDur, 'RepairCompleted', {
       objectId: objId,
       stageId: ev.stageId || obj.stageId,
-      details: `Repair completed on ${obj.name} after ${repairDur.toFixed(1)}s (${failureParams.repairModel})`,
+      details: `Repair completed on ${obj.name} after ${boundedRepairDur.toFixed(1)}s (${failureParams.repairModel})`,
     });
   }
 
@@ -4208,8 +4221,15 @@ export class DiscreteEventSimulationEngine {
     let stageQueueWaitWeightedSum = 0;
     let stageEnteredSum = 0;
 
+    const resolveStageObjects = (stage: ProductionStage): LayoutObject[] =>
+      stage.assignedObjectIds
+        .map((oid) => this.objectsMap.get(oid))
+        .filter((o): o is LayoutObject => Boolean(o));
+
+    const stageCapacityProfiles = new Map<string, ReturnType<typeof computeStageCapacityProfile>>();
     const maxStageEffectiveCycle = this.project.stages.reduce((mx, candidate) => {
-      const cp = computeStageCapacityProfile(candidate, this.project.layoutObjects);
+      const cp = computeStageCapacityProfile(candidate, resolveStageObjects(candidate));
+      stageCapacityProfiles.set(candidate.id, cp);
       return Math.max(mx, cp.effectiveUnitCycleSec);
     }, 0);
 
@@ -4301,7 +4321,9 @@ export class DiscreteEventSimulationEngine {
       const avgQueueWait =
         acc.entered > 0 ? acc.queueWaitTimeSum / acc.entered : avgUnitWait;
 
-      const stageProfile = computeStageCapacityProfile(st, this.project.layoutObjects);
+      const stageProfile =
+        stageCapacityProfiles.get(st.id) ??
+        computeStageCapacityProfile(st, resolveStageObjects(st));
       const cyclePressureBonus =
         maxStageEffectiveCycle > 0
           ? (stageProfile.effectiveUnitCycleSec / maxStageEffectiveCycle) *
