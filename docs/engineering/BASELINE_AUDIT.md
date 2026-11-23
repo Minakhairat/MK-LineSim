@@ -1,10 +1,10 @@
-# MK LineSim — Phase 0, 0.1, 0.2 & 0.2.1: Engineering Baseline, Lockfile Reconciliation & CI Hardening
+# MK LineSim — Phase 0, 0.1, 0.2 & 0.2.2: Engineering Baseline, Lockfile Reconciliation & CI Hardening
 
-**Program Phase:** Phase 0 / 0.1 / 0.2 / 0.2.1 (Engineering Baseline, Evidence Reconciliation, Lockfile & CI Hardening)  
+**Program Phase:** Phase 0 / 0.1 / 0.2 / 0.2.1 / 0.2.2 (Engineering Baseline, Lockfile Reconciliation & CI Hardening)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
 **Stated Baseline Commit:** `dc8f6557912bf2fb8c1a78437ab331f485aea2d8`  
 **Audit Date:** 2026-11-23  
-**Workspace Constraints:** Zero application source (`src/`), simulation equations, tests (`tests/`), `package.json`, `tsconfig.json`, or `vite.config.ts` were modified; Phase 0.2.1 verified `/package-lock.json` unmodified and removed `/bun.lock` cleanly without running platform Bun hooks afterward.
+**Workspace Constraints:** Zero application source (`src/`), simulation equations, tests (`tests/`), `package.json`, `tsconfig.json`, or `vite.config.ts` were modified; Phase 0.2.2 deleted `/bun.lock` inside `/app/applet` and verified `npm` parity without invoking `compile_applet`, while documenting external platform/export archive discrepancies.
 
 ---
 
@@ -19,8 +19,8 @@
 | App Metadata (`metadata.json`) | `name: "MK LineSim"` | `/metadata.json` | `Verified behavior` |
 | Node.js Runtime | `v22.23.2` | `node -v` | `Verified behavior` |
 | npm CLI Version | `10.9.8` | `npm -v` | `Verified behavior` |
-| `bun.lock` Status (Workspace `/app/applet`) | **Removed in Phase 0.2.1** (`compile_applet` previously regenerated `165,531` B `bun.lock` at end of Phase 0.2; deleted in Phase 0.2.1 and verified absent) | `test -e bun.lock`, `ls -la` (`BUN_LOCK_EXISTS=false`); *note*: external AI Studio UI export ZIP was not accessible inside container | `Verified behavior` (workspace root); `Missing verification` (external UI-exported ZIP) |
-| `package-lock.json` Status | **Preserved from Phase 0.2** (`339,534` bytes, `lockfileVersion: 3`, `652` entries); **historical pre-Phase-0.2 upstream file was absent in `/app/applet`** | `package-lock.json` SHA-256 unchanged, Node parity check, `npm ls --depth=0`, `npm ci --legacy-peer-deps` | `Verified behavior` (current canonical lockfile & local `npm ci`); `Missing verification` (pre-fix upstream `package-lock.json` not locally mounted) |
+| `bun.lock` Status (Workspace vs Exported ZIP) | **Removed in `/app/applet` during Phase 0.2.2**, **HOWEVER** container `root` post-turn platform hook previously regenerated `165,531` B `bun.lock` (`b0b26c2b...`) at `11:17` after Phase 0.2.1 ended, AND user's submitted archive still contains `MK-LineSim-main/bun.lock` (`166,802` B, `6416cff3...`) | Workspace `test -e bun.lock` (`BUN_LOCK_EXISTS=false`); external UI/GitHub export ZIP cannot be triggered or `unzip -l` inspected inside container | `Verified behavior` (active workspace deletion only); `Confirmed defect` (post-turn platform `bun.lock` regeneration & external archive mismatch); `Missing verification` (post-0.2.2 exported ZIP inspection) |
+| `package-lock.json` Status | **Preserved from Phase 0.2** (`339,534` bytes, `lockfileVersion: 3`, `652` entries); **historical pre-Phase-0.2 upstream file was absent in `/app/applet`** | `package-lock.json` SHA-256 unchanged, Node parity check, `npm ls --depth=0`, `npm ci --legacy-peer-deps` | `Verified behavior` (workspace canonical lockfile & local `npm ci`); `Missing verification` (exported ZIP & pre-fix upstream lockfile) |
 
 ---
 
@@ -73,16 +73,16 @@
   - Any non-zero exit code in `npm ci`, `npm run lint`, `npm test`, or `npm run build` fails the `build` job and blocks `deploy`.
   - *Remote Boundary*: Live execution on GitHub-hosted `ubuntu-latest` with Node `"20"` has **not** yet been triggered from this workspace (`Missing verification`; local checks ran on Node `v22.23.2`).
 
-### 2.5 Reproducible Commands & Observed Results (Task 10, Phase 0.2 & Phase 0.2.1)
+### 2.5 Reproducible Commands & Observed Results (Task 10, Phase 0.2–0.2.2)
 
-All commands below were executed cleanly in `/app/applet` after deleting `bun.lock` and cleaning `node_modules` (without modifying `package-lock.json`):
+All commands below reflect **workspace verification** inside `/app/applet` after deleting `bun.lock` and cleaning `node_modules` (without modifying `package-lock.json`). Neither **exported ZIP archive inspection** nor **live GitHub Actions execution** can be performed from inside `/app/applet`:
 
-| Step | Reproducible Command | Exit Code | Actual Observed Output Summary (Phase 0.2.1) |
+| Step | Reproducible Command | Exit Code | Actual Observed Output Summary (Phase 0.2.2 Workspace) |
 | :--- | :--- | :---: | :--- |
-| Deterministic Lockfile Install | `rm -rf node_modules && npm ci --legacy-peer-deps` | `0` (`CI_EXIT=0`) | Clean `npm ci` install from existing `/package-lock.json`; `npm ls --depth=0` reports `0` problems (`25` top-level dependencies). |
+| Deterministic Lockfile Install | `rm -rf node_modules && npm ci --legacy-peer-deps` | `0` (`CI_EXIT=0`) | `added 514 packages, and audited 521 packages in 11s`; `npm ls --depth=0` reports `0` problems (`25` top-level dependencies). |
 | Type Checking | `npm run lint` (`tsc --noEmit`) | `0` (`LINT_EXIT=0`) | Clean pass with zero diagnostics (`strict: false`, static TypeScript check only). |
-| Unit & Regression Tests | `npm test` (`tsx --test tests/*.test.ts`) | `0` (`TEST_EXIT=0`) | TAP output: `57` tests, `0` suites, `57` pass, `0` fail, `0` cancelled/skipped/todo; total duration `3436.99 ms`. |
-| Production Build | `npm run build` (`vite build`) | `0` (`BUILD_EXIT=0`) | `1919` modules transformed in `1.60s`; PWA precache `21` entries (`3031.54 KiB`); generates `dist/sw.js` & `dist/workbox-7e5eb42b.js`; pre-existing Vite warnings only (`__dirname` & >500 kB chunk size). |
+| Unit & Regression Tests | `npm test` (`tsx --test tests/*.test.ts`) | `0` (`TEST_EXIT=0`) | TAP output: `57` tests, `0` suites, `57` pass, `0` fail, `0` cancelled/skipped/todo. |
+| Production Build | `npm run build` (`vite build`) | `0` (`BUILD_EXIT=0`) | `1919` modules transformed; PWA precache `21` entries (`3031.54 KiB`); generates `dist/sw.js` & `dist/workbox-7e5eb42b.js`. |
 
 ---
 
@@ -186,12 +186,12 @@ Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813
 | `.gitignore`, `LICENSE`, `README.md`, `index.html`, `metadata.json`, `package.json`, `tsconfig.json`, `vite.config.ts` | Yes | `Nov 23 09:21` | Unmodified repository configuration & metadata files |
 | `public/` (6 icon assets), `src/` (50 files, `33,203` lines), `tests/` (14 files, `3,610` lines) | Yes | `Nov 23 09:21` | Unmodified repository application, engineering, simulation, and test code |
 | `dev-dist/sw.js`, `dev-dist/workbox-7e5eb42b.js` | Yes | Initial tree `09:21`; updated `10:42` | Generated by `vite-plugin-pwa` dev mode (`vite.config.ts:78-81`) |
-| `bun.lock` | **No** | Deleted in Phase 0.2.1 (`compile_applet` had recreated `165,531` B at `11:07`) | Removed from workspace root (`npm` is sole canonical package manager; platform Bun hooks can regenerate it if `compile_applet` / container bootstrap invokes `bun`) |
-| `package-lock.json` | **Yes** | `Nov 23 11:04` (`339,534` B, unchanged in 0.2.1) | Generated in Phase 0.2 via `npm install --package-lock-only --legacy-peer-deps`; prior upstream file omitted on import |
+| `bun.lock` | **No** (during active turn) | Deleted in Phase 0.2.2 (`root` platform process previously recreated `165,531` B at `11:17` post-turn; external archive had `MK-LineSim-main/bun.lock` `166,802` B) | Removed from `/app/applet`; **note:** AI Studio container lifecycle & upstream `main` export require external verification/removal because post-turn `root` processes regenerate `bun.lock` |
+| `package-lock.json` | **Yes** | `Nov 23 11:04` (`339,534` B, unchanged) | Generated in Phase 0.2 via `npm install --package-lock-only --legacy-peer-deps`; prior upstream file omitted on import |
 | `.env.example` | Yes | `Nov 23 09:22` (`33` B, `root:root`) | AI Studio execution workspace environment template (`GEMINI_API_KEY=`, `VITE_BASE_PATH=/`) |
-| `node_modules/` | Yes | Cleanly reinstalled in Phase 0.2.1 | Installed by `npm ci --legacy-peer-deps` (`.gitignore` excluded) |
-| `dist/` | Yes | Built in Phase 0.2.1 | Production bundle generated by `npm run build` after `npm ci` (`.gitignore` excluded) |
-| `docs/engineering/*.md` | Yes | Updated Phase 0.2.1 | Phase 0 / 0.1 / 0.2 / 0.2.1 engineering audit & hardening documentation |
+| `node_modules/` | Yes | Cleanly reinstalled in Phase 0.2.2 | Installed by `npm ci --legacy-peer-deps` (`514` packages, `.gitignore` excluded) |
+| `dist/` | Yes | Built in Phase 0.2.2 | Production bundle generated by `npm run build` after `npm ci` (`.gitignore` excluded) |
+| `docs/engineering/*.md` | Yes | Updated Phase 0.2.2 | Phase 0 / 0.1 / 0.2 / 0.2.1 / 0.2.2 engineering audit & hardening documentation |
 | `.git/` | **No** | Absent in `/app/applet` | Repository VCS metadata omitted from AI Studio workspace (`git status` / `git rev-parse HEAD` fail locally) |
 
 ---

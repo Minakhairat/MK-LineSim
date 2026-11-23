@@ -1,6 +1,6 @@
 # MK LineSim — Test Coverage Matrix & Verification Gaps
 
-**Program Phase:** Phase 0, 0.1, 0.2 & 0.2.1 (Engineering Baseline, Evidence Reconciliation & Lockfile/CI Hardening)  
+**Program Phase:** Phase 0, 0.1, 0.2, 0.2.1 & 0.2.2 (Engineering Baseline, Evidence Reconciliation & Lockfile/CI Hardening)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
 **Execution Evidence:** `npm test` (`tsx --test tests/*.test.ts`) -> **`57/57` passed, `0` failed, `0` skipped (`3436.99 ms` post-`npm ci`, exit code `0`)**.
 
@@ -68,7 +68,7 @@
 | **9. Web Worker Execution (`simWorker.ts`)** | Low (`1` fallback test) | `Missing verification` | `workerClient.ts` executes synchronous fallback in Node (`Worker === undefined`); real Web Worker sliced `advanceTo()` (20 slices + progress + cancellation + `validateProject` gate) has **zero** automated verification against `runToCompletion()`. |
 | **10. Procedural Layout, Exports & Storage** | None (`0` tests) | `Missing verification` | Zero unit/integration tests for `layoutGenerator.ts`, `indexedDb.ts` (save/load/corruption handling), `cadExporter.ts` (DXF output), `reportExporter.ts` (PDF generation), or `mediaCapture.ts`. |
 | **11. UI, Store (`useAppStore`) & E2E Browser** | None (`0` tests) | `Missing verification` | Zero automated React/DOM component tests, Zustand store action tests, 2D SVG / 3D Three.js viewport rendering tests, or Playwright/Cypress browser E2E tests. |
-| **12. CI Verification Gates** | Local `npm ci --legacy-peer-deps`, `lint`, `test`, `build` pass; remote CI runner pending | `Verified behavior` (workflow config & local parity) / `Missing verification` (remote GitHub Actions run) | Phase 0.2 hardened `/.github/workflows/deploy.yml` to enforce `npm ci --legacy-peer-deps` (no fallback), `npm run lint`, and `npm test` before `npm run build` and Pages deployment. Live execution on GitHub Actions (`ubuntu-latest`, Node `"20"`) has not yet been triggered remotely. |
+| **12. CI Verification Gates** | Workspace `npm ci --legacy-peer-deps`, `lint`, `test`, `build` pass; exported ZIP & remote CI runner unverified | `Verified behavior` (workspace config & local parity) / `Missing verification` (exported ZIP & remote GitHub Actions run) | Phase 0.2 hardened `/.github/workflows/deploy.yml` to enforce `npm ci --legacy-peer-deps`, `npm run lint`, and `npm test` before `npm run build` and Pages deployment. Post-0.2.2 exported ZIP inspection (`bun.lock` absence in archive) and live GitHub Actions execution (`ubuntu-latest`, Node `"20"`) could not be performed inside `/app/applet`. |
 
 ---
 
