@@ -96,3 +96,38 @@ Inspection and verification uncovered **8 concrete DES/wiring defects** (detaile
 | **Full Regression Suite** | `npm test` (`tsx --test tests/*.test.ts`) | **`80/80` passed, `0` failed, `0` skipped** |
 | **TypeScript Static Check** | `npm run lint` (`tsc --noEmit`) | **Passed (`exit 0`)** |
 | **Production Build** | `npm run build` (`vite build`) | **Passed (`exit 0`)** |
+
+---
+
+## 6. Phase 2.1 Addendum: DES Runtime Invariant Auditor Hardening
+
+**Phase:** Phase 2.1 (DES Runtime Invariant Auditor Hardening)  
+**Primary Target:** `DiscreteEventSimulationEngine.auditInvariants()` (`src/simulation/desEngine.ts`) and unbounded buffer preservation (`src/simulation/autoWire.ts`)  
+**Verification Method:** Adversarial fault-injection (negative tests) paired with positive boundary/runtime simulations (`tests/desVerificationPhase2_1.test.ts`), side-effect-free audit purity assertions, and bit-identical seeded repeatability.
+
+### 6.1 Findings Investigated & Auditor Hardening Applied
+
+| Finding | Defect / Gap Confirmed | Hardening & Source Fix Applied |
+| :--- | :--- | :--- |
+| **1. Buffer Occupancy & Unbounded Buffers** | • Prior check only checked array length (`< 0` impossible on JS arrays) without guarding against `NaN`/negative capacity, non-`collect_batch` zero-capacity residuals, duplicate/stale entities, or negative `stageInTransitCounts`.<br>• `autoWire.ts` lines 296, 610, 623 used `!Number.isFinite(st.bufferCapacity)`, silently overwriting explicit `bufferCapacity: Infinity` to `4`. | • Added `[INV_BUFFER_INVALID_CAPACITY]`, `[INV_BUFFER_ZERO_CAP_OCCUPIED]`, `[INV_BUFFER_OVERFLOW]` (`<= max(cap, batchSize)` for `collect_batch`, skipping upper cap for `Infinity`), `[INV_BUFFER_DUPLICATE_ENTITY]`, `[INV_BUFFER_STALE_ENTITY]`, `[INV_BUFFER_NEGATIVE_IN_TRANSIT]`.<br>• Preserved explicit `Infinity` in `src/simulation/autoWire.ts` (`typeof st.bufferCapacity !== 'number' \|\| Number.isNaN(st.bufferCapacity) \|\| st.bufferCapacity < 0`). |
+| **2. Resource Capacity & References** | • Needed explicit coverage for duplicate slots in `busyUnitIds`, `activeJobs` vs. `busyUnitIds` cardinality/membership mismatches, stale terminal entities in slots/jobs/`blockedOutbox`, processing on unavailable/down/zero-availability/`stop_immediately` resources, and broken stage/object/worker/entity references without false positives on same-timestamp release/reallocation. | • Added `[INV_RESOURCE_INVALID_CAPACITY]`, `[INV_RESOURCE_CAPACITY_OVERFLOW]`, `[INV_RESOURCE_DUPLICATE_SLOT]`, `[INV_RESOURCE_STALE_ENTITY]`, `[INV_JOB_BUSY_MISMATCH]`, `[INV_RESOURCE_UNAVAILABLE_ACTIVE]` (uses `expectedEndAt > now + 1e-6` so same-timestamp release/realloc passes), and `[INV_INVALID_REFERENCE]`. |
+| **3. Worker Lifecycle & Walk Preemption** | • Needed strict cross-queue worker conflict detection across active/paused/walk pools, stale worker allocations, bidirectional `workerAllocatedEntity` / status consistency, and explicit verification of preserved `remainingDispatchDelaySec` & `walkRemainingByWorker` on `pausedWalkJobs`. | • Added `[INV_WORKER_CONFLICT]`, `[INV_WORKER_STALE_ALLOCATION]`, `[INV_WORKER_ALLOCATION_MISMATCH]`, `[INV_WORKER_STATUS_MISMATCH]`, and `[INV_WALK_MISSING_REMAINING_DELAY]`. Verified `setupCompleted` same-timestamp handoff produces zero false positives. |
+| **4. Conveyor & Conveyor-Only Purity** | • Needed explicit cross-checks between `conveyorOccupancy`, `conveyorTransits`, `blockedConveyorEntities`, and `getConveyorPhysicalCapacity`; timing validity; paused interpolation consistency; unavailable-conveyor transit prohibition; spatial pitch on downstream merges; and conveyor-only stage purity. | • Added `[INV_CONVEYOR_NEGATIVE_OCCUPANCY]`, `[INV_CONVEYOR_OCCUPANCY_MISMATCH]`, `[INV_CONVEYOR_OCCUPANCY_OVERFLOW]`, `[INV_CONVEYOR_STALE_ENTITY]`, `[INV_CONVEYOR_TRANSIT_INVALID_TIMING]`, `[INV_CONVEYOR_PAUSED_STATE_INVALID]`, `[INV_CONVEYOR_UNAVAILABLE_TRANSIT]`, `[INV_CONVEYOR_HEADWAY_VIOLATION]` (entry headway + downstream merge spatial pitch), and `[INV_CONVEYOR_ARTIFICIAL_PROCESSING]`. |
+| **5. Exclusive Material Conservation** | • `DesMaterialConservationBreakdown.underProcessingUnits` previously summed `underProcessingUnits + blockedAtStationUnits`, breaking strict exclusivity with `blockedAtStationUnits`. Needed explicit multi-location entity checks, duplicate completion checks, and `reworkedActiveUnits` tracking. | • Fixed `underProcessingUnits` to exclude blocked station entities and added explicit assertion `waiting + batchBuffer + underProcessing + blockedAtStation + inTransit + pendingArrival === activeWipUnits`.<br>• Added `reworkedActiveUnits` to `DesMaterialConservationBreakdown`, plus `[INV_MATERIAL_CONSERVATION]`, `[INV_DUPLICATE_COMPLETION]`, and `[INV_ENTITY_MULTI_LOCATION]`. |
+| **6. Multi-Edge Deadlock & Audit Purity** | • `waitGraph` previously stored a single `Map<string, Edge>` per `fromStageId`, allowing a non-cyclic outbox entry on the same stage to overwrite and mask a true circular deadlock edge. | • Upgraded `waitGraph` to `Map<string, WaitEdge[]>` DFS cycle detection so sibling branches never mask circular waits while temporary downstream blocking reports `deadlocks = []`.<br>• Verified `auditInvariants()` mutates zero engine state and preserves bit-identical `SimEvent[]` / KPI outputs across seeded runs. |
+
+### 6.2 Files Touched & Untouched Boundary (Phase 2.1)
+
+- **Modified:** `src/simulation/desEngine.ts`, `src/simulation/autoWire.ts`
+- **Created:** `tests/desVerificationPhase2_1.test.ts` (`6` comprehensive positive + fault-injection suites, `968` lines)
+- **Updated Docs:** `docs/engineering/EVENT_ACCOUNTING_SPEC.md`, `docs/engineering/DES_VERIFICATION_REPORT.md`, `docs/engineering/TEST_COVERAGE_MATRIX.md`
+- **Untouched Verified:** `src/engineering/oeeEngine.ts`, `src/engineering/capacityEngine.ts`, `package.json`, `tsconfig.json`, `vite.config.ts`, `.github/workflows/deploy.yml`
+
+### 6.3 Phase 2.1 Executed Verification Results
+
+| Check | Command | Observed Result |
+| :--- | :--- | :--- |
+| **Phase 2.1 Fault & Boundary Suite** | `npx tsx --test tests/desVerificationPhase2_1.test.ts` | **`6/6` passed, `0` failed, `0` skipped** |
+| **Full Regression Suite** | `npm test` (`tsx --test tests/*.test.ts`) | **`86/86` passed, `0` failed, `0` skipped** |
+| **TypeScript Static Check** | `npm run lint` (`tsc --noEmit`) | **Passed (`exit 0`)** |
+| **Production Build** | `npm run build` (`vite build`) | **Passed (`exit 0`)** |

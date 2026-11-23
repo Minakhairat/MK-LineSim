@@ -128,6 +128,7 @@ export interface DesMaterialConservationBreakdown {
   inTransitUnits: number;
   blockedAtStationUnits: number;
   pendingArrivalUnits: number;
+  reworkedActiveUnits: number;
   absorbedChildEntities: number;
   unaccountedUnits: number;
 }
@@ -4436,18 +4437,6 @@ export class DiscreteEventSimulationEngine {
   public auditInvariants(): DesInvariantAuditResult {
     const violations: string[] = [];
     const now = this.clockSec;
-
-    // 1. Check queues & occupancy non-negative
-    for (const [sid, buf] of this.stageBuffers.entries()) {
-      if (buf.length < 0) violations.push(`Negative queue length at stage ${sid}`);
-      const inTr = this.stageInTransitCounts.get(sid) || 0;
-      if (inTr < 0) violations.push(`Negative in-transit count (${inTr}) at stage ${sid}`);
-    }
-    for (const [cid, occ] of this.conveyorOccupancy.entries()) {
-      if (occ < 0) violations.push(`Negative conveyor occupancy (${occ}) on ${cid}`);
-    }
-
-    // 2. Check resource capacity overflow, duplicate busy IDs, and unavailable resource processing
     const entityLocationSets = new Map<string, string[]>();
     const recordLoc = (entId: string, label: string) => {
       const list = entityLocationSets.get(entId) || [];
@@ -4455,27 +4444,296 @@ export class DiscreteEventSimulationEngine {
       entityLocationSets.set(entId, list);
     };
 
+    // 1. Validate stage references & stage buffer occupancy / capacity semantics (finite, zero, unbounded)
+    for (const stage of this.project.stages) {
+      if (!this.stageBuffers.has(stage.id)) {
+        violations.push(`[INV_INVALID_REFERENCE] Stage ${stage.id} missing stageBuffers entry`);
+      }
+      for (const oid of stage.assignedObjectIds) {
+        if (!this.objectsMap.has(oid) || !this.objectStates.has(oid)) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Stage ${stage.id} assignedObjectIds references missing object ${oid}`
+          );
+        }
+      }
+      if (stage.conveyorObjectId && !this.objectsMap.has(stage.conveyorObjectId)) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] Stage ${stage.id} conveyorObjectId references missing object ${stage.conveyorObjectId}`
+        );
+      }
+      for (const pid of stage.predecessorIds) {
+        if (!this.stagesMap.has(pid)) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Stage ${stage.id} predecessorIds references missing stage ${pid}`
+          );
+        }
+      }
+      for (const sidNext of stage.successorIds) {
+        if (!this.stagesMap.has(sidNext)) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Stage ${stage.id} successorIds references missing stage ${sidNext}`
+          );
+        }
+      }
+    }
+
+    for (const [sid, holder] of this.stageBatchHolders.entries()) {
+      if (!this.stagesMap.has(sid)) {
+        violations.push(`[INV_INVALID_REFERENCE] stageBatchHolders references missing stage ${sid}`);
+      }
+      const seen = new Set<string>();
+      for (const h of holder) {
+        if (seen.has(h.entityId)) {
+          violations.push(
+            `[INV_BUFFER_DUPLICATE_ENTITY] Duplicate entity ${h.entityId} in batch holder for stage ${sid}`
+          );
+        }
+        seen.add(h.entityId);
+        const hEnt = this.entities.get(h.entityId);
+        if (!hEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Batch holder for stage ${sid} references missing entity ${h.entityId}`
+          );
+        } else if (
+          hEnt.absorbedIntoEntityId ||
+          hEnt.completedAt !== undefined ||
+          hEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_BUFFER_STALE_ENTITY] Batch holder for stage ${sid} holds non-active entity ${h.entityId}`
+          );
+        }
+        recordLoc(h.entityId, `batch_holder:${sid}`);
+      }
+    }
+
+    for (const [sid, buf] of this.stageBuffers.entries()) {
+      const stage = this.stagesMap.get(sid);
+      if (!stage) {
+        violations.push(`[INV_INVALID_REFERENCE] stageBuffers references missing stage ${sid}`);
+      }
+      const inTr = this.stageInTransitCounts.get(sid) || 0;
+      if (inTr < 0) {
+        violations.push(
+          `[INV_BUFFER_NEGATIVE_IN_TRANSIT] Negative in-transit count (${inTr}) at stage ${sid}`
+        );
+      }
+
+      const seen = new Set<string>();
+      for (const eid of buf) {
+        if (seen.has(eid)) {
+          violations.push(
+            `[INV_BUFFER_DUPLICATE_ENTITY] Duplicate entity ${eid} in queue for stage ${sid}`
+          );
+        }
+        seen.add(eid);
+        const qEnt = this.entities.get(eid);
+        if (!qEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Queue for stage ${sid} references missing entity ${eid}`
+          );
+        } else if (
+          qEnt.absorbedIntoEntityId ||
+          qEnt.completedAt !== undefined ||
+          qEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_BUFFER_STALE_ENTITY] Queue for stage ${sid} holds non-active entity ${eid} (absorbed=${qEnt.absorbedIntoEntityId}, completedAt=${qEnt.completedAt}, scrapped=${qEnt.scrapped})`
+          );
+        }
+        recordLoc(eid, `queue:${sid}`);
+      }
+
+      if (stage) {
+        const rawCap = stage.bufferCapacity;
+        if (typeof rawCap !== 'number' || Number.isNaN(rawCap) || rawCap < 0) {
+          violations.push(
+            `[INV_BUFFER_INVALID_CAPACITY] Stage ${sid} has invalid bufferCapacity (${String(rawCap)})`
+          );
+        } else {
+          const holder = this.stageBatchHolders.get(sid) || [];
+          const batchCfg = this.stageBatchConfigs.get(sid);
+          const isCollectBatch = batchCfg?.batchMode === 'collect_batch' && batchCfg.batchSize > 1;
+          const effectiveCap = isCollectBatch ? Math.max(rawCap, batchCfg!.batchSize) : rawCap;
+          const totalBuffered = buf.length + holder.length;
+
+          if (Number.isFinite(rawCap) && rawCap === 0 && !isCollectBatch && totalBuffered > 0) {
+            violations.push(
+              `[INV_BUFFER_ZERO_CAP_OCCUPIED] Zero-capacity stage ${sid} has buffered occupancy (queue=${buf.length}, batchHolder=${holder.length})`
+            );
+          } else if (Number.isFinite(effectiveCap) && totalBuffered > effectiveCap) {
+            violations.push(
+              `[INV_BUFFER_OVERFLOW] Stage ${sid} buffer occupancy (${totalBuffered}: queue=${buf.length}, batchHolder=${holder.length}) exceeds capacity (${effectiveCap})`
+            );
+          }
+        }
+      }
+    }
+
+    // 2. Check resource capacity overflow, duplicate busy slots, job parity, invalid references, and unavailable resource processing
     for (const [objId, st] of this.objectStates.entries()) {
       const obj = this.objectsMap.get(objId);
-      const uniqueBusy = new Set(st.busyUnitIds);
-      if (uniqueBusy.size !== st.busyUnitIds.length) {
-        violations.push(`Duplicate entity in busyUnitIds on ${objId}`);
+      if (!obj) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] objectStates references missing object ${objId}`
+        );
       }
+
+      const uniqueBusy = new Set<string>();
       for (const eid of st.busyUnitIds) {
+        if (uniqueBusy.has(eid)) {
+          violations.push(
+            `[INV_RESOURCE_DUPLICATE_SLOT] Duplicate entity ${eid} in busyUnitIds on ${objId}`
+          );
+        }
+        uniqueBusy.add(eid);
+        const bEnt = this.entities.get(eid);
+        if (!bEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Resource ${objId} busyUnitIds references missing entity ${eid}`
+          );
+        } else if (
+          bEnt.absorbedIntoEntityId ||
+          bEnt.completedAt !== undefined ||
+          bEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_RESOURCE_STALE_ENTITY] Resource ${objId} busyUnitIds holds non-active entity ${eid}`
+          );
+        }
         recordLoc(eid, obj?.kind === 'conveyor' ? `conveyor_busy:${objId}` : `station_busy:${objId}`);
       }
-      if (obj && obj.kind !== 'conveyor') {
-        const cap = Math.max(1, obj.operations.capacity);
-        if (st.busyUnitIds.length > cap) {
-          violations.push(`Capacity overflow on ${objId}: ${st.busyUnitIds.length} > ${cap}`);
+
+      if (obj && (obj.kind === 'machine' || obj.kind === 'workstation')) {
+        const rawCap = obj.operations.capacity;
+        if (typeof rawCap !== 'number' || !Number.isFinite(rawCap) || rawCap < 1) {
+          violations.push(
+            `[INV_RESOURCE_INVALID_CAPACITY] Resource ${objId} has invalid capacity (${String(rawCap)})`
+          );
+        } else if (st.busyUnitIds.length > rawCap) {
+          violations.push(
+            `[INV_RESOURCE_CAPACITY_OVERFLOW] Capacity overflow on ${objId}: ${st.busyUnitIds.length} > ${rawCap}`
+          );
+        }
+      } else if (obj && obj.kind === 'buffer') {
+        const rawCap = obj.operations.capacity;
+        if (typeof rawCap !== 'number' || Number.isNaN(rawCap) || rawCap < 0) {
+          violations.push(
+            `[INV_RESOURCE_INVALID_CAPACITY] Buffer object ${objId} has invalid capacity (${String(rawCap)})`
+          );
+        } else if (Number.isFinite(rawCap) && st.busyUnitIds.length > rawCap) {
+          violations.push(
+            `[INV_RESOURCE_CAPACITY_OVERFLOW] Buffer capacity overflow on ${objId}: ${st.busyUnitIds.length} > ${rawCap}`
+          );
         }
       }
 
       const activeList = this.activeJobs.get(objId) || [];
-      const nonCompletingActive = activeList.filter((j) => j.expectedEndAt > now + 1e-6);
+      const pausedList = this.pausedJobs.get(objId) || [];
       const pendingList = this.pendingWalkJobs.get(objId) || [];
+      const pausedWalkList = this.pausedWalkJobs.get(objId) || [];
+      const nonCompletingActive = activeList.filter((j) => j.expectedEndAt > now + 1e-6);
+      const nonCompletingPendingWalk = pendingList.filter((pj) => pj.startAt > now + 1e-6);
+
       if (activeList.length > st.busyUnitIds.length) {
-        violations.push(`Active jobs (${activeList.length}) exceed busyUnitIds (${st.busyUnitIds.length}) on ${objId}`);
+        violations.push(
+          `[INV_JOB_BUSY_MISMATCH] Active jobs (${activeList.length}) exceed busyUnitIds (${st.busyUnitIds.length}) on ${objId}`
+        );
+      }
+
+      const jobEntitiesOnObj = new Set<string>();
+      for (const j of [...activeList, ...pausedList]) {
+        if (jobEntitiesOnObj.has(j.entityId)) {
+          violations.push(
+            `[INV_RESOURCE_DUPLICATE_SLOT] Entity ${j.entityId} has duplicate job records on ${objId}`
+          );
+        }
+        jobEntitiesOnObj.add(j.entityId);
+        if (!this.stagesMap.has(j.stageId)) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Job on ${objId} references missing stage ${j.stageId}`
+          );
+        }
+        const jEnt = this.entities.get(j.entityId);
+        if (!jEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Job on ${objId} references missing entity ${j.entityId}`
+          );
+        } else if (
+          jEnt.absorbedIntoEntityId ||
+          jEnt.completedAt !== undefined ||
+          jEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_RESOURCE_STALE_ENTITY] Job on ${objId} holds non-active entity ${j.entityId}`
+          );
+        }
+        if (!uniqueBusy.has(j.entityId)) {
+          violations.push(
+            `[INV_JOB_BUSY_MISMATCH] Job entity ${j.entityId} on ${objId} missing from busyUnitIds`
+          );
+        }
+        if (obj?.kind === 'conveyor') {
+          if (!j.isConveyorNode) {
+            violations.push(
+              `[INV_CONVEYOR_ARTIFICIAL_PROCESSING] Conveyor ${objId} holds non-conveyor processing job for ${j.entityId}`
+            );
+          } else {
+            const jStage = this.stagesMap.get(j.stageId);
+            const pureConveyorOnly =
+              jStage &&
+              jStage.requiredWorkers <= 0 &&
+              (jStage.processingTimeSec || 0) <= 0 &&
+              (jStage.loadingTimeSec || 0) <= 0 &&
+              (jStage.unloadingTimeSec || 0) <= 0;
+            if (pureConveyorOnly && (j.workerIds.length > 0 || (j.workDurationSec ?? 0) > 0)) {
+              violations.push(
+                `[INV_CONVEYOR_ARTIFICIAL_PROCESSING] Conveyor-only stage ${j.stageId} (${objId}) generated manual work/worker occupancy for ${j.entityId}`
+              );
+            }
+          }
+        }
+        for (const wid of j.workerIds) {
+          if (!this.workersMap.has(wid)) {
+            violations.push(
+              `[INV_INVALID_REFERENCE] Job on ${objId} references missing worker ${wid}`
+            );
+          }
+        }
+      }
+
+      for (const pj of [...pendingList, ...pausedWalkList]) {
+        if (!this.stagesMap.has(pj.stageId)) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Walk job on ${objId} references missing stage ${pj.stageId}`
+          );
+        }
+        const pjEnt = this.entities.get(pj.entityId);
+        if (!pjEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Walk job on ${objId} references missing entity ${pj.entityId}`
+          );
+        } else if (
+          pjEnt.absorbedIntoEntityId ||
+          pjEnt.completedAt !== undefined ||
+          pjEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_RESOURCE_STALE_ENTITY] Walk job on ${objId} holds non-active entity ${pj.entityId}`
+          );
+        }
+        if (!uniqueBusy.has(pj.entityId)) {
+          violations.push(
+            `[INV_JOB_BUSY_MISMATCH] Walk job entity ${pj.entityId} on ${objId} missing from busyUnitIds`
+          );
+        }
+        for (const wid of pj.workerIds) {
+          if (!this.workersMap.has(wid)) {
+            violations.push(
+              `[INV_INVALID_REFERENCE] Walk job on ${objId} references missing worker ${wid}`
+            );
+          }
+        }
       }
 
       if (
@@ -4484,16 +4742,22 @@ export class DiscreteEventSimulationEngine {
         st.status === 'unavailable'
       ) {
         if (nonCompletingActive.length > 0) {
-          violations.push(`Active processing (${nonCompletingActive.length}) on ${st.status} resource ${objId} at t=${now}`);
+          violations.push(
+            `[INV_RESOURCE_UNAVAILABLE_ACTIVE] Active processing (${nonCompletingActive.length}) on ${st.status} resource ${objId} at t=${now}`
+          );
         }
-        if (pendingList.length > 0) {
-          violations.push(`Pending walk jobs (${pendingList.length}) on ${st.status} resource ${objId} at t=${now}`);
+        if (nonCompletingPendingWalk.length > 0) {
+          violations.push(
+            `[INV_RESOURCE_UNAVAILABLE_ACTIVE] Pending walk jobs (${nonCompletingPendingWalk.length}) on ${st.status} resource ${objId} at t=${now}`
+          );
         }
       }
       if (obj && nonCompletingActive.length > 0) {
         const fp = resolveObjectFailureParams(obj, this.project.simulationConfig);
         if (fp.enabled && fp.availability <= 0) {
-          violations.push(`Processing on zero-availability resource ${objId} at t=${now}`);
+          violations.push(
+            `[INV_RESOURCE_UNAVAILABLE_ACTIVE] Processing on zero-availability resource ${objId} at t=${now}`
+          );
         }
         const avail = this.calendarEngine.getObjectAvailabilityAt(obj, now);
         if (!avail.available) {
@@ -4504,23 +4768,131 @@ export class DiscreteEventSimulationEngine {
               ? this.getObjectShiftEndPolicy(obj)
               : 'stop_immediately';
           if (policy === 'stop_immediately') {
-            violations.push(`Processing on unavailable resource ${objId} (${avail.reason}) under stop_immediately at t=${now}`);
+            violations.push(
+              `[INV_RESOURCE_UNAVAILABLE_ACTIVE] Processing on unavailable resource ${objId} (${avail.reason}) under stop_immediately at t=${now}`
+            );
           }
         }
       }
     }
 
-    // 3. Check conveyor transits, occupancy parity, and unavailable conveyor transport
+    for (const [objId, jobs] of this.activeJobs.entries()) {
+      if (jobs.length > 0 && !this.objectStates.has(objId)) {
+        violations.push(`[INV_INVALID_REFERENCE] activeJobs references missing object ${objId}`);
+      }
+    }
+    for (const [objId, jobs] of this.pausedJobs.entries()) {
+      if (jobs.length > 0 && !this.objectStates.has(objId)) {
+        violations.push(`[INV_INVALID_REFERENCE] pausedJobs references missing object ${objId}`);
+      }
+    }
+
+    // 3. Check conveyor transits, paused transit consistency, occupancy parity, headway/pitch, and unavailable transport
     const convActualCount = new Map<string, number>();
+    const transitsByConv = new Map<string, ConveyorTransit[]>();
     for (const [eid, tr] of this.conveyorTransits.entries()) {
       convActualCount.set(tr.conveyorId, (convActualCount.get(tr.conveyorId) || 0) + 1);
+      const tList = transitsByConv.get(tr.conveyorId) || [];
+      tList.push(tr);
+      transitsByConv.set(tr.conveyorId, tList);
+
       const convObj = this.objectsMap.get(tr.conveyorId);
       const convState = this.objectStates.get(tr.conveyorId);
-      // Only check unavailability if transit wasn't already recorded as conveyorNode busy
+      if (!convObj || convObj.kind !== 'conveyor' || !convState) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] Transit ${eid} references invalid/missing conveyor ${tr.conveyorId}`
+        );
+      }
+      if (!this.stagesMap.has(tr.toStageId) || !this.stagesMap.has(tr.fromStageId)) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] Transit ${eid} references missing stage (from=${tr.fromStageId}, to=${tr.toStageId})`
+        );
+      }
+      const trEnt = this.entities.get(eid);
+      if (!trEnt || tr.entityId !== eid) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] Conveyor transit key/entity mismatch for ${eid}`
+        );
+      } else if (
+        trEnt.absorbedIntoEntityId ||
+        trEnt.completedAt !== undefined ||
+        trEnt.scrapped
+      ) {
+        violations.push(
+          `[INV_CONVEYOR_STALE_ENTITY] Conveyor transit holds non-active entity ${eid}`
+        );
+      }
+
+      if (
+        !Number.isFinite(tr.startTime) ||
+        !Number.isFinite(tr.endTime) ||
+        tr.endTime < tr.startTime - 1e-9
+      ) {
+        violations.push(
+          `[INV_CONVEYOR_TRANSIT_INVALID_TIMING] Transit ${eid} has invalid timing [${tr.startTime}, ${tr.endTime}]`
+        );
+      }
+
+      if (tr.paused) {
+        if (tr.pausedAt === undefined || !Number.isFinite(tr.pausedAt)) {
+          violations.push(
+            `[INV_CONVEYOR_PAUSED_STATE_INVALID] Paused transit ${eid} missing valid pausedAt`
+          );
+        }
+        if (
+          tr.pausedProgress === undefined ||
+          !Number.isFinite(tr.pausedProgress) ||
+          tr.pausedProgress < -1e-6 ||
+          tr.pausedProgress > 1 + 1e-6
+        ) {
+          violations.push(
+            `[INV_CONVEYOR_PAUSED_STATE_INVALID] Paused transit ${eid} has invalid pausedProgress (${tr.pausedProgress})`
+          );
+        }
+        if (
+          tr.remainingTransitSec === undefined ||
+          !Number.isFinite(tr.remainingTransitSec) ||
+          tr.remainingTransitSec < -1e-6 ||
+          tr.remainingBeforeStartSec === undefined ||
+          !Number.isFinite(tr.remainingBeforeStartSec) ||
+          tr.remainingBeforeStartSec < -1e-6
+        ) {
+          violations.push(
+            `[INV_CONVEYOR_PAUSED_STATE_INVALID] Paused transit ${eid} missing valid remaining pause durations`
+          );
+        }
+        if (tr.pausedAt !== undefined && tr.pausedProgress !== undefined && Number.isFinite(tr.pausedAt)) {
+          const span = tr.endTime - tr.startTime;
+          const expectedProg =
+            tr.pausedAt < tr.startTime - 1e-6
+              ? 0
+              : span > 1e-9
+              ? Math.max(0, Math.min(1, (tr.pausedAt - tr.startTime) / span))
+              : 1;
+          if (Math.abs(expectedProg - tr.pausedProgress) > 1e-4) {
+            violations.push(
+              `[INV_CONVEYOR_PAUSED_STATE_INVALID] Paused transit ${eid} pausedProgress (${tr.pausedProgress}) disagrees with pausedAt (${tr.pausedAt}) on [${tr.startTime}, ${tr.endTime}]`
+            );
+          }
+        }
+      } else {
+        if (
+          tr.pausedProgress !== undefined ||
+          tr.pausedAt !== undefined ||
+          tr.remainingTransitSec !== undefined ||
+          tr.remainingBeforeStartSec !== undefined
+        ) {
+          violations.push(
+            `[INV_CONVEYOR_PAUSED_STATE_INVALID] Active unpaused transit ${eid} retains stale paused state fields`
+          );
+        }
+      }
+
+      // Only record transfer_conveyor if transit wasn't already recorded as conveyorNode busy
       if (tr.transferToken !== undefined) {
         recordLoc(eid, `transfer_conveyor:${tr.conveyorId}`);
       }
-      if (!tr.paused && now >= tr.startTime - 1e-6) {
+      if (!tr.paused && now >= tr.startTime - 1e-6 && tr.endTime > now + 1e-6) {
         if (
           convState &&
           (convState.status === 'down' ||
@@ -4528,30 +4900,148 @@ export class DiscreteEventSimulationEngine {
             convState.status === 'unavailable')
         ) {
           violations.push(
-            `Unpaused transportation of ${eid} on ${convState.status} conveyor ${tr.conveyorId} at t=${now}`
+            `[INV_CONVEYOR_UNAVAILABLE_TRANSIT] Unpaused transportation of ${eid} on ${convState.status} conveyor ${tr.conveyorId} at t=${now}`
           );
         }
         if (convObj) {
           const fp = resolveObjectFailureParams(convObj, this.project.simulationConfig);
           if (fp.enabled && fp.availability <= 0) {
-            violations.push(`Transportation on zero-availability conveyor ${tr.conveyorId} at t=${now}`);
+            violations.push(
+              `[INV_CONVEYOR_UNAVAILABLE_TRANSIT] Transportation of ${eid} on zero-availability conveyor ${tr.conveyorId} at t=${now}`
+            );
+          }
+          const convAvail = this.calendarEngine.getObjectAvailabilityAt(convObj, now);
+          if (!convAvail.available) {
+            const cPolicy =
+              convAvail.reason === 'break'
+                ? this.getObjectBreakPolicy(convObj)
+                : convAvail.reason === 'off_shift'
+                ? this.getObjectShiftEndPolicy(convObj)
+                : 'stop_immediately';
+            if (cPolicy === 'stop_immediately') {
+              violations.push(
+                `[INV_CONVEYOR_UNAVAILABLE_TRANSIT] Unpaused transportation of ${eid} on calendar-unavailable conveyor ${tr.conveyorId} (${convAvail.reason}) at t=${now}`
+              );
+            }
           }
         }
       }
     }
+
+    // Conveyor headway & pitch check for same-entry/lane unpaused transits
+    for (const [cid, list] of transitsByConv.entries()) {
+      const convObj = this.objectsMap.get(cid);
+      if (!convObj || convObj.kind !== 'conveyor' || list.length < 2) continue;
+      const convW = Math.max(0.2, convObj.geometry.dimensions.width || 0.8);
+      const spacing = Math.max(0.05, Number(convObj.operations.productSpacingM ?? 0.15));
+      const speed = Math.max(0.01, Number(convObj.operations.speedMps ?? 0.5));
+
+      const entryMeta = list
+        .filter((tr) => !tr.paused)
+        .map((tr) => {
+          const ent = this.entities.get(tr.entityId);
+          const sz = this.getEntityPhysicalSize(ent);
+          const prod = ent ? this.productsMap.get(ent.productId) : undefined;
+          const carrierLen =
+            ent?.isBatchCarrier && ent.containerKind === 'pallet'
+              ? Math.max(1.0, prod?.dimensions.length || 0.75)
+              : sz.length;
+          const pStart = tr.waypoints[0] || { x: 0, y: 0, z: 0 };
+          const pEnd = tr.waypoints[tr.waypoints.length - 1] || pStart;
+          const axEntry = this.getConveyorAxisMetrics(convObj, pStart);
+          const axEnd = this.getConveyorAxisMetrics(convObj, pEnd);
+          return {
+            tr,
+            len: carrierLen,
+            sEntry: axEntry.sBelt,
+            sEnd: axEnd.sBelt,
+            perpEntry: axEntry.perpBelt,
+          };
+        });
+
+      for (let i = 0; i < entryMeta.length; i++) {
+        for (let j = i + 1; j < entryMeta.length; j++) {
+          const a = entryMeta[i];
+          const b = entryMeta[j];
+          if (Math.abs(a.perpEntry - b.perpEntry) >= convW * 0.5) continue;
+          const reqPitch = (a.len + b.len) / 2 + spacing;
+          if (Math.abs(a.sEntry - b.sEntry) < 0.05) {
+            const minHeadwaySec = reqPitch / speed;
+            const gapSec = Math.abs(a.tr.startTime - b.tr.startTime);
+            if (gapSec < minHeadwaySec - 1e-3) {
+              violations.push(
+                `[INV_CONVEYOR_HEADWAY_VIOLATION] Conveyor ${cid} headway violation between ${a.tr.entityId} (start=${a.tr.startTime.toFixed(3)}s) and ${b.tr.entityId} (start=${b.tr.startTime.toFixed(3)}s): gap=${gapSec.toFixed(3)}s < minHeadway=${minHeadwaySec.toFixed(3)}s`
+              );
+            }
+          } else {
+            const early = a.tr.startTime <= b.tr.startTime ? a : b;
+            const late = a.tr.startTime <= b.tr.startTime ? b : a;
+            if (late.tr.startTime < early.tr.endTime - 1e-3 && early.sEnd > late.sEntry - reqPitch + 0.05) {
+              const span = Math.max(0.001, early.tr.endTime - early.tr.startTime);
+              const tRatio = Math.max(0, Math.min(1, (late.tr.startTime - early.tr.startTime) / span));
+              const { pos: earlyPos } = this.evalPolylineAt(
+                early.tr.waypoints,
+                early.tr.cumLengths,
+                tRatio * early.tr.totalLength
+              );
+              const axEarly = this.getConveyorAxisMetrics(convObj, earlyPos);
+              if (Math.abs(axEarly.sBelt - late.sEntry) < reqPitch - 0.02) {
+                violations.push(
+                  `[INV_CONVEYOR_HEADWAY_VIOLATION] Conveyor ${cid} merge pitch violation between ${early.tr.entityId} (s=${axEarly.sBelt.toFixed(3)}m) and ${late.tr.entityId} (sEntry=${late.sEntry.toFixed(3)}m) at t=${late.tr.startTime.toFixed(3)}s < reqPitch=${reqPitch.toFixed(3)}m`
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+
     for (const [cid, bList] of this.blockedConveyorEntities.entries()) {
+      const cObj = this.objectsMap.get(cid);
+      if (!cObj || cObj.kind !== 'conveyor') {
+        violations.push(
+          `[INV_INVALID_REFERENCE] blockedConveyorEntities references missing/non-conveyor ${cid}`
+        );
+      }
       for (const bid of bList) {
+        const bEnt = this.entities.get(bid);
+        if (!bEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] blockedConveyorEntities on ${cid} references missing entity ${bid}`
+          );
+        } else if (
+          bEnt.absorbedIntoEntityId ||
+          bEnt.completedAt !== undefined ||
+          bEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_CONVEYOR_STALE_ENTITY] blockedConveyorEntities on ${cid} holds non-active entity ${bid}`
+          );
+        }
         if (!this.conveyorTransits.has(bid)) {
           convActualCount.set(cid, (convActualCount.get(cid) || 0) + 1);
         }
       }
     }
+
     for (const [cid, occ] of this.conveyorOccupancy.entries()) {
+      const cObj = this.objectsMap.get(cid);
+      if (!cObj || cObj.kind !== 'conveyor') {
+        violations.push(
+          `[INV_INVALID_REFERENCE] conveyorOccupancy references invalid/missing conveyor ${cid}`
+        );
+      }
+      if (occ < 0) {
+        violations.push(
+          `[INV_CONVEYOR_NEGATIVE_OCCUPANCY] Negative conveyor occupancy (${occ}) on ${cid}`
+        );
+      }
       const actual = convActualCount.get(cid) || 0;
       if (occ !== actual) {
-        violations.push(`Conveyor ${cid} occupancy (${occ}) != actual transit/blocked entities (${actual})`);
+        violations.push(
+          `[INV_CONVEYOR_OCCUPANCY_MISMATCH] Conveyor ${cid} occupancy (${occ}) != actual transit/blocked entities (${actual})`
+        );
       }
-      const cObj = this.objectsMap.get(cid);
       if (cObj && occ > 0) {
         // Max capacity check against smallest carrier/entity on belt (pallet carrierLen >= 1m has fewer slots than 0.5m units)
         let capMax = this.getConveyorPhysicalCapacity(cObj, this.project.products[0]);
@@ -4563,75 +5053,142 @@ export class DiscreteEventSimulationEngine {
           }
         }
         if (occ > capMax) {
-          violations.push(`Conveyor ${cid} occupancy overflow: ${occ} > ${capMax}`);
+          violations.push(
+            `[INV_CONVEYOR_OCCUPANCY_OVERFLOW] Conveyor ${cid} occupancy overflow: ${occ} > ${capMax}`
+          );
         }
       }
     }
 
-    // 4. Check stage buffers and batch holders
-    for (const [sid, buf] of this.stageBuffers.entries()) {
-      const seen = new Set<string>();
-      for (const eid of buf) {
-        if (seen.has(eid)) violations.push(`Duplicate entity ${eid} in queue for stage ${sid}`);
-        seen.add(eid);
-        recordLoc(eid, `queue:${sid}`);
-      }
-    }
-    for (const [sid, holder] of this.stageBatchHolders.entries()) {
-      const seen = new Set<string>();
-      for (const h of holder) {
-        if (seen.has(h.entityId)) violations.push(`Duplicate entity ${h.entityId} in batch holder for stage ${sid}`);
-        seen.add(h.entityId);
-        recordLoc(h.entityId, `batch_holder:${sid}`);
-      }
-    }
-
-    // 5. Check worker conflict / double-allocation invariant
-    const workerJobs = new Map<string, string[]>();
-    const addWorkerJob = (wid: string, tag: string) => {
+    // 4. Check worker conflict / double-allocation / status / walk preemption invariants
+    const workerJobs = new Map<
+      string,
+      Array<{ tag: string; kind: 'active' | 'pending_walk' | 'paused' | 'paused_walk'; entityId: string; objectId: string }>
+    >();
+    const addWorkerJob = (
+      wid: string,
+      kind: 'active' | 'pending_walk' | 'paused' | 'paused_walk',
+      objId: string,
+      entityId: string
+    ) => {
       const list = workerJobs.get(wid) || [];
-      list.push(tag);
+      list.push({ tag: `${kind}:${objId}:${entityId}`, kind, entityId, objectId: objId });
       workerJobs.set(wid, list);
     };
     for (const [objId, jobs] of this.activeJobs.entries()) {
       for (const j of jobs) {
-        for (const wid of j.workerIds) addWorkerJob(wid, `active:${objId}:${j.entityId}`);
+        for (const wid of j.workerIds) addWorkerJob(wid, 'active', objId, j.entityId);
       }
     }
     for (const [objId, pJobs] of this.pendingWalkJobs.entries()) {
       for (const pj of pJobs) {
-        for (const wid of pj.workerIds) addWorkerJob(wid, `pending_walk:${objId}:${pj.entityId}`);
+        for (const wid of pj.workerIds) addWorkerJob(wid, 'pending_walk', objId, pj.entityId);
       }
     }
     for (const [objId, jobs] of this.pausedJobs.entries()) {
       for (const j of jobs) {
-        for (const wid of j.workerIds) addWorkerJob(wid, `paused:${objId}:${j.entityId}`);
+        for (const wid of j.workerIds) addWorkerJob(wid, 'paused', objId, j.entityId);
       }
     }
     for (const [objId, pJobs] of this.pausedWalkJobs.entries()) {
       for (const pj of pJobs) {
-        for (const wid of pj.workerIds) addWorkerJob(wid, `paused_walk:${objId}:${pj.entityId}`);
+        if (
+          pj.remainingDispatchDelaySec === undefined ||
+          !Number.isFinite(pj.remainingDispatchDelaySec) ||
+          pj.remainingDispatchDelaySec < 0
+        ) {
+          violations.push(
+            `[INV_WALK_MISSING_REMAINING_DELAY] Paused walk job for ${pj.entityId} on ${objId} missing valid remainingDispatchDelaySec (${String(pj.remainingDispatchDelaySec)})`
+          );
+        }
+        for (const wid of pj.workerIds) {
+          const remW = pj.walkRemainingByWorker.get(wid);
+          if (remW === undefined || !Number.isFinite(remW) || remW < 0) {
+            violations.push(
+              `[INV_WALK_MISSING_REMAINING_DELAY] Paused walk job for ${pj.entityId} on ${objId} missing valid walkRemainingByWorker for worker ${wid}`
+            );
+          }
+          addWorkerJob(wid, 'paused_walk', objId, pj.entityId);
+        }
       }
     }
-    for (const [wid, tags] of workerJobs.entries()) {
-      if (tags.length > 1) {
-        violations.push(`Worker ${wid} allocated to simultaneous conflicting jobs: ${tags.join(', ')}`);
+    for (const [wid, entries] of workerJobs.entries()) {
+      if (!this.workersMap.has(wid)) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] Worker job tracking references missing worker ${wid}`
+        );
+      }
+      if (entries.length > 1) {
+        violations.push(
+          `[INV_WORKER_CONFLICT] Worker ${wid} allocated to simultaneous conflicting jobs: ${entries.map((e) => e.tag).join(', ')}`
+        );
       }
     }
     for (const [wid, allocEnt] of this.workerAllocatedEntity.entries()) {
-      const tags = workerJobs.get(wid) || [];
+      if (!this.workersMap.has(wid)) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] workerAllocatedEntity references missing worker ${wid}`
+        );
+        continue;
+      }
+      const jobs = workerJobs.get(wid) || [];
+      const ws = this.workerStates.get(wid);
       const entityHeldInStationBusy =
         allocEnt !== null &&
         Array.from(this.objectStates.values()).some((st) => st.busyUnitIds.includes(allocEnt));
-      if (allocEnt !== null && tags.length === 0 && !entityHeldInStationBusy) {
-        violations.push(`Worker ${wid} still marked allocated to ${allocEnt} with no active/paused/dispatched job`);
+      if (allocEnt !== null) {
+        const aEnt = this.entities.get(allocEnt);
+        if (!aEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] Worker ${wid} allocated to missing entity ${allocEnt}`
+          );
+        } else if (
+          aEnt.absorbedIntoEntityId ||
+          aEnt.completedAt !== undefined ||
+          aEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_WORKER_STALE_ALLOCATION] Worker ${wid} still allocated to terminal/absorbed entity ${allocEnt}`
+          );
+        }
+        if (jobs.length === 0 && !entityHeldInStationBusy) {
+          violations.push(
+            `[INV_WORKER_STALE_ALLOCATION] Worker ${wid} still marked allocated to ${allocEnt} with no active/paused/dispatched job`
+          );
+        }
+        if (jobs.length === 1 && jobs[0].entityId !== allocEnt) {
+          violations.push(
+            `[INV_WORKER_ALLOCATION_MISMATCH] Worker ${wid} allocated to ${allocEnt} but job (${jobs[0].tag}) tracks ${jobs[0].entityId}`
+          );
+        }
       }
-      if (allocEnt === null && tags.length > 0) {
-        violations.push(`Worker ${wid} has job allocation (${tags.join(', ')}) but workerAllocatedEntity is null`);
+      if (allocEnt === null && jobs.length > 0) {
+        violations.push(
+          `[INV_WORKER_ALLOCATION_MISMATCH] Worker ${wid} has job allocation (${jobs.map((j) => j.tag).join(', ')}) but workerAllocatedEntity is null`
+        );
+      }
+      if (ws) {
+        if (ws.status === 'walking') {
+          if (allocEnt === null || !jobs.some((j) => j.kind === 'pending_walk')) {
+            violations.push(
+              `[INV_WORKER_STATUS_MISMATCH] Worker ${wid} status is 'walking' without matching pending_walk job and allocation (alloc=${String(allocEnt)}, jobs=${jobs.map((j) => j.tag).join(',')})`
+            );
+          }
+        } else if (ws.status === 'busy') {
+          const hasPaused = jobs.some((j) => j.kind === 'paused' || j.kind === 'paused_walk');
+          const hasPending = jobs.some((j) => j.kind === 'pending_walk');
+          const hasActiveOrZeroGapSetupHandoff =
+            jobs.some((j) => j.kind === 'active') || (jobs.length === 0 && entityHeldInStationBusy);
+          if (allocEnt === null || hasPaused || hasPending || !hasActiveOrZeroGapSetupHandoff) {
+            violations.push(
+              `[INV_WORKER_STATUS_MISMATCH] Worker ${wid} status is 'busy' without consistent active job (alloc=${String(allocEnt)}, jobs=${jobs.map((j) => j.tag).join(',')})`
+            );
+          }
+        }
       }
     }
 
-    // 6. Full Material Conservation & No-Double-Completion Check
+    // 5. Full Material Conservation & No-Double-Completion Check
     let completedUnits = 0;
     let scrappedUnits = 0;
     let activeWipUnits = 0;
@@ -4641,6 +5198,7 @@ export class DiscreteEventSimulationEngine {
     let inTransitUnits = 0;
     let blockedAtStationUnits = 0;
     let pendingArrivalUnits = 0;
+    let reworkedActiveUnits = 0;
     let absorbedChildEntities = 0;
     const completedSeen = new Set<string>();
     const activeWipSeen = new Set<string>();
@@ -4649,33 +5207,52 @@ export class DiscreteEventSimulationEngine {
       if (ent.absorbedIntoEntityId) {
         absorbedChildEntities++;
         if (this.activeEntities.has(ent.id)) {
-          violations.push(`Absorbed entity ${ent.id} still present in activeEntities`);
+          violations.push(
+            `[INV_MATERIAL_CONSERVATION] Absorbed entity ${ent.id} still present in activeEntities`
+          );
         }
         const locs = entityLocationSets.get(ent.id);
         if (locs && locs.length > 0) {
-          violations.push(`Absorbed entity ${ent.id} still occupies container: ${locs.join(', ')}`);
+          violations.push(
+            `[INV_ENTITY_MULTI_LOCATION] Absorbed entity ${ent.id} still occupies container: ${locs.join(', ')}`
+          );
         }
         continue;
       }
 
-      const units = Math.max(1, ent.batchCount ?? 1);
+      const rawBatch = ent.batchCount ?? 1;
+      if (typeof rawBatch !== 'number' || !Number.isFinite(rawBatch) || rawBatch < 1) {
+        violations.push(
+          `[INV_MATERIAL_CONSERVATION] Entity ${ent.id} has invalid batchCount (${String(ent.batchCount)})`
+        );
+      }
+      const units = Math.max(1, Number.isFinite(rawBatch) ? rawBatch : 1);
+
       if (ent.completedAt !== undefined) {
         if (completedSeen.has(ent.id)) {
-          violations.push(`Completed entity ${ent.id} counted twice`);
+          violations.push(`[INV_DUPLICATE_COMPLETION] Completed entity ${ent.id} counted twice`);
         }
         completedSeen.add(ent.id);
         if (ent.scrapped) {
-          violations.push(`Entity ${ent.id} is both completed and scrapped`);
+          violations.push(
+            `[INV_MATERIAL_CONSERVATION] Entity ${ent.id} is both completed and scrapped`
+          );
         }
         if (ent.completedAt < ent.createdAt - 1e-9) {
-          violations.push(`Entity ${ent.id} completedAt (${ent.completedAt}) < createdAt (${ent.createdAt})`);
+          violations.push(
+            `[INV_MATERIAL_CONSERVATION] Entity ${ent.id} completedAt (${ent.completedAt}) < createdAt (${ent.createdAt})`
+          );
         }
         if (this.activeEntities.has(ent.id)) {
-          violations.push(`Completed entity ${ent.id} still in activeEntities`);
+          violations.push(
+            `[INV_MATERIAL_CONSERVATION] Completed entity ${ent.id} still in activeEntities`
+          );
         }
         const locs = entityLocationSets.get(ent.id);
         if (locs && locs.length > 0) {
-          violations.push(`Completed entity ${ent.id} still in container: ${locs.join(', ')}`);
+          violations.push(
+            `[INV_ENTITY_MULTI_LOCATION] Completed entity ${ent.id} still in container: ${locs.join(', ')}`
+          );
         }
         completedUnits += units;
         continue;
@@ -4683,11 +5260,15 @@ export class DiscreteEventSimulationEngine {
 
       if (ent.scrapped) {
         if (this.activeEntities.has(ent.id)) {
-          violations.push(`Scrapped entity ${ent.id} still in activeEntities`);
+          violations.push(
+            `[INV_MATERIAL_CONSERVATION] Scrapped entity ${ent.id} still in activeEntities`
+          );
         }
         const locs = entityLocationSets.get(ent.id);
         if (locs && locs.length > 0) {
-          violations.push(`Scrapped entity ${ent.id} still in container: ${locs.join(', ')}`);
+          violations.push(
+            `[INV_ENTITY_MULTI_LOCATION] Scrapped entity ${ent.id} still in container: ${locs.join(', ')}`
+          );
         }
         scrappedUnits += units;
         continue;
@@ -4696,13 +5277,20 @@ export class DiscreteEventSimulationEngine {
       // Active WIP entity
       activeWipSeen.add(ent.id);
       activeWipUnits += units;
+      if (ent.reworkCount > 0) {
+        reworkedActiveUnits += units;
+      }
       if (!this.activeEntities.has(ent.id)) {
-        violations.push(`Active entity ${ent.id} missing from activeEntities`);
+        violations.push(
+          `[INV_MATERIAL_CONSERVATION] Active entity ${ent.id} missing from activeEntities`
+        );
       }
 
       const locs = entityLocationSets.get(ent.id) || [];
       if (locs.length > 1) {
-        violations.push(`Entity ${ent.id} in multiple places simultaneously: ${locs.join(', ')}`);
+        violations.push(
+          `[INV_ENTITY_MULTI_LOCATION] Entity ${ent.id} in multiple places simultaneously: ${locs.join(', ')}`
+        );
       }
       if (locs.length === 1) {
         const loc = locs[0];
@@ -4726,22 +5314,45 @@ export class DiscreteEventSimulationEngine {
     }
 
     for (const [eid, ent] of this.activeEntities.entries()) {
-      if (!activeWipSeen.has(eid)) {
-        violations.push(`activeEntities contains stale entry ${eid} (completed=${ent.completedAt}, scrapped=${ent.scrapped}, absorbed=${ent.absorbedIntoEntityId})`);
+      if (!this.entities.has(eid)) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] activeEntities entry ${eid} missing from entities map`
+        );
+      } else if (!activeWipSeen.has(eid)) {
+        violations.push(
+          `[INV_MATERIAL_CONSERVATION] activeEntities contains stale entry ${eid} (completed=${ent.completedAt}, scrapped=${ent.scrapped}, absorbed=${ent.absorbedIntoEntityId})`
+        );
       }
     }
 
+    const wipBucketSum =
+      waitingInQueueUnits +
+      batchBufferUnits +
+      underProcessingUnits +
+      blockedAtStationUnits +
+      inTransitUnits +
+      pendingArrivalUnits;
+    if (wipBucketSum !== activeWipUnits && !violations.some((v) => v.includes('[INV_ENTITY_MULTI_LOCATION]'))) {
+      violations.push(
+        `[INV_MATERIAL_CONSERVATION] WIP bucket sum (${wipBucketSum}) !== activeWipUnits (${activeWipUnits})`
+      );
+    }
+
     if (completedUnits !== this.completedCount) {
-      violations.push(`completedUnits (${completedUnits}) !== completedCount (${this.completedCount})`);
+      violations.push(
+        `[INV_MATERIAL_CONSERVATION] completedUnits (${completedUnits}) !== completedCount (${this.completedCount})`
+      );
     }
     if (scrappedUnits !== this.scrappedCount) {
-      violations.push(`scrappedUnits (${scrappedUnits}) !== scrappedCount (${this.scrappedCount})`);
+      violations.push(
+        `[INV_MATERIAL_CONSERVATION] scrappedUnits (${scrappedUnits}) !== scrappedCount (${this.scrappedCount})`
+      );
     }
     const accountedTotal = completedUnits + scrappedUnits + activeWipUnits;
     const unaccountedUnits = this.totalArrived - accountedTotal;
     if (unaccountedUnits !== 0) {
       violations.push(
-        `Material conservation violated: released=${this.totalArrived}, completed=${completedUnits}, scrapped=${scrappedUnits}, wip=${activeWipUnits}, diff=${unaccountedUnits}`
+        `[INV_MATERIAL_CONSERVATION] Material conservation violated: released=${this.totalArrived}, completed=${completedUnits}, scrapped=${scrappedUnits}, wip=${activeWipUnits}, diff=${unaccountedUnits}`
       );
     }
 
@@ -4752,53 +5363,106 @@ export class DiscreteEventSimulationEngine {
     for (const v of this.productCompletedCount.values()) prodCompSum += v;
     for (const v of this.productScrappedCount.values()) prodScrapSum += v;
     if (prodRelSum !== this.totalArrived) {
-      violations.push(`Per-product released sum (${prodRelSum}) !== totalArrived (${this.totalArrived})`);
+      violations.push(
+        `[INV_MATERIAL_CONSERVATION] Per-product released sum (${prodRelSum}) !== totalArrived (${this.totalArrived})`
+      );
     }
     if (prodCompSum !== this.completedCount) {
-      violations.push(`Per-product completed sum (${prodCompSum}) !== completedCount (${this.completedCount})`);
+      violations.push(
+        `[INV_MATERIAL_CONSERVATION] Per-product completed sum (${prodCompSum}) !== completedCount (${this.completedCount})`
+      );
     }
     if (prodScrapSum !== this.scrappedCount) {
-      violations.push(`Per-product scrapped sum (${prodScrapSum}) !== scrappedCount (${this.scrappedCount})`);
+      violations.push(
+        `[INV_MATERIAL_CONSERVATION] Per-product scrapped sum (${prodScrapSum}) !== scrappedCount (${this.scrappedCount})`
+      );
     }
 
-    // 7. Routing / circular wait deadlock detection across blockedOutbox
-    const waitGraph = new Map<string, { nextStageId: string; objectId: string; entityId: string }>();
+    // 6. Routing / circular wait deadlock detection across blockedOutbox (multi-edge adjacency DFS)
+    type WaitEdge = { nextStageId: string; objectId: string; entityId: string };
+    const waitGraph = new Map<string, WaitEdge[]>();
     for (const [nextSid, items] of this.blockedOutbox.entries()) {
+      if (items.length > 0 && !this.stagesMap.has(nextSid)) {
+        violations.push(
+          `[INV_INVALID_REFERENCE] blockedOutbox references missing target stage ${nextSid}`
+        );
+      }
       for (const item of items) {
+        if (!this.objectsMap.has(item.objectId)) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] blockedOutbox item references missing object ${item.objectId}`
+          );
+        }
+        const bEnt = this.entities.get(item.entityId);
+        if (!bEnt) {
+          violations.push(
+            `[INV_INVALID_REFERENCE] blockedOutbox item references missing entity ${item.entityId}`
+          );
+        } else if (
+          bEnt.absorbedIntoEntityId ||
+          bEnt.completedAt !== undefined ||
+          bEnt.scrapped
+        ) {
+          violations.push(
+            `[INV_RESOURCE_STALE_ENTITY] blockedOutbox holds non-active entity ${item.entityId}`
+          );
+        }
         const fromStage = Array.from(this.stagesMap.values()).find((s) =>
           s.assignedObjectIds.includes(item.objectId)
         );
-        if (fromStage && !waitGraph.has(fromStage.id)) {
-          waitGraph.set(fromStage.id, {
-            nextStageId: nextSid,
-            objectId: item.objectId,
-            entityId: item.entityId,
-          });
+        if (fromStage) {
+          const edges = waitGraph.get(fromStage.id) || [];
+          if (!edges.some((e) => e.nextStageId === nextSid && e.objectId === item.objectId)) {
+            edges.push({
+              nextStageId: nextSid,
+              objectId: item.objectId,
+              entityId: item.entityId,
+            });
+            waitGraph.set(fromStage.id, edges);
+          }
         }
       }
     }
+
     const deadlocks: Array<{ stageIds: string[]; objectIds: string[]; entityIds: string[] }> = [];
     const seenCycleKeys = new Set<string>();
-    for (const startSid of waitGraph.keys()) {
-      const path: string[] = [];
-      const visitedIdx = new Map<string, number>();
-      let cur: string | undefined = startSid;
-      while (cur && !visitedIdx.has(cur)) {
-        visitedIdx.set(cur, path.length);
-        path.push(cur);
-        cur = waitGraph.get(cur)?.nextStageId;
-      }
-      if (cur && visitedIdx.has(cur)) {
-        const cycle = path.slice(visitedIdx.get(cur)!);
-        const key = [...cycle].sort().join('|');
-        if (!seenCycleKeys.has(key)) {
-          seenCycleKeys.add(key);
-          deadlocks.push({
-            stageIds: cycle,
-            objectIds: cycle.map((s) => waitGraph.get(s)!.objectId),
-            entityIds: cycle.map((s) => waitGraph.get(s)!.entityId),
-          });
+    const visitedNodes = new Set<string>();
+    const onStackIdx = new Map<string, number>();
+    const stackStages: string[] = [];
+    const stackEdges: WaitEdge[] = [];
+
+    const dfsDeadlock = (sid: string) => {
+      onStackIdx.set(sid, stackStages.length);
+      stackStages.push(sid);
+      const edges = waitGraph.get(sid) || [];
+      for (const edge of edges) {
+        stackEdges.push(edge);
+        if (onStackIdx.has(edge.nextStageId)) {
+          const startIdx = onStackIdx.get(edge.nextStageId)!;
+          const cycleStages = stackStages.slice(startIdx);
+          const cycleEdges = stackEdges.slice(startIdx);
+          const key = [...cycleStages].sort().join('|');
+          if (!seenCycleKeys.has(key)) {
+            seenCycleKeys.add(key);
+            deadlocks.push({
+              stageIds: cycleStages,
+              objectIds: cycleEdges.map((e) => e.objectId),
+              entityIds: cycleEdges.map((e) => e.entityId),
+            });
+          }
+        } else if (!visitedNodes.has(edge.nextStageId) && waitGraph.has(edge.nextStageId)) {
+          dfsDeadlock(edge.nextStageId);
         }
+        stackEdges.pop();
+      }
+      stackStages.pop();
+      onStackIdx.delete(sid);
+      visitedNodes.add(sid);
+    };
+
+    for (const startSid of waitGraph.keys()) {
+      if (!visitedNodes.has(startSid)) {
+        dfsDeadlock(startSid);
       }
     }
 
@@ -4813,10 +5477,11 @@ export class DiscreteEventSimulationEngine {
         activeWipUnits,
         waitingInQueueUnits,
         batchBufferUnits,
-        underProcessingUnits: underProcessingUnits + blockedAtStationUnits,
+        underProcessingUnits,
         inTransitUnits,
         blockedAtStationUnits,
         pendingArrivalUnits,
+        reworkedActiveUnits,
         absorbedChildEntities,
         unaccountedUnits,
       },

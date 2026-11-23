@@ -293,7 +293,13 @@ export function importFlowchartToSimulationData(project: ProjectData): {
       }
     }
 
-    if (!Number.isFinite(st.bufferCapacity) || st.bufferCapacity < 0) st.bufferCapacity = 4;
+    if (
+      typeof st.bufferCapacity !== 'number' ||
+      Number.isNaN(st.bufferCapacity) ||
+      st.bufferCapacity < 0
+    ) {
+      st.bufferCapacity = 4;
+    }
   }
 
   // Ensure active product preserves manual flowchart entry & reachable graph
@@ -607,7 +613,13 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
           stObj.connectedToIds = [];
         }
       }
-      if (!Number.isFinite(st.bufferCapacity) || st.bufferCapacity < 0) st.bufferCapacity = 4;
+      if (
+        typeof st.bufferCapacity !== 'number' ||
+        Number.isNaN(st.bufferCapacity) ||
+        st.bufferCapacity < 0
+      ) {
+        st.bufferCapacity = 4;
+      }
     }
   } else {
     // Manual flowchart active: only fix missing conveyor links and sync object arrows from existing stage.successorIds
@@ -620,7 +632,13 @@ export function autoWireProjectForSimulation(project: ProjectData, forceSequenti
           st.conveyorObjectId = conv.id;
         }
       }
-      if (!Number.isFinite(st.bufferCapacity) || st.bufferCapacity < 0) st.bufferCapacity = 4;
+      if (
+        typeof st.bufferCapacity !== 'number' ||
+        Number.isNaN(st.bufferCapacity) ||
+        st.bufferCapacity < 0
+      ) {
+        st.bufferCapacity = 4;
+      }
     }
     syncStagePredecessorsAndObjectLinks(draft);
   }

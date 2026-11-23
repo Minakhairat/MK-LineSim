@@ -91,3 +91,51 @@ For every resource object $r$ (machine, workstation, conveyor) and every worker 
   $$T_{\text{busy}} + T_{\text{walking}} + T_{\text{idle}} + T_{\text{break}} + T_{\text{unavailable}} = T_{\text{sim}}$$
 
 Worker travel (`walking`) is accounted strictly in worker `walkingTimeSec` and never credited to machine `runningTimeSec` or `setupTimeSec`.
+
+---
+
+## 6. Phase 2.1 Runtime Invariant Auditor Contract (`auditInvariants()`)
+
+`DiscreteEventSimulationEngine.auditInvariants()` is a strictly **observational, side-effect-free** integrity check producing identical `SimEvent[]` traces and `SimulationKPIs` whether invoked at every popped event tick or omitted completely.
+
+### 6.1 Exclusive WIP Partition Correction
+In Phase 2.1, `DesMaterialConservationBreakdown.underProcessingUnits` reports strictly non-blocked active station units (`station_busy` minus `blockedEntitySet`), eliminating the prior overlap with `blockedAtStationUnits`. `auditInvariants()` explicitly asserts:
+$$\texttt{waitingInQueueUnits} + \texttt{batchBufferUnits} + \texttt{underProcessingUnits} + \texttt{blockedAtStationUnits} + \texttt{inTransitUnits} + \texttt{pendingArrivalUnits} = \texttt{activeWipUnits}$$
+while additionally exposing `reworkedActiveUnits` (subset of `activeWipUnits` currently in `reworkCount > 0`) as a diagnostic indicator.
+
+### 6.2 Stable Invariant Violation Code Catalog
+
+| Domain | Violation Code | Enforced Condition |
+| :--- | :--- | :--- |
+| **Buffer & Queue** | `[INV_BUFFER_INVALID_CAPACITY]` | Stage `bufferCapacity` must be a non-negative `number` (`>= 0` or `Infinity`, never `NaN`/negative). |
+| | `[INV_BUFFER_ZERO_CAP_OCCUPIED]` | Non-`collect_batch` stage with `bufferCapacity === 0` must hold `0` queued and `0` held entities between steps. |
+| | `[INV_BUFFER_OVERFLOW]` | When finite, `stageBuffers[sid].length + stageBatchHolders[sid].length <= effectiveCap`, where `effectiveCap = max(bufferCapacity, batchSize)` for `collect_batch` and `bufferCapacity` otherwise. Unbounded `Infinity` buffers bypass upper-bound rejection (preserved in `autoWire.ts`). |
+| | `[INV_BUFFER_DUPLICATE_ENTITY]` | No `entityId` appears more than once in `stageBuffers[sid]` or `stageBatchHolders[sid]`. |
+| | `[INV_BUFFER_STALE_ENTITY]` | Neither `stageBuffers` nor `stageBatchHolders` may hold absorbed (`absorbedIntoEntityId`), `completedAt !== undefined`, or `scrapped` entities. |
+| | `[INV_BUFFER_NEGATIVE_IN_TRANSIT]` | `stageInTransitCounts[sid] >= 0`. |
+| **Resource & References** | `[INV_RESOURCE_INVALID_CAPACITY]` | Machines/workstations require finite `capacity >= 1`; buffers require non-`NaN` `capacity >= 0`. |
+| | `[INV_RESOURCE_CAPACITY_OVERFLOW]` | `objectStates[objId].busyUnitIds.length <= obj.operations.capacity`. |
+| | `[INV_RESOURCE_DUPLICATE_SLOT]` | No duplicate `entityId` in `busyUnitIds` or duplicate active/paused job entries per object. |
+| | `[INV_RESOURCE_STALE_ENTITY]` | `busyUnitIds`, jobs, or `blockedOutbox` cannot retain terminal or absorbed entities. |
+| | `[INV_JOB_BUSY_MISMATCH]` | `activeJobs.length <= busyUnitIds.length`, and every active/paused/walk job entity must occupy `busyUnitIds`. |
+| | `[INV_RESOURCE_UNAVAILABLE_ACTIVE]` | Non-completing active jobs (`expectedEndAt > now + 1e-6`) and pending walks (`startAt > now + 1e-6`) cannot execute on `'down'`, `'maintenance'`, `'unavailable'`, zero-availability, or `stop_immediately` off-shift/break resources. |
+| | `[INV_INVALID_REFERENCE]` | All stage/object/worker/entity IDs across maps (`assignedObjectIds`, `conveyorObjectId`, `predecessorIds`, `successorIds`, `objectStates`, `workerAllocatedEntity`, `conveyorTransits`, `blockedOutbox`) must resolve cleanly. |
+| **Worker Lifecycle** | `[INV_WORKER_CONFLICT]` | A worker cannot belong to more than one job across `activeJobs`, `pendingWalkJobs`, `pausedJobs`, and `pausedWalkJobs`. |
+| | `[INV_WORKER_STALE_ALLOCATION]` | `workerAllocatedEntity[wid]` cannot point to a terminal/absorbed entity or an entity with no job/slot. |
+| | `[INV_WORKER_ALLOCATION_MISMATCH]` | `workerAllocatedEntity[wid]` must match assigned job entity (`null` iff idle/unassigned). |
+| | `[INV_WORKER_STATUS_MISMATCH]` | `'walking'` requires an active `pending_walk` job & entity allocation; `'busy'` requires consistent active job (or zero-gap `SetupCompleted` handoff). |
+| | `[INV_WALK_MISSING_REMAINING_DELAY]` | `pausedWalkJobs` entries must preserve finite `remainingDispatchDelaySec >= 0` and per-worker `walkRemainingByWorker >= 0`. |
+| **Conveyor** | `[INV_CONVEYOR_NEGATIVE_OCCUPANCY]` | `conveyorOccupancy[cid] >= 0`. |
+| | `[INV_CONVEYOR_OCCUPANCY_MISMATCH]` | `conveyorOccupancy[cid]` equals exact count of distinct entities in `conveyorTransits` + `blockedConveyorEntities`. |
+| | `[INV_CONVEYOR_OCCUPANCY_OVERFLOW]` | Conveyor occupancy never exceeds `getConveyorPhysicalCapacity`. |
+| | `[INV_CONVEYOR_STALE_ENTITY]` | Transits and `blockedConveyorEntities` hold active non-absorbed WIP only. |
+| | `[INV_CONVEYOR_TRANSIT_INVALID_TIMING]` | `startTime`, `endTime` finite with `endTime >= startTime - 1e-9`. |
+| | `[INV_CONVEYOR_PAUSED_STATE_INVALID]` | Paused transits retain valid `pausedAt`, `pausedProgress` matching `(pausedAt - startTime)/(endTime - startTime)` in `[0,1]`, and non-negative remaining times; unpaused transits retain none. |
+| | `[INV_CONVEYOR_UNAVAILABLE_TRANSIT]` | No unpaused movement (`now >= startTime - 1e-6 && endTime > now + 1e-6`) on `'down'`, `'maintenance'`, `'unavailable'`, zero-availability, or `stop_immediately` unavailable conveyors. |
+| | `[INV_CONVEYOR_HEADWAY_VIOLATION]` | Same-entry transits respect `gap >= minHeadwaySec - 1e-3`; downstream merges respect spatial pitch `>= (lenA+lenB)/2 + spacing - 0.02`. |
+| | `[INV_CONVEYOR_ARTIFICIAL_PROCESSING]` | Conveyors hold `isConveyorNode === true` jobs only; conveyor-only stages forbid worker allocations or `workDurationSec > 0`. |
+| **Conservation & Deadlock** | `[INV_MATERIAL_CONSERVATION]` | Total released = completed + scrapped + WIP; WIP buckets partition `activeWipUnits`; `completedCount`/`scrappedCount`/per-product maps stay exact. |
+| | `[INV_DUPLICATE_COMPLETION]` | No completed entity ID counted more than once. |
+| | `[INV_ENTITY_MULTI_LOCATION]` | Every active non-absorbed entity occupies at most one container. |
+| | `deadlocks[]` (Multi-edge DFS) | Circular wait cycle detection across full `Map<fromStageId, WaitEdge[]>` adjacency of `blockedOutbox`; non-cyclic temporary blocking yields `[]`. |
+
