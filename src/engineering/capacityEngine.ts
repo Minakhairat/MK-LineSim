@@ -3,6 +3,7 @@ import { LayoutObject, ProductionStage } from '../types/project';
 export interface StageBatchConfig {
   batchSize: number;
   batchMode: 'single' | 'collect_batch' | 'unbatch';
+  effectiveBatchDivisor: number;
   containerKind: 'pallet' | 'carton' | 'pack';
 }
 
@@ -21,8 +22,10 @@ export interface StageEquipmentBreakdown {
 export interface StageCapacityProfile {
   baseTaskTimeSec: number;
   setupTimeSec: number;
+  batchTransferTimeSec: number;
   batchSize: number;
   batchMode: StageBatchConfig['batchMode'];
+  effectiveBatchDivisor: number;
   parallelServers: number;
   bufferStorageCapacity: number;
   conveyorChannelCount: number;
@@ -43,8 +46,8 @@ function dedupeObjects(assignedObjects: LayoutObject[]): LayoutObject[] {
 }
 
 /**
- * Resolves stage batch configuration (batchSize, batchMode, containerKind)
- * without letting batch container size inflate parallel machine servers.
+ * Resolves stage batch configuration (batchSize, batchMode, effectiveBatchDivisor, containerKind)
+ * without letting batch container size inflate parallel machine servers or single/unbatch throughput.
  */
 export function resolveStageBatchConfig(
   stage: ProductionStage,
@@ -54,15 +57,20 @@ export function resolveStageBatchConfig(
   const procObj = uniqueObjs.find((o) => o.kind === 'machine' || o.kind === 'workstation') ?? uniqueObjs[0];
 
   const rawBatch = Number(stage.batchSize ?? procObj?.operations.batchSize ?? 1);
-  const batchSize = Number.isFinite(rawBatch) && rawBatch >= 1 ? Math.round(rawBatch) : 1;
+  const parsedBatch = Number.isFinite(rawBatch) && rawBatch >= 1 ? Math.round(rawBatch) : 1;
 
   const rawMode = stage.batchMode ?? procObj?.operations.batchMode;
   const batchMode: StageBatchConfig['batchMode'] =
     rawMode === 'collect_batch' || rawMode === 'unbatch' || rawMode === 'single'
       ? rawMode
-      : batchSize > 1
+      : parsedBatch > 1
       ? 'collect_batch'
       : 'single';
+
+  // Single Unit always processes 1 unit independently regardless of stale batchSize
+  const batchSize = batchMode === 'single' ? 1 : parsedBatch;
+  // Only Collect Batch amortizes cycle duration across N units per cycle; Unbatch & Single run 1 unit/cycle
+  const effectiveBatchDivisor = batchMode === 'collect_batch' ? batchSize : 1;
 
   const cat = `${procObj?.category || ''} ${procObj?.name || ''} ${stage.name || ''}`.toLowerCase();
   const containerKind: StageBatchConfig['containerKind'] = cat.includes('pallet')
@@ -74,6 +82,7 @@ export function resolveStageBatchConfig(
   return {
     batchSize,
     batchMode,
+    effectiveBatchDivisor,
     containerKind,
   };
 }
@@ -149,20 +158,30 @@ export function resolveStageParallelServerCount(
 
 /**
  * Computes deterministic theoretical stage capacity profile from configured task times,
- * true parallel machine/workstation server slots, and batch amortization.
+ * true parallel machine/workstation server slots, and explicit batching mode rules:
+ * - collect_batch: N units per batch cycle -> (baseTaskTimeSec + batchTransferTimeSec) / (servers * N)
+ * - unbatch: splits incoming carrier into individual units -> baseTaskTimeSec / servers (1 unit/cycle)
+ * - single: processes 1 unit independently -> baseTaskTimeSec / servers
  */
 export function computeStageCapacityProfile(
   stage: ProductionStage,
   assignedObjects: LayoutObject[]
 ): StageCapacityProfile {
-  const baseTaskTimeSec =
-    Math.max(0, Number(stage.processingTimeSec || 0)) +
-    Math.max(0, Number(stage.loadingTimeSec || 0)) +
-    Math.max(0, Number(stage.unloadingTimeSec || 0));
-
-  const setupTimeSec = Math.max(0, Number(stage.setupTimeSec || 0));
   const uniqueObjs = dedupeObjects(assignedObjects);
+  const procObj = uniqueObjs.find((o) => o.kind === 'machine' || o.kind === 'workstation') ?? uniqueObjs[0];
+
+  const baseTaskTimeSec =
+    Math.max(0, Number(stage.processingTimeSec ?? procObj?.operations.processingTimeSec ?? 0)) +
+    Math.max(0, Number(stage.loadingTimeSec ?? procObj?.operations.loadingTimeSec ?? 0)) +
+    Math.max(0, Number(stage.unloadingTimeSec ?? procObj?.operations.unloadingTimeSec ?? 0));
+
+  const setupTimeSec = Math.max(0, Number(stage.setupTimeSec ?? procObj?.operations.setupTimeSec ?? 0));
   const batchCfg = resolveStageBatchConfig(stage, uniqueObjs);
+  const batchTransferTimeSec =
+    batchCfg.batchMode === 'collect_batch'
+      ? Math.max(0, Number(stage.batchTransferTimeSec ?? procObj?.operations.batchTransferTimeSec ?? 0))
+      : 0;
+
   const breakdown = resolveStageEquipmentBreakdown(stage, uniqueObjs);
   const parallelServers = breakdown.processingServerCount;
 
@@ -173,9 +192,10 @@ export function computeStageCapacityProfile(
       ? breakdown.conveyorChannelCount
       : 0;
 
+  const totalCycleSec = baseTaskTimeSec + batchTransferTimeSec;
   const effectiveUnitCycleSec =
-    divisorServers > 0 && baseTaskTimeSec > 0
-      ? baseTaskTimeSec / (divisorServers * batchCfg.batchSize)
+    divisorServers > 0 && totalCycleSec > 0
+      ? totalCycleSec / (divisorServers * batchCfg.effectiveBatchDivisor)
       : 0;
   const theoreticalCapacityPerHour =
     effectiveUnitCycleSec > 0 ? 3600 / effectiveUnitCycleSec : 0;
@@ -183,8 +203,10 @@ export function computeStageCapacityProfile(
   return {
     baseTaskTimeSec,
     setupTimeSec,
+    batchTransferTimeSec,
     batchSize: batchCfg.batchSize,
     batchMode: batchCfg.batchMode,
+    effectiveBatchDivisor: batchCfg.effectiveBatchDivisor,
     parallelServers,
     bufferStorageCapacity: breakdown.bufferStorageCapacity,
     conveyorChannelCount: breakdown.conveyorChannelCount,

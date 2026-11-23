@@ -171,6 +171,11 @@ export interface GeometricProps {
 
 export type FailureDistributionType = 'exponential' | 'fixed' | 'weibull';
 export type RepairDistributionType = 'exponential' | 'fixed' | 'triangular' | 'lognormal';
+export type InterruptionPolicy = 'stop_immediately' | 'finish_current_cycle' | 'continue_during_break';
+export type ShiftEndPolicy = 'stop_immediately' | 'finish_current_cycle';
+export type DispatchingRule = 'fixed_sequence' | 'product_priority' | 'weighted_mix' | 'round_robin';
+export type DefectModelType = 'unit' | 'batch';
+export type BatchMode = 'single' | 'collect_batch' | 'unbatch';
 
 export interface PlannedMaintenanceWindow {
   id: string;
@@ -201,9 +206,12 @@ export interface OperationalProps {
   operatingSchedule?: string;
   shiftId?: string; // optional explicit shift ID for this equipment
   runDuringBreaks?: boolean; // automatic equipment can run through worker breaks when true
+  breakPolicy?: InterruptionPolicy; // explicit interruption policy at scheduled breaks
+  shiftEndPolicy?: ShiftEndPolicy; // explicit interruption policy at shift end
   plannedMaintenance?: PlannedMaintenanceWindow[];
   batchSize?: number; // number of items grouped per machine/pallet cycle (>=1)
-  batchMode?: 'single' | 'collect_batch' | 'unbatch';
+  batchMode?: BatchMode;
+  batchTransferTimeSec?: number; // optional post-processing batch transfer/pallet release delay (s)
 }
 
 export interface RenderingProps {
@@ -269,6 +277,10 @@ export interface ProductDefinition {
   modelShape: ProductModelShape;
   routingMode?: 'auto' | 'manual';
   entryStageIds?: string[];
+  priority?: number; // higher value dispatches earlier under product_priority (default 1)
+  mixWeight?: number; // relative ratio under weighted_mix (default 1)
+  cycleTimeMultiplier?: number; // scales stage processing time for this product (default 1)
+  stageProcessingTimes?: Record<string, number>; // optional per-stage processing time override (s)
 }
 
 export interface ProductionStage {
@@ -286,6 +298,7 @@ export interface ProductionStage {
   outputQty: number;
   scrapRate: number; // 0..1
   reworkProbability: number; // 0..1
+  defectModel?: DefectModelType; // 'unit' (independent per unit) or 'batch' (accept/reject batch)
   bufferCapacity: number;
   predecessorIds: string[];
   successorIds: string[];
@@ -293,7 +306,8 @@ export interface ProductionStage {
   conveyorObjectId?: string;   // optional conveyor carrying units out of this stage
   flowPos?: { x: number; y: number };
   batchSize?: number; // items grouped into 1 batch/pallet per cycle (>=1)
-  batchMode?: 'single' | 'collect_batch' | 'unbatch';
+  batchMode?: BatchMode;
+  batchTransferTimeSec?: number; // optional transfer delay after batch operation (s)
 }
 
 export interface ProductionRoute {
@@ -330,6 +344,8 @@ export interface WorkerDefinition {
   efficiencyFactor: number; // 0.5..1.5
   walkingSpeedMps: number;
   shiftId: string;
+  breakPolicy?: ShiftEndPolicy; // 'stop_immediately' (default) or 'finish_current_cycle'
+  shiftEndPolicy?: ShiftEndPolicy;
   color: string;
 }
 
@@ -357,6 +373,9 @@ export interface SimulationConfig {
   randomSeed: number;
   shifts: ShiftDefinition[];
   maintenanceWindows?: PlannedMaintenanceWindow[];
+  dispatchingRule?: DispatchingRule;
+  productSequence?: string[];
+  interruptionPolicy?: ShiftEndPolicy; // global fallback for break/shift-end operations
 }
 
 // ============================================================================
@@ -422,7 +441,9 @@ export interface ProductEntityState {
   locationKind: 'source' | 'buffer' | 'station' | 'conveyor' | 'completed' | 'scrapped';
   conveyorProgress?: number; // 0..1 along conveyor length
   worldPosition: Vec3;
+  rotationDeg?: number;
   waitingTimeSec: number;
+  batchQueueWaitTimeSec?: number;
   processingTimeSec: number;
   transportTimeSec: number;
   batchCount?: number; // number of individual product items carried by this entity (>=1)
@@ -479,8 +500,17 @@ export interface StageAnalytics {
   completedCount: number;
   scrapCount: number;
   reworkCount: number;
+  scrappedBatches?: number;
+  reworkBatches?: number;
+  reworkCycles?: number;
   avgCycleTimeSec: number;
   avgWaitTimeSec: number;
+  avgUnitWaitTimeSec?: number;
+  avgBatchWaitTimeSec?: number;
+  avgQueueWaitTimeSec?: number;
+  starvedTimeSec?: number;
+  blockedTimeSec?: number;
+  conveyorTransitTimeSec?: number;
   avgQueueLength: number;
   maxQueueLength: number;
   utilizationPct: number;
@@ -504,6 +534,7 @@ export interface StageAnalytics {
   oeePct?: number;
   batchesCompleted?: number;
   batchSize?: number;
+  batchMode?: BatchMode;
   configuredCycleTimeSec?: number;
   effectiveTheoreticalUnitCycleSec?: number;
   theoreticalCapacityPerHour?: number;
@@ -522,6 +553,22 @@ export interface StageAnalytics {
     | 'conveyor_saturation';
   bottleneckReasonDetail?: string;
   bottleneckReasonDetailAr?: string;
+}
+
+export interface ProductAnalytics {
+  productId: string;
+  productCode: string;
+  productName: string;
+  color: string;
+  plannedQty: number;
+  releasedQty: number;
+  completedGoodQty: number;
+  scrappedQty: number;
+  wipQty: number;
+  reworkUnits: number;
+  reworkCycles: number;
+  avgLeadTimeSec: number;
+  attainmentPct: number;
 }
 
 export interface ResourceOeeAnalytics {
@@ -603,8 +650,12 @@ export interface SimulationKPIs {
   theoreticalTaktTimeSec: number;
   avgLeadTimeSec: number;
   avgWaitingTimeSec: number;
+  avgUnitWaitingTimeSec?: number;
+  avgBatchWaitingTimeSec?: number;
+  avgQueueWaitingTimeSec?: number;
   avgProcessingTimeSec: number;
   avgTransportTimeSec: number;
+  totalConveyorTransitTimeSec?: number;
   totalDowntimeSec: number;
 
   lineEfficiencyPct: number;
@@ -639,6 +690,10 @@ export interface SimulationKPIs {
   theoreticalBottleneckCycleSec?: number;
   totalBatchesCompleted?: number;
   avgBatchSize?: number;
+  scrappedBatches?: number;
+  reworkUnits?: number;
+  reworkCycles?: number;
+  reworkBatches?: number;
 }
 
 export interface SimulationResult {
@@ -648,6 +703,7 @@ export interface SimulationResult {
   stageAnalytics: StageAnalytics[];
   resourceAnalytics?: ResourceOeeAnalytics[];
   workerAnalytics?: WorkerAnalytics[];
+  productAnalytics?: ProductAnalytics[];
   hourlySeries: HourlyProductionPoint[];
   wipSeries: WipTimePoint[];
   recentEvents: SimEvent[];

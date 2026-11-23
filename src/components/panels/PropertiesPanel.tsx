@@ -3,7 +3,13 @@ import { AlertTriangle, CheckCircle2, Lock, Plus, Trash2, Unlock, Eye, EyeOff, W
 import { useAppStore } from '../../store/useAppStore';
 import { fromMeters, toMeters, uid } from '../../utils/units';
 import { getT } from '../../i18n/translations';
-import { FailureDistributionType, RepairDistributionType } from '../../types/project';
+import {
+  DispatchingRule,
+  FailureDistributionType,
+  InterruptionPolicy,
+  RepairDistributionType,
+  ShiftEndPolicy,
+} from '../../types/project';
 import {
   CardinalPlacementSide,
   getConveyorSegmentCount,
@@ -495,6 +501,18 @@ export const PropertiesPanel: React.FC = () => {
                       <option value="unbatch">{t.labels.batchUnbatch}</option>
                     </select>
                   </label>
+                  {(selectedObj.operations.batchMode === 'collect_batch' || (selectedObj.operations.batchSize ?? 1) > 1) &&
+                    numInput(
+                      t.labels.batchTransferTimeSec,
+                      selectedObj.operations.batchTransferTimeSec ?? 0,
+                      false,
+                      (v) =>
+                        updateLayoutObject(selectedObj.id, {
+                          operations: { ...selectedObj.operations, batchTransferTimeSec: Math.max(0, v) },
+                        }),
+                      1,
+                      0
+                    )}
                 </>
               )}
             </div>
@@ -527,17 +545,47 @@ export const PropertiesPanel: React.FC = () => {
                       </option>
                     )}
                 </select>
-                <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={Boolean(selectedObj.operations.runDuringBreaks)}
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] text-neutral-500">{t.labels.breakPolicy}</span>
+                  <select
+                    value={
+                      selectedObj.operations.breakPolicy ??
+                      (selectedObj.operations.runDuringBreaks ? 'continue_during_break' : 'stop_immediately')
+                    }
+                    onChange={(e) => {
+                      const policy = e.target.value as InterruptionPolicy;
+                      updateLayoutObject(selectedObj.id, {
+                        operations: {
+                          ...selectedObj.operations,
+                          breakPolicy: policy,
+                          runDuringBreaks: policy === 'continue_during_break',
+                        },
+                      });
+                    }}
+                    className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-[11px] text-neutral-900 dark:text-neutral-100"
+                  >
+                    <option value="stop_immediately">{t.labels.policyStopImmediately}</option>
+                    <option value="finish_current_cycle">{t.labels.policyFinishCycle}</option>
+                    <option value="continue_during_break">{t.labels.policyContinueBreak}</option>
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] text-neutral-500">{t.labels.shiftEndPolicy}</span>
+                  <select
+                    value={selectedObj.operations.shiftEndPolicy ?? 'stop_immediately'}
                     onChange={(e) =>
                       updateLayoutObject(selectedObj.id, {
-                        operations: { ...selectedObj.operations, runDuringBreaks: e.target.checked },
+                        operations: {
+                          ...selectedObj.operations,
+                          shiftEndPolicy: e.target.value as ShiftEndPolicy,
+                        },
                       })
                     }
-                  />
-                  <span>{t.labels.runDuringBreaks}</span>
+                    className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-[11px] text-neutral-900 dark:text-neutral-100"
+                  >
+                    <option value="stop_immediately">{t.labels.policyStopImmediately}</option>
+                    <option value="finish_current_cycle">{t.labels.policyFinishCycle}</option>
+                  </select>
                 </label>
               </div>
 
@@ -1012,6 +1060,36 @@ export const PropertiesPanel: React.FC = () => {
             </select>
           </label>
 
+          {/* Worker Break & Shift-End Interruption Policies */}
+          <div className="grid grid-cols-1 gap-2 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-950/60 p-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-neutral-500">{t.labels.breakPolicy}</span>
+              <select
+                value={selectedWorker.breakPolicy ?? 'stop_immediately'}
+                onChange={(e) =>
+                  updateWorker(selectedWorker.id, { breakPolicy: e.target.value as ShiftEndPolicy })
+                }
+                className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-[11px]"
+              >
+                <option value="stop_immediately">{t.labels.policyStopImmediately}</option>
+                <option value="finish_current_cycle">{t.labels.policyFinishCycle}</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-neutral-500">{t.labels.shiftEndPolicy}</span>
+              <select
+                value={selectedWorker.shiftEndPolicy ?? 'stop_immediately'}
+                onChange={(e) =>
+                  updateWorker(selectedWorker.id, { shiftEndPolicy: e.target.value as ShiftEndPolicy })
+                }
+                className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-[11px]"
+              >
+                <option value="stop_immediately">{t.labels.policyStopImmediately}</option>
+                <option value="finish_current_cycle">{t.labels.policyFinishCycle}</option>
+              </select>
+            </label>
+          </div>
+
           {/* Direct Station or Conveyor Segment Assignment (assignedTo) */}
           {(() => {
             const currentTargetId = selectedWorker.assignedTo || selectedWorker.assignedStationId || '';
@@ -1288,6 +1366,20 @@ export const PropertiesPanel: React.FC = () => {
                 onChange={(e) => updateSimConfig({ enableBreakdowns: e.target.checked })}
               />
               <span>{t.labels.enableBreakdowns}</span>
+            </label>
+
+            <label className="mt-2.5 flex flex-col gap-1">
+              <span className="text-[10px] font-medium text-neutral-500">{t.labels.dispatchingRule}</span>
+              <select
+                value={project.simulationConfig.dispatchingRule ?? 'weighted_mix'}
+                onChange={(e) => updateSimConfig({ dispatchingRule: e.target.value as DispatchingRule })}
+                className="w-full rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-2 py-1 text-xs"
+              >
+                <option value="weighted_mix">{t.labels.dispatchWeightedMix}</option>
+                <option value="fixed_sequence">{t.labels.dispatchFixedSequence}</option>
+                <option value="product_priority">{t.labels.dispatchProductPriority}</option>
+                <option value="round_robin">{t.labels.dispatchRoundRobin}</option>
+              </select>
             </label>
           </div>
 

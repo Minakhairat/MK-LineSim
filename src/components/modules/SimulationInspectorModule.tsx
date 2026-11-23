@@ -630,8 +630,18 @@ export const SimulationInspectorModule: React.FC = () => {
                             {t.simInspector.measuredCycle}: {sa.avgCycleTimeSec.toFixed(1)}s
                           </span>
                           <span>
-                            {t.simInspector.waitLabel}: {sa.avgWaitTimeSec.toFixed(1)}s
+                            {t.simInspector.waitLabel}: {(sa.avgUnitWaitTimeSec ?? sa.avgWaitTimeSec).toFixed(1)}s
                           </span>
+                          {(sa.avgBatchWaitTimeSec ?? 0) > (sa.avgUnitWaitTimeSec ?? sa.avgWaitTimeSec) + 0.1 && (
+                            <span className="text-neutral-500">
+                              ({t.analytics.table.avgBatchWait}: {(sa.avgBatchWaitTimeSec ?? 0).toFixed(1)}s)
+                            </span>
+                          )}
+                          {sa.reworkCount > 0 && (
+                            <span className="text-amber-700 dark:text-amber-400">
+                              RW: {sa.reworkCount}
+                            </span>
+                          )}
                           {sa.blockedPct >= 0.5 && (
                             <span className="text-amber-700 dark:text-amber-400">
                               {t.simInspector.blockedLabel}: {sa.blockedPct.toFixed(0)}%

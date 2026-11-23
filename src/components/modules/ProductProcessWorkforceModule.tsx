@@ -9,7 +9,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import { ProductModelShape } from '../../types/project';
+import { DefectModelType, DispatchingRule, ProductModelShape } from '../../types/project';
 import { uid } from '../../utils/units';
 import { getT } from '../../i18n/translations';
 import { computeStageCapacityProfile } from '../../engineering/capacityEngine';
@@ -68,6 +68,7 @@ export const ProductsModule: React.FC = () => {
   const setActiveProduct = useAppStore((s) => s.setActiveProduct);
   const startSimulation = useAppStore((s) => s.startSimulation);
   const setViewportMode = useAppStore((s) => s.setViewportMode);
+  const updateSimConfig = useAppStore((s) => s.updateSimConfig);
 
   const t = getT(language);
   const isAr = language === 'ar';
@@ -250,6 +251,24 @@ export const ProductsModule: React.FC = () => {
         </button>
       </div>
 
+      {project.products.length > 1 && (
+        <label className="flex flex-col gap-1 rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 p-2 min-w-0">
+          <span className="text-[10px] font-medium text-neutral-500 truncate">
+            {t.labels.dispatchingRule}
+          </span>
+          <select
+            value={project.simulationConfig.dispatchingRule ?? 'weighted_mix'}
+            onChange={(e) => updateSimConfig({ dispatchingRule: e.target.value as DispatchingRule })}
+            className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-1 text-[11px]"
+          >
+            <option value="weighted_mix">{t.labels.dispatchWeightedMix}</option>
+            <option value="fixed_sequence">{t.labels.dispatchFixedSequence}</option>
+            <option value="product_priority">{t.labels.dispatchProductPriority}</option>
+            <option value="round_robin">{t.labels.dispatchRoundRobin}</option>
+          </select>
+        </label>
+      )}
+
       <div className="flex flex-col gap-3 min-w-0">
         {project.products.map((prod, idx) => {
           const isEditing = editingProdId === prod.id;
@@ -346,6 +365,49 @@ export const ProductsModule: React.FC = () => {
                       value={prod.color}
                       onChange={(e) => updateProduct(prod.id, { color: e.target.value })}
                       className="h-6 w-full cursor-pointer rounded border border-neutral-300 dark:border-neutral-700 bg-transparent p-0.5"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.productPriority}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      step={1}
+                      value={prod.priority ?? 1}
+                      onChange={(e) =>
+                        updateProduct(prod.id, { priority: Math.max(1, Math.round(Number(e.target.value) || 1)) })
+                      }
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.productMixWeight}</span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.1}
+                      value={prod.mixWeight ?? 1}
+                      onChange={(e) =>
+                        updateProduct(prod.id, { mixWeight: Math.max(0, Number(e.target.value) || 0) })
+                      }
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.cycleTimeMultiplier}</span>
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={10}
+                      step={0.05}
+                      value={prod.cycleTimeMultiplier ?? 1}
+                      onChange={(e) =>
+                        updateProduct(prod.id, {
+                          cycleTimeMultiplier: Math.max(0.1, Number(e.target.value) || 1),
+                        })
+                      }
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
                     />
                   </label>
                 </div>
@@ -975,6 +1037,34 @@ export const ProcessesModule: React.FC = () => {
                       <option value="single">{t.labels.batchSingle}</option>
                       <option value="collect_batch">{t.labels.batchCollect}</option>
                       <option value="unbatch">{t.labels.batchUnbatch}</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">
+                      {t.labels.batchTransferTimeSec}
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={st.batchTransferTimeSec ?? 0}
+                      onChange={(e) =>
+                        updateStage(st.id, { batchTransferTimeSec: Math.max(0, Number(e.target.value) || 0) })
+                      }
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1.5 py-0.5 font-mono-tabular text-[11px]"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-0.5 min-w-0">
+                    <span className="text-[10px] text-neutral-500 truncate">{t.labels.defectModel}</span>
+                    <select
+                      value={st.defectModel ?? 'unit'}
+                      onChange={(e) =>
+                        updateStage(st.id, { defectModel: e.target.value as DefectModelType })
+                      }
+                      className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-1 py-0.5 text-[10px]"
+                    >
+                      <option value="unit">{t.labels.defectUnit}</option>
+                      <option value="batch">{t.labels.defectBatch}</option>
                     </select>
                   </label>
                 </div>

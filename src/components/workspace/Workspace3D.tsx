@@ -774,6 +774,7 @@ export const Workspace3D: React.FC = () => {
         productMeshMap.current.set(ent.id, meshGroup);
       }
       meshGroup.position.set(ent.worldPosition.x, ent.worldPosition.y, ent.worldPosition.z);
+      meshGroup.rotation.y = -((ent.rotationDeg ?? 0) * Math.PI) / 180;
     }
   }, [simSnapshot, project.workers, project.products]);
 

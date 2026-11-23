@@ -1308,16 +1308,24 @@ export const Workspace2D: React.FC = () => {
             const pDef = project.products.find((p) => p.id === ent.productId) || project.products[0];
             const isBatch = Boolean(ent.isBatchCarrier && (ent.batchCount ?? 1) > 1);
             const isPallet = ent.containerKind === 'pallet';
+            const isPack = ent.containerKind === 'pack';
+            const baseL = Math.max(0.24, pDef?.dimensions.length || 0.58);
+            const baseW = Math.max(0.18, pDef?.dimensions.width || 0.42);
             const pw = isBatch
               ? isPallet
-                ? 0.96
-                : 0.76
-              : Math.max(0.32, Math.min(0.85, pDef?.dimensions.length || 0.58));
+                ? Math.max(baseL, 1.05)
+                : isPack
+                ? Math.max(baseL, 0.68)
+                : Math.max(baseL, 0.72)
+              : baseL;
             const pd = isBatch
               ? isPallet
-                ? 0.78
-                : 0.58
-              : Math.max(0.24, Math.min(0.65, pDef?.dimensions.width || 0.42));
+                ? Math.max(baseW, 0.85)
+                : isPack
+                ? Math.max(baseW, 0.52)
+                : Math.max(baseW, 0.56)
+              : baseW;
+            const rotDeg = ent.rotationDeg ?? 0;
             const fillColor = isBatch
               ? isPallet
                 ? '#B45309'
@@ -1328,7 +1336,7 @@ export const Workspace2D: React.FC = () => {
             return (
               <g
                 key={ent.id}
-                transform={`translate(${ent.worldPosition.x}, ${ent.worldPosition.z})`}
+                transform={`translate(${ent.worldPosition.x}, ${ent.worldPosition.z}) rotate(${rotDeg})`}
                 style={{ pointerEvents: 'none' }}
               >
                 {isBatch && (

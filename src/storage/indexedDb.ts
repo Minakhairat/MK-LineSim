@@ -153,9 +153,48 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
       zones: Array.isArray(factory.zones) ? factory.zones : [],
     },
     productionLines: Array.isArray(obj.productionLines) ? obj.productionLines : [],
-    layoutObjects: Array.isArray(obj.layoutObjects) ? obj.layoutObjects : [],
-    products: Array.isArray(obj.products) ? obj.products : [],
-    stages: Array.isArray(obj.stages) ? obj.stages : [],
+    layoutObjects: Array.isArray(obj.layoutObjects)
+      ? obj.layoutObjects.map((lo) => {
+          const rec = lo as Record<string, unknown>;
+          const ops = (rec.operations as Record<string, unknown>) || {};
+          const breakPolicy =
+            ops.breakPolicy === 'stop_immediately' ||
+            ops.breakPolicy === 'finish_current_cycle' ||
+            ops.breakPolicy === 'continue_during_break'
+              ? ops.breakPolicy
+              : ops.runDuringBreaks
+              ? 'continue_during_break'
+              : undefined;
+          return {
+            ...rec,
+            operations: {
+              ...ops,
+              ...(breakPolicy ? { breakPolicy } : {}),
+            },
+          };
+        }) as ProjectData['layoutObjects']
+      : [],
+    products: Array.isArray(obj.products)
+      ? obj.products.map((p) => {
+          const rec = p as Record<string, unknown>;
+          return {
+            ...rec,
+            priority: rec.priority !== undefined ? Number(rec.priority) : 1,
+            mixWeight: rec.mixWeight !== undefined ? Number(rec.mixWeight) : 1,
+            cycleTimeMultiplier:
+              rec.cycleTimeMultiplier !== undefined ? Number(rec.cycleTimeMultiplier) : 1,
+          };
+        }) as ProjectData['products']
+      : [],
+    stages: Array.isArray(obj.stages)
+      ? obj.stages.map((st) => {
+          const rec = st as Record<string, unknown>;
+          return {
+            ...rec,
+            defectModel: rec.defectModel === 'batch' ? 'batch' : 'unit',
+          };
+        }) as ProjectData['stages']
+      : [],
     routes: Array.isArray(obj.routes) ? obj.routes : [],
     workers: Array.isArray(obj.workers)
       ? obj.workers.map((w) => {

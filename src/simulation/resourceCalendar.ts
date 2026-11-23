@@ -201,6 +201,13 @@ export function containsTimestamp(intervals: TimeInterval[], tSec: number): bool
   return false;
 }
 
+export function isObjectContinuingDuringBreak(obj: LayoutObject): boolean {
+  if (obj.operations.breakPolicy) {
+    return obj.operations.breakPolicy === 'continue_during_break';
+  }
+  return Boolean(obj.operations.runDuringBreaks);
+}
+
 function matchShiftsInList(
   shifts: ShiftDefinition[],
   shiftId?: string,
@@ -533,7 +540,7 @@ export class ResourceCalendarEngine {
     if (containsTimestamp(maint, tSec)) {
       return { available: false, reason: 'maintenance' };
     }
-    if (!obj.operations.runDuringBreaks) {
+    if (!isObjectContinuingDuringBreak(obj)) {
       const breaks = this.getClippedBreakIntervals(obj.operations.shiftId, obj.operations.operatingSchedule);
       if (containsTimestamp(breaks, tSec)) {
         return { available: false, reason: 'break' };
@@ -557,7 +564,7 @@ export class ResourceCalendarEngine {
     );
     const maintSec = sumIntervals(maintIntervals);
 
-    const breakIntervals = obj.operations.runDuringBreaks
+    const breakIntervals = isObjectContinuingDuringBreak(obj)
       ? []
       : subtractIntervals(
           intersectIntervals(
@@ -612,7 +619,7 @@ export class ResourceCalendarEngine {
       objects.length > 0 &&
       objects
         .filter((o) => o.kind !== 'storage' && o.kind !== 'vehicle')
-        .every((o) => Boolean(o.operations.runDuringBreaks));
+        .every((o) => isObjectContinuingDuringBreak(o));
 
     const breakIntervals = allEquipRunDuringBreaks
       ? []

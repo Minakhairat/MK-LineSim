@@ -25,7 +25,10 @@ import { createDesertAirCoolerProject } from '../data/sampleProject';
 import { BUILTIN_EQUIPMENT_TEMPLATES } from '../data/equipmentCatalog';
 import { DiscreteEventSimulationEngine } from '../simulation/desEngine';
 import { validateProject } from '../simulation/validator';
-import { runSimulationInWorker } from '../simulation/workerClient';
+import {
+  cancelSimulationWorker,
+  runFullSimulationInWorker,
+} from '../simulation/workerClient';
 import {
   autoFixProjectIssues,
   autoWireProjectForSimulation,
@@ -97,6 +100,8 @@ interface AppState {
   simSnapshot: SimulationSnapshot;
   simAllEvents: SimEvent[];
   simWorkerBusy: boolean;
+  simWorkerProgressPct: number;
+  simActiveRequestId: string | null;
 
   // Export capture hooks registered by 2D/3D viewports
   capture3DPng: (() => string | null) | null;
@@ -191,6 +196,7 @@ interface AppState {
   stepSimulationEvent: () => void;
   tickSimulation: (realDeltaSec: number) => void;
   runFullShiftSimulation: () => Promise<SimulationResult | null>;
+  cancelFullShiftSimulation: () => void;
 
   // Scenarios
   addScenario: (scen: ScenarioRecord) => void;
@@ -263,6 +269,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   simSnapshot: makeEmptySnapshot(),
   simAllEvents: [],
   simWorkerBusy: false,
+  simWorkerProgressPct: 0,
+  simActiveRequestId: null,
 
   capture3DPng: null,
   get2DSvgElement: null,
@@ -1313,6 +1321,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  cancelFullShiftSimulation: () => {
+    const reqId = get().simActiveRequestId;
+    if (reqId) {
+      cancelSimulationWorker(reqId);
+    }
+    set({
+      simWorkerBusy: false,
+      simWorkerProgressPct: 0,
+      simActiveRequestId: null,
+    });
+  },
+
   runFullShiftSimulation: async () => {
     let { project, validationIssues, setToast, language, commitProjectEdit } = get();
 
@@ -1352,18 +1372,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       );
       return null;
     }
-    set({ simWorkerBusy: true });
+    const requestId = `sim_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    set({ simWorkerBusy: true, simWorkerProgressPct: 0, simActiveRequestId: requestId });
     try {
-      const result = await runSimulationInWorker(project);
-      // Also run local engine to completion so live state/events mirror the full shift
-      const engine = new DiscreteEventSimulationEngine(project);
-      engine.runToCompletion();
-      const snap = engine.getSnapshot();
+      // Single authoritative simulation execution inside Web Worker (zero duplicate main-thread run)
+      const output = await runFullSimulationInWorker(project, {
+        requestId,
+        onProgress: (pct) => {
+          if (get().simActiveRequestId === requestId) {
+            set({ simWorkerProgressPct: pct });
+          }
+        },
+      });
+      if (get().simActiveRequestId !== requestId) {
+        return null;
+      }
+      const { result, snapshot, allEvents } = output;
       set((s) => ({
         simWorkerBusy: false,
-        simEngine: engine,
-        simSnapshot: { ...snap, status: 'completed', result },
-        simAllEvents: engine.getAllEvents(),
+        simWorkerProgressPct: 100,
+        simActiveRequestId: null,
+        simEngine: null,
+        simSnapshot: { ...snapshot, status: 'completed', result },
+        simAllEvents: allEvents,
         project: { ...s.project, lastSimulationResult: result },
       }));
       await saveProjectToDb(get().project);
@@ -1375,8 +1406,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       );
       return result;
     } catch (err) {
-      set({ simWorkerBusy: false });
-      setToast(err instanceof Error ? err.message : 'Simulation failed', 'error');
+      const isCancelled = err instanceof Error && err.name === 'SimulationCancelledError';
+      set({ simWorkerBusy: false, simWorkerProgressPct: 0, simActiveRequestId: null });
+      if (isCancelled) {
+        setToast(
+          language === 'ar' ? 'تم إلغاء المحاكاة الكاملة' : 'Full shift simulation cancelled',
+          'info'
+        );
+      } else {
+        setToast(err instanceof Error ? err.message : 'Simulation failed', 'error');
+      }
       return null;
     }
   },

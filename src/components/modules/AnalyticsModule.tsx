@@ -294,8 +294,8 @@ export const AnalyticsModule: React.FC = () => {
               label: t.analytics.cards.goodUnits,
               val: `${k.goodUnits}`,
               sub: isAr
-                ? `الهالك: ${k.defectiveUnits} · الإجمالي: ${k.actualProduction}`
-                : `Scrap: ${k.defectiveUnits} · Total: ${k.actualProduction}`,
+                ? `الهالك: ${k.defectiveUnits} · إعادة: ${k.reworkUnits ?? 0} · الإجمالي: ${k.actualProduction}`
+                : `Scrap: ${k.defectiveUnits} · Rework: ${k.reworkUnits ?? 0} · Total: ${k.actualProduction}`,
             },
             {
               label: t.analytics.cards.planned,
@@ -320,8 +320,8 @@ export const AnalyticsModule: React.FC = () => {
               label: t.analytics.cards.leadTime,
               val: formatDuration(k.avgLeadTimeSec),
               sub: isAr
-                ? `تشغيل: ${k.avgProcessingTimeSec.toFixed(0)}ث · انتظار: ${k.avgWaitingTimeSec.toFixed(0)}ث`
-                : `Proc: ${k.avgProcessingTimeSec.toFixed(0)}s · Wait: ${k.avgWaitingTimeSec.toFixed(0)}s`,
+                ? `تشغيل: ${k.avgProcessingTimeSec.toFixed(0)}ث · انتظار وحدة: ${(k.avgUnitWaitingTimeSec ?? k.avgWaitingTimeSec).toFixed(0)}ث`
+                : `Proc: ${k.avgProcessingTimeSec.toFixed(0)}s · Unit Wait: ${(k.avgUnitWaitingTimeSec ?? k.avgWaitingTimeSec).toFixed(0)}s`,
             },
             {
               label: t.analytics.cards.transportTime,
@@ -479,8 +479,10 @@ export const AnalyticsModule: React.FC = () => {
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.entered}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.completed}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.scrap}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.reworkUnits}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgCycle}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgWait}</th>
+                <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.avgBatchWait}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.maxQueue}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.schedUtil}</th>
                 <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.calUtil}</th>
@@ -510,8 +512,16 @@ export const AnalyticsModule: React.FC = () => {
                   <td className="px-3 py-2 text-end">{sa.enteredCount}</td>
                   <td className="px-3 py-2 text-end">{sa.completedCount}</td>
                   <td className="px-3 py-2 text-end">{sa.scrapCount}</td>
+                  <td className="px-3 py-2 text-end text-amber-700 dark:text-amber-400">
+                    {sa.reworkCount}
+                  </td>
                   <td className="px-3 py-2 text-end">{sa.avgCycleTimeSec.toFixed(1)}</td>
-                  <td className="px-3 py-2 text-end">{sa.avgWaitTimeSec.toFixed(1)}</td>
+                  <td className="px-3 py-2 text-end">
+                    {(sa.avgUnitWaitTimeSec ?? sa.avgWaitTimeSec).toFixed(1)}
+                  </td>
+                  <td className="px-3 py-2 text-end text-neutral-500">
+                    {(sa.avgBatchWaitTimeSec ?? sa.avgWaitTimeSec).toFixed(1)}
+                  </td>
                   <td className="px-3 py-2 text-end">{sa.maxQueueLength}</td>
                   <td className="px-3 py-2 text-end font-semibold text-emerald-700 dark:text-emerald-400">
                     {(sa.scheduledUtilizationPct ?? sa.utilizationPct).toFixed(1)}%
@@ -535,6 +545,61 @@ export const AnalyticsModule: React.FC = () => {
             </tbody>
           </table>
         </div>
+
+        {/* Multi-Product Output & Attainment Breakdown */}
+        {result.productAnalytics && result.productAnalytics.length > 0 && (
+          <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-x-auto">
+            <div className="border-b border-neutral-200 dark:border-neutral-800 px-4 py-2.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100">
+              {t.analytics.table.productAnalyticsTitle}
+            </div>
+            <table className="w-full text-start text-xs font-mono-tabular">
+              <thead className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-[11px] text-neutral-500">
+                <tr>
+                  <th className="px-4 py-2.5 font-medium text-start">{t.analytics.table.productCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.plannedCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.entered}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.goodCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.scrap}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.reworkUnits}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.wipCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.analytics.table.leadTimeCol}</th>
+                  <th className="px-3 py-2.5 text-end font-medium">{t.labels.attainment}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.productAnalytics.map((pa) => (
+                  <tr
+                    key={pa.productId}
+                    className="border-b border-neutral-100 dark:border-neutral-800/60 hover:bg-neutral-50 dark:hover:bg-neutral-800/40"
+                  >
+                    <td className="px-4 py-2 font-sans font-medium text-neutral-900 dark:text-neutral-100">
+                      <span className="font-mono-tabular text-[10px] text-neutral-500 me-1.5">
+                        {pa.productCode}
+                      </span>
+                      {pa.productName}
+                    </td>
+                    <td className="px-3 py-2 text-end">{pa.plannedQty}</td>
+                    <td className="px-3 py-2 text-end">{pa.releasedQty}</td>
+                    <td className="px-3 py-2 text-end font-semibold text-emerald-700 dark:text-emerald-400">
+                      {pa.completedGoodQty}
+                    </td>
+                    <td className="px-3 py-2 text-end text-red-600 dark:text-red-400">
+                      {pa.scrappedQty}
+                    </td>
+                    <td className="px-3 py-2 text-end text-amber-700 dark:text-amber-400">
+                      {pa.reworkUnits}
+                    </td>
+                    <td className="px-3 py-2 text-end">{pa.wipQty}</td>
+                    <td className="px-3 py-2 text-end">{formatDuration(pa.avgLeadTimeSec)}</td>
+                    <td className="px-3 py-2 text-end font-semibold">
+                      {pa.attainmentPct.toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* Resource-Level OEE & Calendar Accounting Breakdown */}
         {result.resourceAnalytics && result.resourceAnalytics.length > 0 && (

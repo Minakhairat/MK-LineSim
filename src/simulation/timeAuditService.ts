@@ -1,6 +1,7 @@
 import {
   Dimensions3D,
   LayoutObject,
+  ProductAnalytics,
   ProductDefinition,
   ProductionStage,
   ProjectData,
@@ -95,7 +96,8 @@ export function computeShiftWindowAudit(
   config: SimulationConfig,
   primaryProduct: ProductDefinition | undefined,
   clockSec: number,
-  objects: LayoutObject[] = []
+  objects: LayoutObject[] = [],
+  allProducts?: ProductDefinition[]
 ): ShiftWindowAudit {
   const fullDurationSec = Math.max(1e-6, config.durationSec || clockSec || 1e-6);
   const simTimeSec = Math.max(1e-6, clockSec || fullDurationSec);
@@ -115,7 +117,16 @@ export function computeShiftWindowAudit(
   const arrivalIntervalSec = resolveArrivalIntervalSec(config);
 
   const userMaxPlanned = Number(config.maxPlannedUnits);
-  const productTarget = Number(primaryProduct?.targetQuantity || 0);
+  const productList =
+    allProducts && allProducts.length > 0
+      ? allProducts
+      : primaryProduct
+      ? [primaryProduct]
+      : [];
+  const totalProductTargets = productList.reduce(
+    (sum, p) => sum + (Number.isFinite(Number(p.targetQuantity)) && Number(p.targetQuantity) > 0 ? Number(p.targetQuantity) : 0),
+    0
+  );
 
   let plannedUnitsCap = Infinity;
   let plannedUnits: number;
@@ -123,9 +134,9 @@ export function computeShiftWindowAudit(
   if (Number.isFinite(userMaxPlanned) && userMaxPlanned > 0) {
     plannedUnitsCap = userMaxPlanned;
     plannedUnits = userMaxPlanned;
-  } else if (Number.isFinite(productTarget) && productTarget > 0) {
-    plannedUnitsCap = productTarget;
-    plannedUnits = productTarget;
+  } else if (totalProductTargets > 0) {
+    plannedUnitsCap = totalProductTargets;
+    plannedUnits = totalProductTargets;
   } else {
     plannedUnits = Math.max(1, Math.floor(fullShiftNetSec / arrivalIntervalSec));
   }
@@ -218,9 +229,20 @@ export function computeStageProcessingTimeSec(
   stage: ProductionStage,
   stationObj: LayoutObject | undefined,
   workers: WorkerDefinition[],
-  needsSetup: boolean
+  needsSetup: boolean,
+  product?: ProductDefinition
 ): number {
-  const proc = Math.max(0, Number(stage.processingTimeSec ?? stationObj?.operations.processingTimeSec ?? 0));
+  const prodStageOverride = product?.stageProcessingTimes?.[stage.id];
+  const baseProc = Math.max(
+    0,
+    Number(
+      prodStageOverride !== undefined && Number.isFinite(prodStageOverride)
+        ? prodStageOverride
+        : stage.processingTimeSec ?? stationObj?.operations.processingTimeSec ?? 0
+    )
+  );
+  const cycleMult = Math.max(0.05, Number(product?.cycleTimeMultiplier ?? 1));
+  const proc = baseProc * cycleMult;
   const load = Math.max(0, Number(stage.loadingTimeSec ?? stationObj?.operations.loadingTimeSec ?? 0));
   const unload = Math.max(0, Number(stage.unloadingTimeSec ?? stationObj?.operations.unloadingTimeSec ?? 0));
   const setup = needsSetup
@@ -304,7 +326,8 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
     project.simulationConfig,
     project.products[0],
     simClockSec ?? project.simulationConfig.durationSec,
-    project.layoutObjects
+    project.layoutObjects,
+    project.products
   );
   const objectsMap = new Map(project.layoutObjects.map((o) => [o.id, o]));
 
@@ -321,7 +344,7 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
       .filter((o): o is LayoutObject => Boolean(o));
 
     const profile = computeStageCapacityProfile(st, assignedObjs);
-    totalTaskTimeSec += profile.baseTaskTimeSec / profile.batchSize;
+    totalTaskTimeSec += (profile.baseTaskTimeSec + profile.batchTransferTimeSec) / profile.effectiveBatchDivisor;
 
     if (profile.baseTaskTimeSec > 0) {
       effectiveCycles.push(profile.effectiveUnitCycleSec);
@@ -398,11 +421,19 @@ export function buildAuditedSimulationKPIs(params: {
   shiftAudit: ShiftWindowAudit;
   goodUnits: number;
   scrappedUnits: number;
+  scrappedBatches?: number;
+  reworkUnits?: number;
+  reworkCycles?: number;
+  reworkBatches?: number;
   totalBatchesCompleted?: number;
   avgLeadTimeSec: number;
   avgWaitingTimeSec: number;
+  avgUnitWaitingTimeSec?: number;
+  avgBatchWaitingTimeSec?: number;
+  avgQueueWaitingTimeSec?: number;
   avgProcessingTimeSec: number;
   avgTransportTimeSec: number;
+  totalConveyorTransitTimeSec?: number;
   totalDowntimeSec: number;
   totalBlockedTimeSec: number;
   totalStarvedTimeSec: number;
@@ -418,6 +449,7 @@ export function buildAuditedSimulationKPIs(params: {
   avgBufferOccupancyPct: number;
   stageAnalytics: StageAnalytics[];
   resourceAnalytics?: ResourceOeeAnalytics[];
+  productAnalytics?: ProductAnalytics[];
   bottleneckStageId?: string;
   bottleneckStageName?: string;
 }): SimulationKPIs {
@@ -442,8 +474,9 @@ export function buildAuditedSimulationKPIs(params: {
     const tStage = timingByStage.get(sa.stageId);
     const configuredCycleTimeSec = tStage?.baseTaskTimeSec ?? 0;
     const batchSize = Math.max(1, sa.batchSize ?? tStage?.batchSize ?? 1);
+    const effectiveDivisor = sa.batchMode === 'collect_batch' ? batchSize : 1;
     const effectiveTheoreticalUnitCycleSec =
-      tStage?.effectiveUnitCycleSec ?? configuredCycleTimeSec / batchSize;
+      tStage?.effectiveUnitCycleSec ?? configuredCycleTimeSec / effectiveDivisor;
     const theoreticalCapacityPerHour = tStage?.theoreticalCapacityPerHour ?? 0;
 
     const stageCalSec = sa.calendarTimeSec ?? shiftAudit.simTimeSec;
@@ -659,6 +692,10 @@ export function buildAuditedSimulationKPIs(params: {
     actualProduction,
     goodUnits,
     defectiveUnits: scrappedUnits,
+    scrappedBatches: params.scrappedBatches ?? 0,
+    reworkUnits: params.reworkUnits ?? 0,
+    reworkCycles: params.reworkCycles ?? 0,
+    reworkBatches: params.reworkBatches ?? 0,
     productionAttainmentPct,
     hourlyOutput: throughputPerHour,
     unitsPerShift: goodUnits,
@@ -666,8 +703,12 @@ export function buildAuditedSimulationKPIs(params: {
     theoreticalTaktTimeSec: timingAudit.lineTaktTimeSec,
     avgLeadTimeSec: params.avgLeadTimeSec,
     avgWaitingTimeSec: params.avgWaitingTimeSec,
+    avgUnitWaitingTimeSec: params.avgUnitWaitingTimeSec ?? params.avgWaitingTimeSec,
+    avgBatchWaitingTimeSec: params.avgBatchWaitingTimeSec ?? params.avgWaitingTimeSec,
+    avgQueueWaitingTimeSec: params.avgQueueWaitingTimeSec ?? params.avgWaitingTimeSec,
     avgProcessingTimeSec: params.avgProcessingTimeSec,
     avgTransportTimeSec: params.avgTransportTimeSec,
+    totalConveyorTransitTimeSec: params.totalConveyorTransitTimeSec ?? 0,
     totalDowntimeSec: params.totalDowntimeSec,
     lineEfficiencyPct,
     workerUtilizationPct: params.workerUtilizationPct,

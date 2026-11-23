@@ -1,12 +1,35 @@
-import { ProjectData, ScenarioRecord, SimulationResult } from '../types/project';
+import { ProjectData, ScenarioRecord, SimEvent, SimulationResult, SimulationSnapshot } from '../types/project';
 import { DiscreteEventSimulationEngine } from './desEngine';
 import type { SimWorkerRequest, SimWorkerResponse } from '../workers/simWorker';
 import { computeStationSidePlacement } from '../engineering/conveyorWorkerAssignment';
 
+export interface WorkerSimulationOutput {
+  result: SimulationResult;
+  snapshot: SimulationSnapshot;
+  allEvents: SimEvent[];
+}
+
+export interface RunWorkerOptions {
+  requestId?: string;
+  onProgress?: (progressPct: number) => void;
+}
+
+let workerExecutionCount = 0;
+export function getSimulationExecutionCount(): number {
+  return workerExecutionCount;
+}
+export function resetSimulationExecutionCount(): void {
+  workerExecutionCount = 0;
+}
+
 let workerInstance: Worker | null = null;
 const pending = new Map<
   string,
-  { resolve: (res: SimulationResult) => void; reject: (err: Error) => void }
+  {
+    resolve: (res: WorkerSimulationOutput) => void;
+    reject: (err: Error) => void;
+    onProgress?: (progressPct: number) => void;
+  }
 >();
 
 function getWorker(): Worker | null {
@@ -17,12 +40,30 @@ function getWorker(): Worker | null {
         type: 'module',
       });
       workerInstance.onmessage = (e: MessageEvent<SimWorkerResponse>) => {
-        const { requestId, ok, result, error } = e.data;
-        const entry = pending.get(requestId);
+        const data = e.data;
+        const entry = pending.get(data.requestId);
         if (!entry) return;
-        pending.delete(requestId);
-        if (ok && result) entry.resolve(result);
-        else entry.reject(new Error(error || 'Simulation failed'));
+
+        if (data.type === 'progress') {
+          entry.onProgress?.(data.progressPct);
+          return;
+        }
+
+        pending.delete(data.requestId);
+        if (data.ok && data.result && data.snapshot) {
+          entry.onProgress?.(100);
+          entry.resolve({
+            result: data.result,
+            snapshot: data.snapshot,
+            allEvents: data.allEvents || [],
+          });
+        } else if (data.cancelled) {
+          const err = new Error('Simulation cancelled');
+          err.name = 'SimulationCancelledError';
+          entry.reject(err);
+        } else {
+          entry.reject(new Error(data.error || 'Simulation failed'));
+        }
       };
       workerInstance.onerror = (err) => {
         for (const entry of pending.values()) {
@@ -38,19 +79,47 @@ function getWorker(): Worker | null {
   return workerInstance;
 }
 
-export function runSimulationInWorker(project: ProjectData): Promise<SimulationResult> {
+export function cancelSimulationWorker(requestId: string): void {
+  const entry = pending.get(requestId);
+  if (workerInstance) {
+    const cancelMsg: SimWorkerRequest = { type: 'cancel', requestId };
+    workerInstance.postMessage(cancelMsg);
+  }
+  if (entry) {
+    pending.delete(requestId);
+    const err = new Error('Simulation cancelled');
+    err.name = 'SimulationCancelledError';
+    entry.reject(err);
+  }
+}
+
+export function runFullSimulationInWorker(
+  project: ProjectData,
+  opts?: RunWorkerOptions
+): Promise<WorkerSimulationOutput> {
+  workerExecutionCount++;
   const worker = getWorker();
   if (!worker) {
     const engine = new DiscreteEventSimulationEngine(project);
-    return Promise.resolve(engine.runToCompletion());
+    const result = engine.runToCompletion();
+    const snapshot = { ...engine.getSnapshot(), status: 'completed' as const, result };
+    const allEvents = engine.getAllEvents();
+    opts?.onProgress?.(100);
+    return Promise.resolve({ result, snapshot, allEvents });
   }
 
   return new Promise((resolve, reject) => {
-    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    pending.set(requestId, { resolve, reject });
-    const req: SimWorkerRequest = { requestId, project };
+    const requestId =
+      opts?.requestId || `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    pending.set(requestId, { resolve, reject, onProgress: opts?.onProgress });
+    const req: SimWorkerRequest = { type: 'run', requestId, project };
     worker.postMessage(req);
   });
+}
+
+export async function runSimulationInWorker(project: ProjectData): Promise<SimulationResult> {
+  const out = await runFullSimulationInWorker(project);
+  return out.result;
 }
 
 export function applyScenarioOverrides(

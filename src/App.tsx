@@ -88,6 +88,7 @@ export default function App() {
   const toastMessage = useAppStore((s) => s.toastMessage);
   const validationIssues = useAppStore((s) => s.validationIssues);
   const capture3DPng = useAppStore((s) => s.capture3DPng);
+  const simStatus = useAppStore((s) => s.simSnapshot.status);
 
   const bootstrap = useAppStore((s) => s.bootstrap);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
@@ -240,6 +241,28 @@ export default function App() {
     activeModule === 'scenarios' ||
     activeModule === 'reports' ||
     activeModule === 'validation';
+
+  const has3DMounted =
+    !isFullPageModule &&
+    (viewportMode === '3d' || viewportMode === 'split' || viewportMode === 'simulation');
+
+  // Keep live simulation advancing smoothly in 2D / Flowchart / Analytics modes when Workspace3D is unmounted
+  useEffect(() => {
+    if (simStatus !== 'running' || has3DMounted) return;
+    let rafId = 0;
+    let lastTime = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(0.1, Math.max(0, (now - lastTime) / 1000));
+      lastTime = now;
+      const st = useAppStore.getState();
+      if (st.simSnapshot.status === 'running') {
+        st.tickSimulation(dt);
+        rafId = requestAnimationFrame(step);
+      }
+    };
+    rafId = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafId);
+  }, [simStatus, has3DMounted]);
 
   const handleQuickExportJson = () => {
     const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });

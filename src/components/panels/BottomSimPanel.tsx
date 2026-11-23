@@ -9,6 +9,7 @@ import {
   RotateCcw,
   Square,
   StepForward,
+  X,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { formatDuration } from '../../utils/units';
@@ -18,6 +19,7 @@ export const BottomSimPanel: React.FC = () => {
   const project = useAppStore((s) => s.project);
   const simSnapshot = useAppStore((s) => s.simSnapshot);
   const simWorkerBusy = useAppStore((s) => s.simWorkerBusy);
+  const simWorkerProgressPct = useAppStore((s) => s.simWorkerProgressPct);
   const language = useAppStore((s) => s.language);
 
   const startSimulation = useAppStore((s) => s.startSimulation);
@@ -27,6 +29,7 @@ export const BottomSimPanel: React.FC = () => {
   const resetSimulation = useAppStore((s) => s.resetSimulation);
   const stepSimulationEvent = useAppStore((s) => s.stepSimulationEvent);
   const runFullShiftSimulation = useAppStore((s) => s.runFullShiftSimulation);
+  const cancelFullShiftSimulation = useAppStore((s) => s.cancelFullShiftSimulation);
   const updateSimConfig = useAppStore((s) => s.updateSimConfig);
   const autoWireForSimulation = useAppStore((s) => s.autoWireForSimulation);
 
@@ -157,8 +160,23 @@ export const BottomSimPanel: React.FC = () => {
             className="flex items-center gap-1 rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 px-2 sm:px-2.5 py-1.5 text-xs font-medium text-neutral-800 dark:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 whitespace-nowrap shrink-0"
           >
             <FastForward className="w-3.5 h-3.5 text-red-600" />
-            <span className="hidden md:inline">{simWorkerBusy ? t.actions.computing : t.actions.runFullShift}</span>
+            <span className="hidden md:inline">
+              {simWorkerBusy
+                ? `${t.actions.computing} ${simWorkerProgressPct}%`
+                : t.actions.runFullShift}
+            </span>
           </button>
+
+          {simWorkerBusy && (
+            <button
+              onClick={cancelFullShiftSimulation}
+              title={t.labels.cancelWorkerSim}
+              className="flex items-center gap-1 rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 px-2 py-1.5 text-xs font-medium text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-950/60 whitespace-nowrap shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{t.labels.cancelWorkerSim}</span>
+            </button>
+          )}
 
           {needsAutoWire && (
             <button
