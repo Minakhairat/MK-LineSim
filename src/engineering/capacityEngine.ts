@@ -85,6 +85,7 @@ export interface StageCapacityProfile {
   isUnassigned: boolean;
   isNonProcessing: boolean;
   isHeterogeneous: boolean;
+  hasHeterogeneousBatch: boolean;
   serverProfiles: ServerCapacityDetail[];
   isValid: boolean;
   validationErrors: string[];
@@ -121,21 +122,69 @@ export interface BatchRunPlanResult {
 }
 
 export interface ShiftCapacityOptions {
+  /**
+   * Common reporting shift duration T_reporting_shift (seconds) when reportingShiftDurationSec is omitted,
+   * and default scheduled operating time for machines without an entry in serverScheduledTimeSec.
+   */
   netScheduledTimeSec: number;
+  /**
+   * Optional explicit common reporting shift duration T_reporting_shift (seconds) used as denominator
+   * in C_shift,hourly = (Q_shift / T_reporting_shift) * 3600. Defaults to netScheduledTimeSec when omitted.
+   */
+  reportingShiftDurationSec?: number;
+  /** Per-machine scheduled active time (seconds, before setup deduction) keyed by objectId. */
   serverScheduledTimeSec?: Record<string, number>;
+  /** Per-machine setup occurrences keyed by objectId (overrides setupOccurrences for that server). */
+  serverSetupOccurrences?: Record<string, number>;
+  /** Default setup occurrences applied per machine when setupTimeSec > 0 (defaults to 1 when scheduled > 0). */
   setupOccurrences?: number;
+  /** Optional planned production target quantity for the reporting shift. */
+  plannedProductionQuantity?: number;
+}
+
+export interface ShiftAdjustedServerDetail {
+  objectId: string;
+  objectName: string;
+  isVirtual: boolean;
+  slotCapacity: number;
+  effectiveCycleSec: number;
+  batchCycleTimeSec: number;
+  batchMode: StageBatchConfig['batchMode'];
+  effectiveBatchDivisor: number;
+  scheduledTimeSec: number;
+  setupOccurrences: number;
+  setupTimeSec: number;
+  productiveTimeSec: number;
+  continuousUnits: number;
+  discreteUnits: number;
 }
 
 export interface ShiftAdjustedStageCapacity {
+  /** Common reporting shift duration T_reporting_shift (seconds). */
   netScheduledTimeSec: number;
+  /** Explicit common reporting shift duration T_reporting_shift (seconds). */
+  reportingShiftDurationSec: number;
+  /** Informational slot-weighted average machine scheduled time (never used as hourly rate denominator). */
+  averageMachineScheduledTimeSec: number;
+  /** Slot-weighted average setup time deducted per parallel slot (seconds). */
   setupTimeTotalSec: number;
+  /** Slot-weighted average net productive time per parallel slot after setup (seconds). */
   netProductionTimeSec: number;
   nominalHourlyCapacity: number;
+  /** Continuous theoretical shift output Q_shift = sum(c_i * T_i,prod * d_i / CT_i). */
   shiftAdjustedCapacityUnits: number;
+  /** Integer cycle-truncated discrete shift output sum(c_i * floor(T_i,prod / CT_i) * d_i). */
   shiftAdjustedDiscreteUnits: number;
+  /** Shift-adjusted hourly capacity = (Q_shift / T_reporting_shift) * 3600. */
   shiftAdjustedHourlyCapacity: number;
+  /** Integer cycle-truncated discrete hourly capacity = (Q_shift,disc / T_reporting_shift) * 3600. */
+  shiftAdjustedDiscreteHourlyCapacity: number;
+  plannedProductionQuantity?: number;
+  plannedAttainableContinuousUnits?: number;
+  plannedAttainableDiscreteUnits?: number;
   physicalShiftAdjustedCapacityUnits: number;
   virtualShiftAdjustedCapacityUnits: number;
+  serverBreakdown: ShiftAdjustedServerDetail[];
   isValid: boolean;
   validationError?: string;
 }
@@ -716,6 +765,7 @@ export function computeStageCapacityProfile(
       isUnassigned: breakdown.isUnassigned,
       isNonProcessing,
       isHeterogeneous,
+      hasHeterogeneousBatch,
       serverProfiles,
       isValid,
       validationErrors,
@@ -785,6 +835,7 @@ export function computeStageCapacityProfile(
     isUnassigned: breakdown.isUnassigned,
     isNonProcessing: breakdown.isNonProcessing || totalCycleSec <= 0,
     isHeterogeneous: false,
+    hasHeterogeneousBatch: false,
     serverProfiles: [],
     isValid,
     validationErrors,
@@ -972,34 +1023,93 @@ export function computeBatchRunPlan(
 }
 
 /**
- * Computes shift-adjusted stage capacity accounting for scheduled production time,
- * per-machine setup deductions, parallel servers, and physical vs. virtual resource isolation.
+ * Computes shift-adjusted stage capacity accounting for per-machine scheduled operating time,
+ * per-machine setup deductions, parallel servers, heterogeneous batch configurations, and
+ * physical vs. virtual resource isolation.
+ *
+ * Hourly capacity uses the common reporting shift duration T_reporting_shift:
+ *   Q_shift = sum_i (c_i * T_i,productive * d_i / CT_i,effective)
+ *   C_shift,hourly = (Q_shift / T_reporting_shift) * 3600
+ * Never uses the average machine scheduled duration as denominator.
  */
 export function computeShiftAdjustedStageCapacity(
   profile: StageCapacityProfile,
   options: ShiftCapacityOptions
 ): ShiftAdjustedStageCapacity {
   const schedCheck = checkNonNegFinite(options.netScheduledTimeSec);
+  const hasExplicitReporting = options.reportingShiftDurationSec !== undefined;
+  const reportingNum = hasExplicitReporting ? Number(options.reportingShiftDurationSec) : schedCheck.value;
+  const reportingValid = hasExplicitReporting
+    ? Number.isFinite(reportingNum) && reportingNum > 0
+    : schedCheck.valid;
+
   const setupOccCheck =
     options.setupOccurrences === undefined
       ? undefined
       : checkNonNegIntFinite(options.setupOccurrences);
 
-  if (!profile.isValid || !schedCheck.valid || (setupOccCheck && !setupOccCheck.valid)) {
-    return {
-      netScheduledTimeSec: 0,
-      setupTimeTotalSec: 0,
-      netProductionTimeSec: 0,
-      nominalHourlyCapacity: 0,
-      shiftAdjustedCapacityUnits: 0,
-      shiftAdjustedDiscreteUnits: 0,
-      shiftAdjustedHourlyCapacity: 0,
-      physicalShiftAdjustedCapacityUnits: 0,
-      virtualShiftAdjustedCapacityUnits: 0,
-      isValid: false,
-      validationError: 'Invalid stage profile, scheduled time, or setup count.',
-    };
+  const plannedCheck =
+    options.plannedProductionQuantity === undefined
+      ? { valid: true, present: false, value: 0 }
+      : checkNonNegIntFinite(options.plannedProductionQuantity);
+
+  let serverSchedMapValid = true;
+  if (options.serverScheduledTimeSec) {
+    for (const val of Object.values(options.serverScheduledTimeSec)) {
+      if (val === undefined) continue;
+      const n = Number(val);
+      if (!Number.isFinite(n) || n < 0) {
+        serverSchedMapValid = false;
+        break;
+      }
+    }
   }
+
+  let serverSetupMapValid = true;
+  if (options.serverSetupOccurrences) {
+    for (const val of Object.values(options.serverSetupOccurrences)) {
+      if (val === undefined) continue;
+      if (!checkNonNegIntFinite(val).valid) {
+        serverSetupMapValid = false;
+        break;
+      }
+    }
+  }
+
+  const invalidResult = (msg: string): ShiftAdjustedStageCapacity => ({
+    netScheduledTimeSec: 0,
+    reportingShiftDurationSec: 0,
+    averageMachineScheduledTimeSec: 0,
+    setupTimeTotalSec: 0,
+    netProductionTimeSec: 0,
+    nominalHourlyCapacity: 0,
+    shiftAdjustedCapacityUnits: 0,
+    shiftAdjustedDiscreteUnits: 0,
+    shiftAdjustedHourlyCapacity: 0,
+    shiftAdjustedDiscreteHourlyCapacity: 0,
+    ...(plannedCheck.present ? { plannedProductionQuantity: plannedCheck.value } : {}),
+    physicalShiftAdjustedCapacityUnits: 0,
+    virtualShiftAdjustedCapacityUnits: 0,
+    serverBreakdown: [],
+    isValid: false,
+    validationError: msg,
+  });
+
+  if (
+    !profile.isValid ||
+    !schedCheck.valid ||
+    !reportingValid ||
+    (setupOccCheck && !setupOccCheck.valid) ||
+    !plannedCheck.valid ||
+    !serverSchedMapValid ||
+    !serverSetupMapValid
+  ) {
+    return invalidResult(
+      'Invalid stage profile, reporting shift duration, scheduled time, setup count, or planned quantity.'
+    );
+  }
+
+  const reportingShiftSec = reportingNum;
 
   if (profile.serverProfiles.length > 0) {
     let shiftUnitsCont = 0;
@@ -1010,13 +1120,41 @@ export function computeShiftAdjustedStageCapacity(
     let setupSum = 0;
     let prodSum = 0;
     let slotSum = 0;
+    const serverBreakdown: ShiftAdjustedServerDetail[] = [];
 
     for (const sp of profile.serverProfiles) {
-      if (!sp.isValid || sp.slotCapacity <= 0) continue;
-      const rawServerSched = options.serverScheduledTimeSec?.[sp.objectId] ?? schedCheck.value;
-      const serverSched = Number.isFinite(rawServerSched) && rawServerSched >= 0 ? rawServerSched : 0;
+      if (
+        !sp.isValid ||
+        !Number.isFinite(sp.slotCapacity) ||
+        sp.slotCapacity <= 0 ||
+        !Number.isFinite(sp.batchCycleTimeSec) ||
+        sp.batchCycleTimeSec < 0 ||
+        !Number.isFinite(sp.setupTimeSec) ||
+        sp.setupTimeSec < 0 ||
+        !Number.isFinite(sp.effectiveBatchDivisor) ||
+        sp.effectiveBatchDivisor <= 0
+      ) {
+        return invalidResult(`Invalid server profile "${sp.objectName}" in stage capacity.`);
+      }
+
+      const hasOverride =
+        options.serverScheduledTimeSec !== undefined &&
+        options.serverScheduledTimeSec[sp.objectId] !== undefined;
+      const serverSched = hasOverride
+        ? Number(options.serverScheduledTimeSec![sp.objectId])
+        : schedCheck.value;
+
+      if (reportingShiftSec <= 0 && serverSched > 0) {
+        return invalidResult(
+          `Server "${sp.objectName}" has positive scheduled time (${serverSched}s) against zero reporting shift duration.`
+        );
+      }
+
+      const perServerOcc = options.serverSetupOccurrences?.[sp.objectId];
       const occ =
-        setupOccCheck !== undefined
+        perServerOcc !== undefined
+          ? perServerOcc
+          : setupOccCheck !== undefined
           ? setupOccCheck.value
           : sp.setupTimeSec > 0 && serverSched > 0
           ? 1
@@ -1029,9 +1167,11 @@ export function computeShiftAdjustedStageCapacity(
       prodSum += serverProd * sp.slotCapacity;
       slotSum += sp.slotCapacity;
 
-      if (sp.batchCycleTimeSec > 0) {
-        const cont = sp.slotCapacity * ((serverProd * sp.effectiveBatchDivisor) / sp.batchCycleTimeSec);
-        const disc =
+      let cont = 0;
+      let disc = 0;
+      if (sp.batchCycleTimeSec > 0 && serverProd > 0) {
+        cont = sp.slotCapacity * ((serverProd * sp.effectiveBatchDivisor) / sp.batchCycleTimeSec);
+        disc =
           sp.slotCapacity *
           Math.floor((serverProd + 1e-9) / sp.batchCycleTimeSec) *
           sp.effectiveBatchDivisor;
@@ -1043,61 +1183,113 @@ export function computeShiftAdjustedStageCapacity(
           physShiftUnits += cont;
         }
       }
+
+      serverBreakdown.push({
+        objectId: sp.objectId,
+        objectName: sp.objectName,
+        isVirtual: sp.isVirtual,
+        slotCapacity: sp.slotCapacity,
+        effectiveCycleSec: sp.effectiveUnitCycleSec,
+        batchCycleTimeSec: sp.batchCycleTimeSec,
+        batchMode: sp.batchMode,
+        effectiveBatchDivisor: sp.effectiveBatchDivisor,
+        scheduledTimeSec: serverSched,
+        setupOccurrences: occ,
+        setupTimeSec: serverSetup,
+        productiveTimeSec: serverProd,
+        continuousUnits: cont,
+        discreteUnits: disc,
+      });
     }
 
-    const avgSched = slotSum > 0 ? schedSum / slotSum : schedCheck.value;
+    const averageMachineScheduledTimeSec = slotSum > 0 ? schedSum / slotSum : schedCheck.value;
     const avgSetup = slotSum > 0 ? setupSum / slotSum : 0;
     const avgProd = slotSum > 0 ? prodSum / slotSum : 0;
-    const shiftAdjustedHourlyCapacity = avgSched > 0 ? (shiftUnitsCont * 3600) / avgSched : 0;
+
+    // Common reporting shift duration T_reporting_shift MUST be the denominator (never averageMachineScheduledTimeSec)
+    const shiftAdjustedHourlyCapacity =
+      reportingShiftSec > 0 ? (shiftUnitsCont * 3600) / reportingShiftSec : 0;
+    const shiftAdjustedDiscreteHourlyCapacity =
+      reportingShiftSec > 0 ? (shiftUnitsDisc * 3600) / reportingShiftSec : 0;
 
     return {
-      netScheduledTimeSec: avgSched,
+      netScheduledTimeSec: reportingShiftSec,
+      reportingShiftDurationSec: reportingShiftSec,
+      averageMachineScheduledTimeSec,
       setupTimeTotalSec: avgSetup,
       netProductionTimeSec: avgProd,
       nominalHourlyCapacity: profile.theoreticalCapacityPerHour,
       shiftAdjustedCapacityUnits: shiftUnitsCont,
       shiftAdjustedDiscreteUnits: shiftUnitsDisc,
       shiftAdjustedHourlyCapacity,
+      shiftAdjustedDiscreteHourlyCapacity,
+      ...(plannedCheck.present
+        ? {
+            plannedProductionQuantity: plannedCheck.value,
+            plannedAttainableContinuousUnits: Math.min(plannedCheck.value, shiftUnitsCont),
+            plannedAttainableDiscreteUnits: Math.min(plannedCheck.value, shiftUnitsDisc),
+          }
+        : {}),
       physicalShiftAdjustedCapacityUnits: physShiftUnits,
       virtualShiftAdjustedCapacityUnits: virtShiftUnits,
+      serverBreakdown,
       isValid: true,
     };
   }
 
   // Virtual or non-processing stage without individual server entries
-  const netScheduledTimeSec = schedCheck.value;
+  const machineScheduledSec = schedCheck.value;
+  if (reportingShiftSec <= 0 && machineScheduledSec > 0) {
+    return invalidResult(
+      'Positive scheduled time cannot be evaluated against a zero reporting shift duration.'
+    );
+  }
+
   const occ =
     setupOccCheck !== undefined
       ? setupOccCheck.value
-      : profile.setupTimeSec > 0 && netScheduledTimeSec > 0
+      : profile.setupTimeSec > 0 && machineScheduledSec > 0
       ? 1
       : 0;
-  const setupTimeTotalSec = Math.min(netScheduledTimeSec, occ * profile.setupTimeSec);
-  const netProductionTimeSec = Math.max(0, netScheduledTimeSec - setupTimeTotalSec);
+  const setupTimeTotalSec = Math.min(machineScheduledSec, occ * profile.setupTimeSec);
+  const netProductionTimeSec = Math.max(0, machineScheduledSec - setupTimeTotalSec);
 
   const shiftAdjustedCapacityUnits =
     (netProductionTimeSec * profile.theoreticalCapacityPerHour) / 3600;
   const cyclePerBatch =
     profile.baseTaskTimeSec + (profile.batchMode === 'collect_batch' ? profile.batchTransferTimeSec : 0);
   const shiftAdjustedDiscreteUnits =
-    profile.parallelServers > 0 && cyclePerBatch > 0
+    profile.parallelServers > 0 && cyclePerBatch > 0 && netProductionTimeSec > 0
       ? profile.parallelServers *
         Math.floor((netProductionTimeSec + 1e-9) / cyclePerBatch) *
         profile.effectiveBatchDivisor
       : 0;
   const shiftAdjustedHourlyCapacity =
-    netScheduledTimeSec > 0 ? (shiftAdjustedCapacityUnits * 3600) / netScheduledTimeSec : 0;
+    reportingShiftSec > 0 ? (shiftAdjustedCapacityUnits * 3600) / reportingShiftSec : 0;
+  const shiftAdjustedDiscreteHourlyCapacity =
+    reportingShiftSec > 0 ? (shiftAdjustedDiscreteUnits * 3600) / reportingShiftSec : 0;
 
   return {
-    netScheduledTimeSec,
+    netScheduledTimeSec: reportingShiftSec,
+    reportingShiftDurationSec: reportingShiftSec,
+    averageMachineScheduledTimeSec: machineScheduledSec,
     setupTimeTotalSec,
     netProductionTimeSec,
     nominalHourlyCapacity: profile.theoreticalCapacityPerHour,
     shiftAdjustedCapacityUnits,
     shiftAdjustedDiscreteUnits,
     shiftAdjustedHourlyCapacity,
+    shiftAdjustedDiscreteHourlyCapacity,
+    ...(plannedCheck.present
+      ? {
+          plannedProductionQuantity: plannedCheck.value,
+          plannedAttainableContinuousUnits: Math.min(plannedCheck.value, shiftAdjustedCapacityUnits),
+          plannedAttainableDiscreteUnits: Math.min(plannedCheck.value, shiftAdjustedDiscreteUnits),
+        }
+      : {}),
     physicalShiftAdjustedCapacityUnits: 0,
     virtualShiftAdjustedCapacityUnits: profile.isVirtual ? shiftAdjustedCapacityUnits : 0,
+    serverBreakdown: [],
     isValid: true,
   };
 }

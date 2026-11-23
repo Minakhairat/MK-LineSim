@@ -1,8 +1,8 @@
-# MK LineSim — Phase 1: Industrial Capacity & Cycle-Time Mathematical Specification
+# MK LineSim — Phase 1 & Phase 1.1: Industrial Capacity & Cycle-Time Mathematical Specification
 
-**Program Phase:** Phase 1 — Industrial Capacity Mathematics Verification  
+**Program Phase:** Phase 1 (Industrial Capacity Mathematics Verification) & Phase 1.1 (Shift-Adjusted Capacity Correction)  
 **Scope:** Analytical capacity, cycle time, transportation capacity, virtual vs. physical resource separation, batch processing (including end-of-run partial batches), setup amortization, and shift-adjusted stage/line capacity equations.  
-**DES Isolation Boundary:** This specification and Phase 1 implementation govern analytical capacity modules (`src/engineering/capacityEngine.ts`, `src/engineering/conveyorPhysics.ts`, `src/engineering/validationEngine.ts`, and analytical functions in `src/simulation/timeAuditService.ts`). Discrete-event simulation runtime (`src/simulation/desEngine.ts`) is **not** modified in Phase 1.
+**DES Isolation Boundary:** This specification and Phase 1 / Phase 1.1 implementation govern analytical capacity modules (`src/engineering/capacityEngine.ts`, `src/engineering/conveyorPhysics.ts`, `src/engineering/validationEngine.ts`, and analytical functions in `src/simulation/timeAuditService.ts`). Discrete-event simulation runtime (`src/simulation/desEngine.ts`) is **not** modified.
 
 ---
 
@@ -129,20 +129,35 @@ Stages are explicitly classified into mutually exclusive source modes (`stageAss
 
 ---
 
-### Requirement 8 — Shift-Adjusted Stage Capacity, Setup & Zero Double-Counting
+### Requirement 8 — Shift-Adjusted Stage Capacity, Setup & Zero Double-Counting (Phase 1.1 Corrected)
 1. **Zero Double-Counting:**
    - Intra-stage: Duplicate equipment IDs in `stage.assignedObjectIds` (e.g., `['m1', 'm1']`) are deduplicated once per stage.
    - Cross-stage: When `auditProjectTiming` evaluates a plant line, each physical equipment ID is tracked across stages so shared machines are flagged rather than double-counted into independent parallel pools.
 2. **Shift-Adjusted Theoretical Stage Capacity:**
-   For each server $i$ on a stage evaluated over horizon $[0, T_{\text{horizon}}]$:
-   - Let $T_{\text{sched}, i}$ be the server's scheduled production seconds from `ResourceCalendarEngine` (accounting for assigned `shiftId`, shift breaks clipped to $[0, T_{\text{horizon}}]$, and maintenance windows).
+   For each independent parallel machine $i \in M$ evaluated within a **common reporting shift** of duration $T_{\text{reporting shift}} > 0$ seconds:
+   - Let $T_{\text{sched}, i}$ be server $i$'s actual scheduled operating time inside the reporting shift (accounting for assigned `shiftId`, shift breaks, and maintenance windows via `ResourceCalendarEngine`).
    - For $N_{\text{setups}, i} \ge 0$ setups of duration $t_{\text{setup}, i}$ (default $N_{\text{setups}, i} = 1$ when $t_{\text{setup}, i} > 0$ and $T_{\text{sched}, i} > 0$, else $0$):
-     $$T_{\text{setup, total}, i} = \min(T_{\text{sched}, i},\; N_{\text{setups}, i} \cdot t_{\text{setup}, i}), \qquad T_{\text{prod}, i} = \max(0, T_{\text{sched}, i} - T_{\text{setup, total}, i})$$
-   - Continuous shift-adjusted unit capacity:
-     $$Q_{\text{shift, cont}} = \sum_{i \in M} c_i \cdot \frac{T_{\text{prod}, i} \cdot d_i}{t_{\text{cycle}, i}}$$
-   - Discrete full-cycle shift-adjusted unit capacity:
-     $$Q_{\text{shift, discrete}} = \sum_{i \in M} c_i \cdot \left\lfloor \frac{T_{\text{prod}, i}}{t_{\text{batchCycle}, i}} \right\rfloor \cdot d_i$$
-   - Shift-adjusted effective hourly capacity over stage scheduled hours:
-     $$C_{\text{shift, hr}} = \begin{cases} \dfrac{Q_{\text{shift, cont}}}{T_{\text{sched, avg}} / 3600}, & T_{\text{sched, avg}} > 0 \\ 0, & \text{otherwise} \end{cases}$$
+     $$T_{\text{setup, total}, i} = \min(T_{\text{sched}, i},\; N_{\text{setups}, i} \cdot t_{\text{setup}, i}), \qquad T_{i,\text{productive}} = \max(0, T_{\text{sched}, i} - T_{\text{setup, total}, i})$$
+   - Per-machine continuous output and total shift production:
+     $$Q_i = c_i \cdot \frac{T_{i,\text{productive}} \cdot d_i}{CT_{i,\text{effective}}}, \qquad Q_{\text{shift}} = \sum_{i \in M} Q_i$$
+     where $CT_{i,\text{effective}} = t_{\text{batchCycle}, i} = t_{\text{base}, i} + t_{\text{transfer}, i}$ (and $d_i$ is machine $i$'s own effective batch divisor).
+   - Discrete integer cycle-truncated shift production (strictly separated from continuous output):
+     $$Q_{\text{shift, discrete}} = \sum_{i \in M} c_i \cdot \left\lfloor \frac{T_{i,\text{productive}}}{CT_{i,\text{effective}}} \right\rfloor \cdot d_i$$
+   - Optional planned production target attainment ($Q_{\text{planned}} \in \mathbb{Z}_{\ge 0}$, never mixed into theoretical output):
+     $$Q_{\text{planned, attainable, cont}} = \min(Q_{\text{planned}}, Q_{\text{shift}}), \qquad Q_{\text{planned, attainable, disc}} = \min(Q_{\text{planned}}, Q_{\text{shift, discrete}})$$
+   - **Shift-Adjusted Hourly Capacity (Phase 1.1 Correction):**
+     Must divide combined shift output by the **common reporting shift duration** $T_{\text{reporting shift}}$, NEVER by the average machine operating duration $T_{\text{avg, sched}}$:
+     $$C_{\text{shift, hourly}} = \begin{cases} \dfrac{Q_{\text{shift}}}{T_{\text{reporting shift}}} \times 3600, & T_{\text{reporting shift}} > 0 \\ 0, & \text{otherwise} \end{cases}$$
+     $$C_{\text{shift, discrete, hourly}} = \begin{cases} \dfrac{Q_{\text{shift, discrete}}}{T_{\text{reporting shift}}} \times 3600, & T_{\text{reporting shift}} > 0 \\ 0, & \text{otherwise} \end{cases}$$
 
-**Invalid Physical Inputs Policy:** Negative or non-finite cycle/load/unload/setup/batchTransfer times, non-positive or fractional or non-finite `capacity` ($c_i \le 0$), non-positive/fractional/non-finite `batchSize`, or negative/fractional/non-finite `requiredMachines` mark `isValid = false` and yield `0` capacity rather than clamping invalid inputs into valid positive numbers.
+   **Reference Example (Phase 1.1 Unequal Schedules):**
+   - Machine A: $CT_A = 60\text{ s}$, $T_{A,\text{productive}} = 3600\text{ s} \implies Q_A = 60\text{ units}$.
+   - Machine B: $CT_B = 60\text{ s}$, $T_{B,\text{productive}} = 1800\text{ s} \implies Q_B = 30\text{ units}$.
+   - Common reporting shift: $T_{\text{reporting shift}} = 3600\text{ s}$.
+   - Combined shift output: $Q_{\text{shift}} = 60 + 30 = 90\text{ units}$.
+   - Correct hourly capacity: $C_{\text{shift, hourly}} = \frac{90}{3600} \times 3600 = 90\text{ units/hr}$.
+   - *Why Phase 1 `avgSched` was wrong:* Dividing $90\text{ units}$ by $T_{\text{avg, sched}} = \frac{3600+1800}{2} = 2700\text{ s}$ produced $\frac{90 \times 3600}{2700} = 120\text{ units/hr}$ ($+33.33\%$ error).
+
+**Invalid Physical Inputs Policy:** Negative or non-finite cycle/load/unload/setup/batchTransfer times, non-positive or fractional or non-finite `capacity` ($c_i \le 0$), non-positive/fractional/non-finite `batchSize`, negative/fractional/non-finite `requiredMachines`, negative or non-finite `serverScheduledTimeSec`, non-positive/non-finite explicit `reportingShiftDurationSec`, positive server time against zero `reportingShiftDurationSec`, or negative/fractional setup occurrences / planned quantities mark `isValid = false` and yield `0` capacity.
+
+**Documented Data Model / Caller Limitation:** In `auditProjectTiming` (`src/simulation/timeAuditService.ts`), `netScheduledTimeSec` currently passes `shiftAudit.activeSimTimeSec` (`ResourceCalendarEngine.getPlantCalendarMetrics(...).scheduledProductionTimeSec`), which represents plant net active shift time (excluding breaks unless *all* equipment specifies `runDuringBreaks`). If one parallel machine sets `runDuringBreaks = true` while a sibling machine pauses for breaks, that machine's individual scheduled time can exceed `shiftAudit.activeSimTimeSec`; callers requiring a strict wall-clock shift window denominator should supply `reportingShiftDurationSec` explicitly.

@@ -704,3 +704,442 @@ test('Req 8: Stage capacity (proc+load+unload, setup, shift-adjusted capacity, n
   assert.equal(profBadBatch.isValid, false);
   assert.equal(profBadBatch.theoreticalCapacityPerHour, 0);
 });
+
+test('Phase 1.1 Mandatory Reference: Unequal parallel machine schedules use common reporting shift (3600s+1800s -> 90 u/hr, NOT 120)', () => {
+  const mA = makeMachine('mA', 'st_ref', 60);
+  const mB = makeMachine('mB', 'st_ref', 60);
+  const st = makeStage('st_ref', ['mA', 'mB'], 60);
+  const profile = computeStageCapacityProfile(st, [mA, mB]);
+
+  const shiftCap = computeShiftAdjustedStageCapacity(profile, {
+    netScheduledTimeSec: 3600,
+    reportingShiftDurationSec: 3600,
+    serverScheduledTimeSec: { mA: 3600, mB: 1800 },
+    setupOccurrences: 0,
+  });
+
+  assert.equal(shiftCap.isValid, true);
+  assert.equal(shiftCap.reportingShiftDurationSec, 3600);
+  assert.equal(shiftCap.netScheduledTimeSec, 3600);
+  assert.equal(shiftCap.averageMachineScheduledTimeSec, 2700);
+  assert.equal(shiftCap.serverBreakdown.length, 2);
+
+  assertAnalyticalMatch(
+    'Phase 1.1 Mandatory: Machine A shift output',
+    { CT_A: 60, T_A_prod: 3600 },
+    'Q_A = 3600 / 60 = 60 units',
+    60,
+    shiftCap.serverBreakdown[0].continuousUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Mandatory: Machine B shift output',
+    { CT_B: 60, T_B_prod: 1800 },
+    'Q_B = 1800 / 60 = 30 units',
+    30,
+    shiftCap.serverBreakdown[1].continuousUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Mandatory: Combined shift output',
+    { Q_A: 60, Q_B: 30 },
+    'Q_shift = 60 + 30 = 90 units',
+    90,
+    shiftCap.shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Mandatory: Shift-adjusted hourly capacity (common 3600s reporting shift)',
+    { Q_shift: 90, T_reporting_shift: 3600 },
+    'C_shift,hourly = (90 / 3600) * 3600 = 90 units/hr',
+    90,
+    shiftCap.shiftAdjustedHourlyCapacity
+  );
+  // Regression guard: previous avgSched=2700s denominator produced 120 units/hr
+  assert.notEqual(shiftCap.shiftAdjustedHourlyCapacity, 120);
+
+  // Also verify omitting reportingShiftDurationSec defaults reporting shift to netScheduledTimeSec (3600s)
+  const shiftCapDefaultReporting = computeShiftAdjustedStageCapacity(profile, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mA: 3600, mB: 1800 },
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Mandatory: Default reportingShiftDurationSec = netScheduledTimeSec',
+    { Q_shift: 90, netScheduledTimeSec: 3600 },
+    'C_shift,hourly = (90 / 3600) * 3600 = 90 units/hr',
+    90,
+    shiftCapDefaultReporting.shiftAdjustedHourlyCapacity
+  );
+});
+
+test('Phase 1.1 Case A & B: Equal schedules and heterogeneous cycles + staggered calendar shifts via timeAuditService', () => {
+  // Case A: Two 60s machines, both scheduled 3600s -> 120 units, 120 units/hr
+  const mA = makeMachine('mA', 'st_ab', 60);
+  const mB = makeMachine('mB', 'st_ab', 60);
+  const stA = makeStage('st_ab', ['mA', 'mB'], 60);
+  const profA = computeStageCapacityProfile(stA, [mA, mB]);
+  const capA = computeShiftAdjustedStageCapacity(profA, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mA: 3600, mB: 3600 },
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Case A: Equal schedules total units',
+    { machines: 2, CT: 60, sched: 3600 },
+    'Q_shift = 60 + 60 = 120 units',
+    120,
+    capA.shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Case A: Equal schedules hourly capacity',
+    { Q_shift: 120, T_reporting: 3600 },
+    'C_shift,hourly = (120 / 3600) * 3600 = 120 units/hr',
+    120,
+    capA.shiftAdjustedHourlyCapacity
+  );
+
+  // Case B: Heterogeneous cycles (60s @ 3600s + 30s @ 1800s) -> 60 + 60 = 120 units, 120 u/hr
+  const mHetA = makeMachine('mHetA', 'st_het', 60);
+  const mHetB = makeMachine('mHetB', 'st_het', 30);
+  const stHet = makeStage('st_het', ['mHetA', 'mHetB'], 60);
+  const profHet = computeStageCapacityProfile(stHet, [mHetA, mHetB]);
+  const capB = computeShiftAdjustedStageCapacity(profHet, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mHetA: 3600, mHetB: 1800 },
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Case B: Machine A (60s @ 3600s)',
+    { CT_A: 60, T_A: 3600 },
+    'Q_A = 3600 / 60 = 60 units',
+    60,
+    capB.serverBreakdown[0].continuousUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Case B: Machine B (30s @ 1800s)',
+    { CT_B: 30, T_B: 1800 },
+    'Q_B = 1800 / 30 = 60 units',
+    60,
+    capB.serverBreakdown[1].continuousUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Case B: Combined output',
+    { Q_A: 60, Q_B: 60 },
+    'Q_shift = 120 units',
+    120,
+    capB.shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Case B: Hourly capacity over 3600s reporting shift',
+    { Q_shift: 120, T_reporting: 3600 },
+    'C_shift,hourly = (120 / 3600) * 3600 = 120 units/hr',
+    120,
+    capB.shiftAdjustedHourlyCapacity
+  );
+
+  // End-to-end calendar integration via auditProjectTiming: m1 on Shift 1 (0..3600s), m2 on Shift 2 (1800..3600s)
+  const mCal1 = makeMachine('mCal1', 'st_cal', 60, { shiftId: 'shift_full' });
+  const mCal2 = makeMachine('mCal2', 'st_cal', 60, { shiftId: 'shift_half' });
+  const stCal = makeStage('st_cal', ['mCal1', 'mCal2'], 60);
+  const proj = makeProject([mCal1, mCal2], [stCal], {
+    durationSec: 3600,
+    shifts: [
+      { id: 'shift_full', name: 'Full Hour', startSec: 0, durationSec: 3600, breaks: [] },
+      { id: 'shift_half', name: 'Half Hour', startSec: 1800, durationSec: 1800, breaks: [] },
+    ],
+  });
+  const audit = auditProjectTiming(proj, 3600);
+  assertAnalyticalMatch(
+    'Phase 1.1 Calendar Integration: Combined shift units',
+    { mCal1_shift: 3600, mCal2_shift: 1800, CT: 60 },
+    'Q_shift = 60 + 30 = 90 units',
+    90,
+    audit.stages[0].shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Calendar Integration: Shift hourly capacity',
+    { Q_shift: 90, plantActiveShift: 3600 },
+    'C_shift,hourly = (90 / 3600) * 3600 = 90 units/hr',
+    90,
+    audit.stages[0].shiftAdjustedHourlyCapacity
+  );
+});
+
+test('Phase 1.1 Case C: Different per-machine setup allowances applied once without double deduction', () => {
+  // mA: CT=60s, sched=3600s, setup=600s (1 occ -> prod=3000s -> 50 u)
+  // mB: CT=30s, sched=2400s, setup=300s (1 occ -> prod=2100s -> 70 u)
+  const mA = makeMachine('mA', 'st_setup', 60, { setupTimeSec: 600 });
+  const mB = makeMachine('mB', 'st_setup', 30, { setupTimeSec: 300 });
+  const st = makeStage('st_setup', ['mA', 'mB'], 60, { setupTimeSec: 600 });
+  const profile = computeStageCapacityProfile(st, [mA, mB]);
+
+  // Verify setupTimeSec is NOT baked into effectiveUnitCycleSec (no double deduction)
+  assertAnalyticalMatch(
+    'Phase 1.1 Case C: Nominal effective unit cycle excludes setup',
+    { CT_A: 60, CT_B: 30 },
+    '(1/60 + 1/30)^-1 = 20 s/unit',
+    20,
+    profile.effectiveUnitCycleSec
+  );
+
+  const shiftCap = computeShiftAdjustedStageCapacity(profile, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mA: 3600, mB: 2400 },
+  });
+  assert.equal(shiftCap.serverBreakdown[0].setupTimeSec, 600);
+  assert.equal(shiftCap.serverBreakdown[0].productiveTimeSec, 3000);
+  assert.equal(shiftCap.serverBreakdown[1].setupTimeSec, 300);
+  assert.equal(shiftCap.serverBreakdown[1].productiveTimeSec, 2100);
+  assertAnalyticalMatch(
+    'Phase 1.1 Case C: Total shift units with per-machine setup',
+    { Q_A: '3000/60=50', Q_B: '2100/30=70' },
+    'Q_shift = 50 + 70 = 120 units',
+    120,
+    shiftCap.shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Case C: Hourly capacity over 3600s reporting shift',
+    { Q_shift: 120, T_reporting: 3600 },
+    'C_shift,hourly = (120 / 3600) * 3600 = 120 units/hr',
+    120,
+    shiftCap.shiftAdjustedHourlyCapacity
+  );
+
+  // Per-machine setupOccurrences override: mA=2 setups (1200s -> 2400s prod -> 40u), mB=0 setups (2400s prod -> 80u)
+  const capCustomOcc = computeShiftAdjustedStageCapacity(profile, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mA: 3600, mB: 2400 },
+    serverSetupOccurrences: { mA: 2, mB: 0 },
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Case C: Per-machine serverSetupOccurrences',
+    { mA_prod: 2400, mB_prod: 2400 },
+    'Q_shift = 2400/60 + 2400/30 = 40 + 80 = 120 units',
+    120,
+    capCustomOcc.shiftAdjustedCapacityUnits
+  );
+});
+
+test('Phase 1.1 Case D & E: Zero productive time without NaN/Infinity and invalid/negative input rejection', () => {
+  const mA = makeMachine('mA', 'st_zd', 60, { setupTimeSec: 600 });
+  const mB = makeMachine('mB', 'st_zd', 60, { setupTimeSec: 600 });
+  const st = makeStage('st_zd', ['mA', 'mB'], 60, { setupTimeSec: 600 });
+  const profile = computeStageCapacityProfile(st, [mA, mB]);
+
+  // Case D1: One machine has 0s scheduled -> contributes 0; hourly capacity is 50 u/hr, NOT 100
+  const oneZero = computeShiftAdjustedStageCapacity(profile, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mA: 3600, mB: 0 },
+    setupOccurrences: 1,
+  });
+  assert.equal(oneZero.isValid, true);
+  assert.equal(oneZero.serverBreakdown[1].continuousUnits, 0);
+  assertAnalyticalMatch(
+    'Phase 1.1 Case D1: One active + one zero-scheduled machine',
+    { mA_prod: 3000, mB_prod: 0, T_reporting: 3600 },
+    'Q_shift = 50 + 0 = 50 units -> 50 u/hr',
+    50,
+    oneZero.shiftAdjustedHourlyCapacity
+  );
+
+  // Case D2: Setup exceeds scheduled time -> productive time clamps to 0 without NaN
+  const setupExceeds = computeShiftAdjustedStageCapacity(profile, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mA: 400, mB: 400 },
+    setupOccurrences: 1,
+  });
+  assert.equal(setupExceeds.isValid, true);
+  assert.equal(setupExceeds.shiftAdjustedCapacityUnits, 0);
+  assert.equal(setupExceeds.shiftAdjustedDiscreteUnits, 0);
+  assert.equal(setupExceeds.shiftAdjustedHourlyCapacity, 0);
+
+  // Case D3: Zero netScheduledTimeSec with zero server schedules -> 0 capacity, finite
+  const zeroShift = computeShiftAdjustedStageCapacity(profile, {
+    netScheduledTimeSec: 0,
+    serverScheduledTimeSec: { mA: 0, mB: 0 },
+  });
+  assert.equal(zeroShift.isValid, true);
+  assert.equal(zeroShift.shiftAdjustedCapacityUnits, 0);
+  assert.equal(zeroShift.shiftAdjustedHourlyCapacity, 0);
+  assert.ok(Number.isFinite(zeroShift.shiftAdjustedHourlyCapacity));
+
+  // Case E: Invalid inputs MUST NOT produce positive capacity
+  const invalidCases: ShiftAdjustedStageCapacityLike[] = [
+    computeShiftAdjustedStageCapacity(profile, { netScheduledTimeSec: -3600 }),
+    computeShiftAdjustedStageCapacity(profile, { netScheduledTimeSec: Number.NaN }),
+    computeShiftAdjustedStageCapacity(profile, { netScheduledTimeSec: Number.POSITIVE_INFINITY }),
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 3600,
+      reportingShiftDurationSec: 0,
+    }),
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 3600,
+      reportingShiftDurationSec: -1800,
+    }),
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 3600,
+      reportingShiftDurationSec: Number.NaN,
+    }),
+    // Negative or NaN per-server schedule alongside a valid sibling must fail entire stage cleanly
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 3600,
+      serverScheduledTimeSec: { mA: 3600, mB: -100 },
+    }),
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 3600,
+      serverScheduledTimeSec: { mA: 3600, mB: Number.NaN },
+    }),
+    // Positive server schedule inside 0s reporting shift
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 0,
+      serverScheduledTimeSec: { mA: 1800, mB: 0 },
+    }),
+    // Invalid setupOccurrences / plannedProductionQuantity
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 3600,
+      setupOccurrences: -1,
+    }),
+    computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: 3600,
+      plannedProductionQuantity: 10.5,
+    }),
+  ];
+
+  for (const res of invalidCases) {
+    assert.equal(res.isValid, false);
+    assert.equal(res.shiftAdjustedCapacityUnits, 0);
+    assert.equal(res.shiftAdjustedDiscreteUnits, 0);
+    assert.equal(res.shiftAdjustedHourlyCapacity, 0);
+  }
+});
+
+type ShiftAdjustedStageCapacityLike = ReturnType<typeof computeShiftAdjustedStageCapacity>;
+
+test('Phase 1.1 Case F & G: 3+ heterogeneous parallel machines, discrete vs continuous, batching & virtual isolation', () => {
+  // Case F: 3 machines with distinct cycles, schedules, and setup allowances over 3600s reporting shift:
+  // m1: CT=60s, sched=3600s, setup=0 -> 60 u
+  // m2: CT=30s, sched=2400s, setup=600s (prod=1800s) -> 60 u
+  // m3: CT=45s, sched=2700s, setup=0 -> 60 u
+  // Total = 180 u over 3600s -> 180 u/hr; over 7200s reporting shift -> 90 u/hr
+  const m1 = makeMachine('m1', 'st_3m', 60);
+  const m2 = makeMachine('m2', 'st_3m', 30, { setupTimeSec: 600 });
+  const m3 = makeMachine('m3', 'st_3m', 45);
+  const st3 = makeStage('st_3m', ['m1', 'm2', 'm3'], 60);
+  const prof3 = computeStageCapacityProfile(st3, [m1, m2, m3]);
+
+  const cap3h1 = computeShiftAdjustedStageCapacity(prof3, {
+    netScheduledTimeSec: 3600,
+    reportingShiftDurationSec: 3600,
+    serverScheduledTimeSec: { m1: 3600, m2: 2400, m3: 2700 },
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Case F: 3-machine combined shift output',
+    { m1: '3600/60=60', m2: '(2400-600)/30=60', m3: '2700/45=60' },
+    'Q_shift = 60 + 60 + 60 = 180 units',
+    180,
+    cap3h1.shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Case F: 3-machine hourly rate (3600s shift)',
+    { Q_shift: 180, T_reporting: 3600 },
+    'C_shift,hourly = (180 / 3600) * 3600 = 180 units/hr',
+    180,
+    cap3h1.shiftAdjustedHourlyCapacity
+  );
+
+  const cap3h2 = computeShiftAdjustedStageCapacity(prof3, {
+    netScheduledTimeSec: 3600,
+    reportingShiftDurationSec: 7200,
+    serverScheduledTimeSec: { m1: 3600, m2: 2400, m3: 2700 },
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Case F: 3-machine hourly rate (7200s reporting shift)',
+    { Q_shift: 180, T_reporting: 7200 },
+    'C_shift,hourly = (180 / 7200) * 3600 = 90 units/hr',
+    90,
+    cap3h2.shiftAdjustedHourlyCapacity
+  );
+
+  // Case G: Discrete vs Continuous & planned quantity separation
+  // md1: CT=60s, prod=3630s -> cont = 60.5, disc = 60
+  // md2: CT=40s, prod=1820s -> cont = 45.5, disc = 45
+  // Total cont = 106.0, disc = 105 over 3600s reporting shift
+  const md1 = makeMachine('md1', 'st_disc', 60);
+  const md2 = makeMachine('md2', 'st_disc', 40);
+  const profDisc = computeStageCapacityProfile(makeStage('st_disc', ['md1', 'md2'], 60), [md1, md2]);
+  const capDisc = computeShiftAdjustedStageCapacity(profDisc, {
+    netScheduledTimeSec: 3600,
+    reportingShiftDurationSec: 3600,
+    serverScheduledTimeSec: { md1: 3630, md2: 1820 },
+    plannedProductionQuantity: 100,
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Case G: Continuous shift output',
+    { md1: '3630/60=60.5', md2: '1820/40=45.5' },
+    'Q_cont = 60.5 + 45.5 = 106 units',
+    106,
+    capDisc.shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Case G: Discrete integer cycle-truncated shift output',
+    { md1: 'floor(3630/60)=60', md2: 'floor(1820/40)=45' },
+    'Q_disc = 60 + 45 = 105 units',
+    105,
+    capDisc.shiftAdjustedDiscreteUnits
+  );
+  assert.equal(capDisc.shiftAdjustedHourlyCapacity, 106);
+  assert.equal(capDisc.shiftAdjustedDiscreteHourlyCapacity, 105);
+  assert.equal(capDisc.plannedProductionQuantity, 100);
+  assert.equal(capDisc.plannedAttainableContinuousUnits, 100);
+  assert.equal(capDisc.plannedAttainableDiscreteUnits, 100);
+
+  // Heterogeneous batch compatibility in parallel shift capacity:
+  // mb1: collect_batch B=4, proc=30s, transfer=10s (batchCycle=40s) @ 3600s -> 90 batches * 4 = 360 u
+  // mb2: single, proc=60s @ 1800s -> 30 u
+  // mb3: unbatch B=4 (divisor=1), proc=45s, stale transfer=10s ignored @ 2700s -> 60 u
+  // Combined = 450 u over 3600s -> 450 u/hr
+  const mb1 = makeMachine('mb1', 'st_bh', 30, { batchMode: 'collect_batch', batchSize: 4, batchTransferTimeSec: 10 });
+  const mb2 = makeMachine('mb2', 'st_bh', 60, { batchMode: 'single', batchSize: 1, batchTransferTimeSec: 0 });
+  const mb3 = makeMachine('mb3', 'st_bh', 45, { batchMode: 'unbatch', batchSize: 4, batchTransferTimeSec: 10 });
+  const stBh = makeStage('st_bh', ['mb1', 'mb2', 'mb3'], 60);
+  const profBh = computeStageCapacityProfile(stBh, [mb1, mb2, mb3]);
+  assert.equal(profBh.hasHeterogeneousBatch, true);
+
+  const capBh = computeShiftAdjustedStageCapacity(profBh, {
+    netScheduledTimeSec: 3600,
+    serverScheduledTimeSec: { mb1: 3600, mb2: 1800, mb3: 2700 },
+  });
+  assertAnalyticalMatch(
+    'Phase 1.1 Batch Compat: Heterogeneous batch modes parallel shift output',
+    { collect_batch: 360, single: 30, unbatch: 60 },
+    'Q_shift = 360 + 30 + 60 = 450 units',
+    450,
+    capBh.shiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Batch Compat: Heterogeneous batch shift hourly rate',
+    { Q_shift: 450, T_reporting: 3600 },
+    'C_shift,hourly = (450 / 3600) * 3600 = 450 units/hr',
+    450,
+    capBh.shiftAdjustedHourlyCapacity
+  );
+
+  // Virtual workstation isolation under unequal/partial shift reporting
+  const stVirt = makeStage('st_virt_shift', [], 60, { requiredMachines: 2 });
+  const profVirt = computeStageCapacityProfile(stVirt, []);
+  const capVirt = computeShiftAdjustedStageCapacity(profVirt, {
+    netScheduledTimeSec: 1800,
+    reportingShiftDurationSec: 3600,
+  });
+  assert.equal(capVirt.physicalShiftAdjustedCapacityUnits, 0);
+  assertAnalyticalMatch(
+    'Phase 1.1 Resource Integrity: Virtual stage shift capacity',
+    { virtualServers: 2, CT: 60, T_sched: 1800 },
+    'Q_virt = 2 * (1800 / 60) = 60 units',
+    60,
+    capVirt.virtualShiftAdjustedCapacityUnits
+  );
+  assertAnalyticalMatch(
+    'Phase 1.1 Resource Integrity: Virtual stage shift hourly rate over 3600s reporting shift',
+    { Q_virt: 60, T_reporting: 3600 },
+    'C_shift,hourly = (60 / 3600) * 3600 = 60 units/hr',
+    60,
+    capVirt.shiftAdjustedHourlyCapacity
+  );
+});
+

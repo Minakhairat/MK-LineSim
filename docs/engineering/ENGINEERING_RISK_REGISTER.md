@@ -1,15 +1,15 @@
 # MK LineSim — Engineering Requirements & Risk Register
 
-**Program Phase:** Phase 0–0.2.3 & Phase 1 (Industrial Capacity Mathematics Verification)  
+**Program Phase:** Phase 0–0.2.3 & Phase 1–1.1 (Industrial Capacity Mathematics & Shift Capacity Verification)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
-**Scope:** Formal engineering requirements baseline and classified findings/risk register updated with Phase 1 analytical capacity verification (`65/65` tests passing; see `docs/engineering/CAPACITY_MATHEMATICS_SPEC.md`).
+**Scope:** Formal engineering requirements baseline and classified findings/risk register updated with Phase 1–1.1 analytical capacity verification (`70/70` tests passing; see `docs/engineering/CAPACITY_MATHEMATICS_SPEC.md`).
 
 **Classification Legend (Strict Taxonomy):**
 - `Confirmed defect` — Verified mismatch, data corruption/override, or broken engineering/CI guarantee observed directly in source or config.
 - `Potential defect` — Latent bug, edge-case inconsistency, or unchecked assumption that triggers under specific valid configurations.
 - `Missing verification` — Required engineering behavior, UI path, or regression scenario with zero automated coverage.
 - `Design assumption` — Intentional heuristic, fallback, or modeling simplification that must be accepted or governed by V&V acceptance criteria.
-- `Verified behavior` — Core capability inspected and verified consistent with unit/regression test execution (`65/65` tests passing).
+- `Verified behavior` — Core capability inspected and verified consistent with unit/regression test execution (`70/70` tests passing).
 
 ---
 
@@ -67,7 +67,7 @@
 
 | ID | Classification | Affected File(s) | Observed Evidence |
 | :--- | :--- | :--- | :--- |
-| **VER-01** | `Verified behavior` | `/src/engineering/capacityEngine.ts`, `/src/engineering/conveyorPhysics.ts`, `/src/simulation/timeAuditService.ts` | Phase 1 analytical capacity verification complete (`docs/engineering/CAPACITY_MATHEMATICS_SPEC.md`, `tests/capacityMathematicsVerification.test.ts`): single, identical parallel, heterogeneous parallel (`sum(c_i*3600*d_i/t_i)`), sequential bottleneck & balance, independent conveyor capacity & invalid-input rejection, physical vs virtual vs non-processing isolation, `single`/`collect_batch`/`unbatch` + end-of-run partial batches, setup & shift-adjusted capacity, and duplicate/shared resource guards verified across `65/65` passing tests. |
+| **VER-01** | `Verified behavior` | `/src/engineering/capacityEngine.ts`, `/src/engineering/conveyorPhysics.ts`, `/src/simulation/timeAuditService.ts` | Phase 1 & Phase 1.1 analytical capacity verification complete (`docs/engineering/CAPACITY_MATHEMATICS_SPEC.md`, `tests/capacityMathematicsVerification.test.ts`): single, identical parallel, heterogeneous parallel (`sum(c_i*3600*d_i/t_i)`), sequential bottleneck/balance, independent conveyor capacity & invalid-input rejection, physical vs virtual vs non-processing isolation, `single`/`collect_batch`/`unbatch` + end-of-run partial batches, setup amortization, common-reporting-shift hourly capacity (`C_shift,hourly = Q_shift / T_reporting_shift * 3600` without average-schedule distortion), continuous vs discrete vs planned output separation, and duplicate/shared resource guards verified across `70/70` passing tests. |
 | **VER-02** | `Verified behavior` | `/src/engineering/oeeEngine.ts`, `/src/simulation/timeAuditService.ts`, `/src/simulation/desEngine.ts` | ISO 22400 Time Hierarchy, heterogeneous shift resource OEE vs line-level OEE separation, and worker walking exclusion from machine running/setup time verified (`conveyorAndOee.test.ts`, `resourceOeeRegression.test.ts`, `engineeringAuditVerification.test.ts`). |
 | **VER-03** | `Verified behavior` | `/src/simulation/resourceCalendar.ts`, `/src/simulation/resourceStateTracker.ts` | Exact interval merging/clipping/subtraction, interruption policies (`stop_immediately`, `finish_current_cycle`, `continue_during_break`), invalid shift reference non-fallback, and strict horizon conservation verified. |
 | **VER-04** | `Verified behavior` | `/src/simulation/failureModels.ts` | Deterministic Mulberry32 PRNG, Weibull scale conversion via Lanczos `gammaFn`, Method-of-Moments lognormal repair sampling, and `availability = 0` down-state retention verified. |
