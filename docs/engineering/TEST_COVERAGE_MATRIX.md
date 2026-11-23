@@ -1,8 +1,8 @@
 # MK LineSim — Test Coverage Matrix & Verification Gaps
 
-**Program Phase:** Phase 0, 0.1 & 0.2 (Engineering Baseline, Evidence Reconciliation & Lockfile/CI Hardening)  
+**Program Phase:** Phase 0, 0.1, 0.2 & 0.2.1 (Engineering Baseline, Evidence Reconciliation & Lockfile/CI Hardening)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
-**Execution Evidence:** `npm test` (`tsx --test tests/*.test.ts`) -> **`57/57` passed, `0` failed, `0` skipped (`4128.02 ms` post-`npm ci`, exit code `0`)**.
+**Execution Evidence:** `npm test` (`tsx --test tests/*.test.ts`) -> **`57/57` passed, `0` failed, `0` skipped (`3436.99 ms` post-`npm ci`, exit code `0`)**.
 
 ---
 
