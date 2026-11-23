@@ -11,11 +11,18 @@ export interface ConveyorMetrics {
   productSpacingM: number;
   pitchM: number;
   minHeadwaySec: number;
+  transportCapacityPerMin: number;
+  transportCapacityPerHour: number;
   physicalCapacity: number;
   traversalTimeSec: number;
   canFit: boolean;
   fitErrorCode?: ConveyorFitErrorCode;
   fitErrorMessage?: string;
+}
+
+function posFinite(val: unknown, fallback: number, minVal = 0.001): number {
+  const n = Number(val);
+  return Number.isFinite(n) && n >= minVal ? n : fallback;
 }
 
 /**
@@ -27,19 +34,22 @@ export function evaluateConveyorPhysics(
   prod?: ProductDefinition,
   overrideDims?: Partial<Dimensions3D>
 ): ConveyorMetrics {
-  const beltLengthM = Math.max(0.01, Number(conv.geometry.dimensions.length) || 0.01);
-  const beltWidthM = Math.max(0.01, Number(conv.geometry.dimensions.width) || 0.01);
-  const speedMps = Math.max(0.001, Number(conv.operations.speedMps) || 0.001);
+  const beltLengthM = posFinite(conv.geometry.dimensions.length, 0.01, 0.01);
+  const beltWidthM = posFinite(conv.geometry.dimensions.width, 0.01, 0.01);
+  const speedMps = posFinite(conv.operations.speedMps, 0.001, 0.001);
 
-  const productLengthM = Math.max(
-    0.01,
-    overrideDims?.length ?? (Number(prod?.dimensions.length) || 0.5)
+  const productLengthM = posFinite(
+    overrideDims?.length ?? prod?.dimensions.length,
+    0.5,
+    0.01
   );
-  const productWidthM = Math.max(
-    0.01,
-    overrideDims?.width ?? (Number(prod?.dimensions.width) || 0.4)
+  const productWidthM = posFinite(
+    overrideDims?.width ?? prod?.dimensions.width,
+    0.4,
+    0.01
   );
-  const productSpacingM = Math.max(0, Number(conv.operations.productSpacingM ?? 0.15));
+  const rawSpacing = Number(conv.operations.productSpacingM ?? 0.15);
+  const productSpacingM = Number.isFinite(rawSpacing) ? Math.max(0, rawSpacing) : 0.15;
   const pitchM = Math.max(0.01, productLengthM + productSpacingM);
 
   let canFit = true;
@@ -63,8 +73,14 @@ export function evaluateConveyorPhysics(
     const physicalFitCount = 1 + trailingSlots;
     const declaredCap = Number(conv.operations.capacity || 0);
     physicalCapacity =
-      declaredCap > 0 ? Math.max(1, Math.min(declaredCap, physicalFitCount)) : physicalFitCount;
+      Number.isFinite(declaredCap) && declaredCap > 0
+        ? Math.max(1, Math.min(declaredCap, physicalFitCount))
+        : physicalFitCount;
   }
+
+  const minHeadwaySec = pitchM / speedMps;
+  const transportCapacityPerMin = canFit && minHeadwaySec > 0 ? 60 / minHeadwaySec : 0;
+  const transportCapacityPerHour = canFit && minHeadwaySec > 0 ? 3600 / minHeadwaySec : 0;
 
   return {
     beltLengthM,
@@ -74,7 +90,9 @@ export function evaluateConveyorPhysics(
     productWidthM,
     productSpacingM,
     pitchM,
-    minHeadwaySec: pitchM / speedMps,
+    minHeadwaySec,
+    transportCapacityPerMin,
+    transportCapacityPerHour,
     physicalCapacity,
     traversalTimeSec: beltLengthM / speedMps,
     canFit,
@@ -87,6 +105,7 @@ export function evaluateConveyorPhysics(
  * Computes exact conveyor transit duration from measured path distance and speed.
  */
 export function computeConveyorPathTimeSec(totalDistanceM: number, speedMps: number): number {
-  if (totalDistanceM <= 0) return 0;
-  return totalDistanceM / Math.max(0.001, speedMps);
+  if (!Number.isFinite(totalDistanceM) || totalDistanceM <= 0) return 0;
+  const spd = Number.isFinite(speedMps) ? Math.max(0.001, speedMps) : 0.001;
+  return totalDistanceM / spd;
 }

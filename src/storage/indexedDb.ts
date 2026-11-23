@@ -22,8 +22,17 @@ function openDatabase(): Promise<IDBDatabase> {
       }
     };
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(req.error ?? new Error('Failed to open IndexedDB'));
+    req.onblocked = () => reject(new Error('IndexedDB open request was blocked'));
   });
+}
+
+function closeDbQuietly(db: IDBDatabase): void {
+  try {
+    db.close();
+  } catch {
+    // Ignore close errors if connection already closed
+  }
 }
 
 export async function saveProjectToDb(project: ProjectData): Promise<void> {
@@ -35,8 +44,18 @@ export async function saveProjectToDb(project: ProjectData): Promise<void> {
       updatedAt: new Date().toISOString(),
     });
     tx.objectStore(STORE_META).put({ key: 'lastActiveProjectId', value: project.id });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => {
+      closeDbQuietly(db);
+      resolve();
+    };
+    tx.onerror = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('Failed to save project to IndexedDB'));
+    };
+    tx.onabort = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('IndexedDB save transaction aborted'));
+    };
   });
 }
 
@@ -45,7 +64,9 @@ export async function loadAllProjectsFromDb(): Promise<ProjectData[]> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_PROJECTS, 'readonly');
     const req = tx.objectStore(STORE_PROJECTS).getAll();
+    let settled = false;
     req.onsuccess = () => {
+      settled = true;
       const raw = (req.result || []) as unknown[];
       const migrated = raw
         .map((item) => {
@@ -57,9 +78,21 @@ export async function loadAllProjectsFromDb(): Promise<ProjectData[]> {
         })
         .filter((p): p is ProjectData => p !== null);
       migrated.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      closeDbQuietly(db);
       resolve(migrated);
     };
-    req.onerror = () => reject(req.error);
+    req.onerror = () => {
+      settled = true;
+      closeDbQuietly(db);
+      reject(req.error ?? new Error('Failed to load projects from IndexedDB'));
+    };
+    tx.oncomplete = () => {
+      closeDbQuietly(db);
+    };
+    tx.onabort = () => {
+      closeDbQuietly(db);
+      if (!settled) reject(tx.error ?? new Error('IndexedDB load transaction aborted'));
+    };
   });
 }
 
@@ -68,8 +101,18 @@ export async function deleteProjectFromDb(projectId: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_PROJECTS, 'readwrite');
     tx.objectStore(STORE_PROJECTS).delete(projectId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => {
+      closeDbQuietly(db);
+      resolve();
+    };
+    tx.onerror = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('Failed to delete project from IndexedDB'));
+    };
+    tx.onabort = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('IndexedDB delete transaction aborted'));
+    };
   });
 }
 
@@ -78,8 +121,25 @@ export async function getLastActiveProjectId(): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_META, 'readonly');
     const req = tx.objectStore(STORE_META).get('lastActiveProjectId');
-    req.onsuccess = () => resolve(req.result?.value ?? null);
-    req.onerror = () => reject(req.error);
+    let settled = false;
+    req.onsuccess = () => {
+      settled = true;
+      const val = req.result?.value ?? null;
+      closeDbQuietly(db);
+      resolve(val);
+    };
+    req.onerror = () => {
+      settled = true;
+      closeDbQuietly(db);
+      reject(req.error ?? new Error('Failed to read active project metadata'));
+    };
+    tx.oncomplete = () => {
+      closeDbQuietly(db);
+    };
+    tx.onabort = () => {
+      closeDbQuietly(db);
+      if (!settled) reject(tx.error ?? new Error('IndexedDB metadata read aborted'));
+    };
   });
 }
 
@@ -88,8 +148,18 @@ export async function saveCustomEquipmentToDb(tpl: EquipmentTemplate): Promise<v
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_EQUIPMENT, 'readwrite');
     tx.objectStore(STORE_EQUIPMENT).put({ ...tpl, isCustom: true });
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => {
+      closeDbQuietly(db);
+      resolve();
+    };
+    tx.onerror = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('Failed to save custom equipment'));
+    };
+    tx.onabort = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('IndexedDB equipment save aborted'));
+    };
   });
 }
 
@@ -98,8 +168,25 @@ export async function loadCustomEquipmentFromDb(): Promise<EquipmentTemplate[]> 
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_EQUIPMENT, 'readonly');
     const req = tx.objectStore(STORE_EQUIPMENT).getAll();
-    req.onsuccess = () => resolve((req.result || []) as EquipmentTemplate[]);
-    req.onerror = () => reject(req.error);
+    let settled = false;
+    req.onsuccess = () => {
+      settled = true;
+      const res = (req.result || []) as EquipmentTemplate[];
+      closeDbQuietly(db);
+      resolve(res);
+    };
+    req.onerror = () => {
+      settled = true;
+      closeDbQuietly(db);
+      reject(req.error ?? new Error('Failed to load custom equipment'));
+    };
+    tx.oncomplete = () => {
+      closeDbQuietly(db);
+    };
+    tx.onabort = () => {
+      closeDbQuietly(db);
+      if (!settled) reject(tx.error ?? new Error('IndexedDB equipment load aborted'));
+    };
   });
 }
 
@@ -108,8 +195,18 @@ export async function deleteCustomEquipmentFromDb(id: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_EQUIPMENT, 'readwrite');
     tx.objectStore(STORE_EQUIPMENT).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.oncomplete = () => {
+      closeDbQuietly(db);
+      resolve();
+    };
+    tx.onerror = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('Failed to delete custom equipment'));
+    };
+    tx.onabort = () => {
+      closeDbQuietly(db);
+      reject(tx.error ?? new Error('IndexedDB equipment delete aborted'));
+    };
   });
 }
 
@@ -125,8 +222,14 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
   const factory = obj.factory as Record<string, unknown>;
   if (
     typeof factory.lengthM !== 'number' ||
+    !Number.isFinite(factory.lengthM) ||
+    factory.lengthM <= 0 ||
     typeof factory.widthM !== 'number' ||
-    typeof factory.heightM !== 'number'
+    !Number.isFinite(factory.widthM) ||
+    factory.widthM <= 0 ||
+    typeof factory.heightM !== 'number' ||
+    !Number.isFinite(factory.heightM) ||
+    factory.heightM <= 0
   ) {
     throw new Error('Invalid factory dimensions.');
   }

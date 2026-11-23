@@ -11,8 +11,8 @@
  *
  * KPI Formulas:
  *   - Availability (%) = SPT > 0 ? (OT / SPT) * 100 : 0
- *   - Performance (%)  = (OT > 0 && IdealCycleSec > 0) ? min(100, ((IdealCycleSec * TotalCount) / OT) * 100) : (TotalCount > 0 ? 100 : 0)
- *   - Quality (%)      = TotalCount > 0 ? (GoodCount / TotalCount) * 100 : 100
+ *   - Performance (%)  = (OT > 0 && IdealCycleSec > 0) ? min(100, ((IdealCycleSec * TotalCount) / OT) * 100) : 0
+ *   - Quality (%)      = TotalCount > 0 ? (GoodCount / TotalCount) * 100 : 0
  *   - OEE (%)          = (Availability / 100) * (Performance / 100) * (Quality / 100) * 100
  */
 
@@ -24,7 +24,7 @@ export interface OeeInput {
   idealCycleTimeSec: number;
   totalUnitsProcessed: number;
   goodUnitsProduced: number;
-  /** Optional raw runtime (used only when idealCycleTimeSec <= 0 as fallback rate check) */
+  /** Optional raw runtime (retained for interface compatibility; idealCycleTimeSec is required for OEE Performance) */
   measuredRunningTimeSec?: number;
 }
 
@@ -41,17 +41,21 @@ export interface OeeResult {
   oeePct: number;
 }
 
+function finiteNonNeg(n: number | undefined): number {
+  return typeof n === 'number' && Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
 export function computeOeeMetrics(input: OeeInput): OeeResult {
-  const calendarTimeSec = Math.max(0, input.calendarTimeSec);
-  const plannedDowntimeSec = Math.min(calendarTimeSec, Math.max(0, input.plannedDowntimeSec));
+  const calendarTimeSec = finiteNonNeg(input.calendarTimeSec);
+  const plannedDowntimeSec = Math.min(calendarTimeSec, finiteNonNeg(input.plannedDowntimeSec));
   const scheduledProductionTimeSec = Math.max(0, calendarTimeSec - plannedDowntimeSec);
 
   const unplannedDowntimeSec = Math.min(
     scheduledProductionTimeSec,
-    Math.max(0, input.unplannedDowntimeSec)
+    finiteNonNeg(input.unplannedDowntimeSec)
   );
   const remainingAfterDown = Math.max(0, scheduledProductionTimeSec - unplannedDowntimeSec);
-  const setupTimeSec = Math.min(remainingAfterDown, Math.max(0, input.setupTimeSec));
+  const setupTimeSec = Math.min(remainingAfterDown, finiteNonNeg(input.setupTimeSec));
   const operatingTimeSec = Math.max(0, scheduledProductionTimeSec - unplannedDowntimeSec - setupTimeSec);
 
   const availabilityPct =
@@ -59,25 +63,17 @@ export function computeOeeMetrics(input: OeeInput): OeeResult {
       ? Math.min(100, Math.max(0, (operatingTimeSec / scheduledProductionTimeSec) * 100))
       : 0;
 
-  const totalUnits = Math.max(0, input.totalUnitsProcessed);
-  const goodUnits = Math.min(totalUnits, Math.max(0, input.goodUnitsProduced));
+  const totalUnits = finiteNonNeg(input.totalUnitsProcessed);
+  const goodUnits = Math.min(totalUnits, finiteNonNeg(input.goodUnitsProduced));
+  const idealCycleTimeSec = finiteNonNeg(input.idealCycleTimeSec);
 
   let performancePct = 0;
-  if (operatingTimeSec > 1e-6) {
-    if (input.idealCycleTimeSec > 0) {
-      const idealProductionTimeSec = input.idealCycleTimeSec * totalUnits;
-      performancePct = Math.min(100, Math.max(0, (idealProductionTimeSec / operatingTimeSec) * 100));
-    } else if (input.measuredRunningTimeSec !== undefined) {
-      performancePct = Math.min(
-        100,
-        Math.max(0, (input.measuredRunningTimeSec / operatingTimeSec) * 100)
-      );
-    } else if (totalUnits > 0) {
-      performancePct = 100;
-    }
+  if (operatingTimeSec > 1e-6 && idealCycleTimeSec > 0) {
+    const idealProductionTimeSec = idealCycleTimeSec * totalUnits;
+    performancePct = Math.min(100, Math.max(0, (idealProductionTimeSec / operatingTimeSec) * 100));
   }
 
-  const qualityPct = totalUnits > 0 ? Math.min(100, Math.max(0, (goodUnits / totalUnits) * 100)) : 100;
+  const qualityPct = totalUnits > 0 ? Math.min(100, Math.max(0, (goodUnits / totalUnits) * 100)) : 0;
 
   const oeePct =
     scheduledProductionTimeSec > 1e-6

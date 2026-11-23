@@ -170,12 +170,13 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
 
   // 3. Failure model & capacity sanity checks
   for (const obj of activeObjects) {
-    if (obj.operations.availability < 0 || obj.operations.availability > 1) {
+    const avail = obj.operations.availability;
+    if (!Number.isFinite(avail) || avail < 0 || avail > 1) {
       issues.push({
         id: `val_avail_${obj.id}`,
         severity: 'error',
         code: 'INVALID_AVAILABILITY',
-        message: `${obj.name} availability (${obj.operations.availability}) must be between 0 and 1.`,
+        message: `${obj.name} availability (${avail}) must be between 0 and 1.`,
         messageAr: `نسبة توفر "${obj.name}" يجب أن تكون بين 0 و 1.`,
         resourceName: obj.name,
         targetId: obj.id,
@@ -184,7 +185,7 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
     }
     if (
       obj.operations.weibullShape !== undefined &&
-      obj.operations.weibullShape <= 0
+      (!Number.isFinite(obj.operations.weibullShape) || obj.operations.weibullShape <= 0)
     ) {
       issues.push({
         id: `val_weibull_${obj.id}`,
@@ -198,25 +199,67 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
       });
     }
     if (
-      simulationConfig.enableBreakdowns &&
       obj.operations.mtbfSec !== undefined &&
-      obj.operations.mtbfSec < 0
+      (!Number.isFinite(obj.operations.mtbfSec) || obj.operations.mtbfSec < 0)
     ) {
       issues.push({
         id: `val_mtbf_${obj.id}`,
         severity: 'error',
         code: 'INVALID_FAILURE_MODEL',
-        message: `${obj.name} MTBF cannot be negative.`,
+        message: `${obj.name} MTBF cannot be negative or invalid.`,
         messageAr: `متوسط الزمن بين الأعطال MTBF للمعدة "${obj.name}" لا يمكن أن يكون سالباً.`,
         resourceName: obj.name,
         targetId: obj.id,
         targetType: 'object',
       });
     }
+    if (
+      obj.operations.mttrSec !== undefined &&
+      (!Number.isFinite(obj.operations.mttrSec) || obj.operations.mttrSec < 0)
+    ) {
+      issues.push({
+        id: `val_mttr_${obj.id}`,
+        severity: 'error',
+        code: 'INVALID_REPAIR_MODEL',
+        message: `${obj.name} MTTR cannot be negative or invalid.`,
+        messageAr: `متوسط زمن الإصلاح MTTR للمعدة "${obj.name}" لا يمكن أن يكون سالباً.`,
+        resourceName: obj.name,
+        targetId: obj.id,
+        targetType: 'object',
+      });
+    }
+    if (
+      simulationConfig.enableBreakdowns &&
+      (obj.kind === 'machine' || obj.kind === 'workstation') &&
+      Number.isFinite(avail) &&
+      avail > 0 &&
+      avail < 0.9999 &&
+      obj.operations.mtbfSec !== undefined &&
+      obj.operations.mtbfSec > 0 &&
+      obj.operations.mttrSec !== undefined &&
+      obj.operations.mttrSec > 0
+    ) {
+      const inherentAvail =
+        obj.operations.mtbfSec / (obj.operations.mtbfSec + obj.operations.mttrSec);
+      if (Math.abs(avail - inherentAvail) > 0.02) {
+        issues.push({
+          id: `val_rel_conflict_${obj.id}`,
+          severity: 'warning',
+          code: 'CONFLICTING_RELIABILITY_PARAMS',
+          message: `${obj.name} availability (${(avail * 100).toFixed(1)}%) conflicts with MTBF/(MTBF+MTTR) = ${(inherentAvail * 100).toFixed(1)}%; simulation uses ${(inherentAvail * 100).toFixed(1)}%.`,
+          messageAr: `نسبة توفر "${obj.name}" (${(avail * 100).toFixed(1)}%) تتعارض مع التوفر المحسوب من MTBF/MTTR (${(inherentAvail * 100).toFixed(1)}%)؛ ستعتمد المحاكاة التوفر المشتق.`,
+          recommendation: `Align availability to ${(inherentAvail * 100).toFixed(2)}% or update MTBF/MTTR values consistently.`,
+          recommendationAr: `وافق قيمة التوفر مع ${(inherentAvail * 100).toFixed(2)}% أو حدّث قيم MTBF و MTTR.`,
+          resourceName: obj.name,
+          targetId: obj.id,
+          targetType: 'object',
+        });
+      }
+    }
     if (obj.operations.repairModel === 'lognormal') {
       const meanMttr = obj.operations.mttrSec ?? 0;
       const stdMttr = obj.operations.mttrStdDevSec;
-      if (simulationConfig.enableBreakdowns && meanMttr <= 0) {
+      if (simulationConfig.enableBreakdowns && (!Number.isFinite(meanMttr) || meanMttr <= 0)) {
         issues.push({
           id: `val_mttr_lognorm_${obj.id}`,
           severity: 'error',
@@ -230,7 +273,7 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
           targetType: 'object',
         });
       }
-      if (stdMttr !== undefined && stdMttr < 0) {
+      if (stdMttr !== undefined && (!Number.isFinite(stdMttr) || stdMttr < 0)) {
         issues.push({
           id: `val_mttr_std_${obj.id}`,
           severity: 'error',

@@ -305,9 +305,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         simSnapshot: engine.getSnapshot(),
         simAllEvents: [],
       });
-    } catch {
+    } catch (err) {
       const fallback = createDesertAirCoolerProject();
       const engine = new DiscreteEventSimulationEngine(fallback);
+      const lang = get().language;
       set({
         initialized: true,
         project: fallback,
@@ -315,7 +316,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         validationIssues: validateProject(fallback),
         simEngine: engine,
         simSnapshot: engine.getSnapshot(),
+        saveStatus: 'unsaved',
       });
+      get().setToast(
+        lang === 'ar'
+          ? 'تعذر قراءة قاعدة البيانات المحلية؛ تم فتح المشروع الافتراضي مؤقتاً دون استبدال بياناتك.'
+          : `Failed to access local storage (${err instanceof Error ? err.message : 'IndexedDB error'}); loaded temporary workspace without overwriting saved projects.`,
+        'error'
+      );
     }
   },
 
@@ -430,17 +438,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   saveCurrentProject: async () => {
-    const { project, projectsList } = get();
+    const { project, projectsList, setToast, language } = get();
     set({ saveStatus: 'saving' });
     const updated = { ...project, updatedAt: new Date().toISOString() };
-    await saveProjectToDb(updated);
-    const nextList = [updated, ...projectsList.filter((p) => p.id !== updated.id)];
-    set({
-      project: updated,
-      projectsList: nextList,
-      saveStatus: 'saved',
-      lastSavedAt: updated.updatedAt,
-    });
+    try {
+      await saveProjectToDb(updated);
+      const nextList = [updated, ...projectsList.filter((p) => p.id !== updated.id)];
+      set({
+        project: updated,
+        projectsList: nextList,
+        saveStatus: 'saved',
+        lastSavedAt: updated.updatedAt,
+      });
+    } catch (err) {
+      set({ saveStatus: 'unsaved' });
+      setToast(
+        language === 'ar'
+          ? 'فشل حفظ المشروع في التخزين المحلي.'
+          : `Failed to save project: ${err instanceof Error ? err.message : 'Storage error'}`,
+        'error'
+      );
+    }
   },
 
   createNewProject: async (name, factoryName, industry, lengthM = 30, widthM = 20, heightM = 5) => {
@@ -1226,6 +1244,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
+    // Always re-run synchronous validation against current project state before launching DES
+    validationIssues = validateProject(project);
+    set({ validationIssues });
     const errors = validationIssues.filter((i) => i.severity === 'error');
     if (errors.length > 0) {
       const msg = language === 'ar' ? errors[0].messageAr || errors[0].message : errors[0].message;
@@ -1299,23 +1320,33 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   tickSimulation: (realDeltaSec) => {
-    const { simEngine, project } = get();
+    const { simEngine, project, simSnapshot } = get();
     if (!simEngine || simEngine.status !== 'running') return;
     const speed = Math.max(1, project.simulationConfig.speedMultiplier || 30);
-    const targetSec = simEngine.clockSec + realDeltaSec * speed;
+    const prevClock = simEngine.clockSec;
+    const targetSec = prevClock + realDeltaSec * speed;
     simEngine.advanceTo(targetSec);
-    const snap = simEngine.getSnapshot();
+    const shouldRefreshResult =
+      simEngine.clockSec >= (project.simulationConfig.durationSec || 0) - 1e-6 ||
+      !simSnapshot?.result ||
+      simEngine.clockSec - (simSnapshot.result.kpis.calendarTimeSec || 0) >= Math.max(2, speed * 0.25);
+    const snap = simEngine.getSnapshot(shouldRefreshResult);
     if (snap.status === 'completed') {
-      const result = simEngine.buildResult();
+      const result = snap.result ?? simEngine.buildResult();
       set((s) => ({
         simSnapshot: { ...snap, result },
         simAllEvents: simEngine.getAllEvents(),
         project: { ...s.project, lastSimulationResult: result },
       }));
-      saveProjectToDb({ ...get().project, lastSimulationResult: result });
+      saveProjectToDb({ ...get().project, lastSimulationResult: result }).catch(() => {
+        set({ saveStatus: 'unsaved' });
+      });
     } else {
       set({
-        simSnapshot: snap,
+        simSnapshot: {
+          ...snap,
+          result: snap.result ?? simSnapshot?.result,
+        },
         simAllEvents: simEngine.getAllEvents(),
       });
     }
@@ -1363,6 +1394,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
 
+    // Always validate freshly against the exact project state before worker launch
+    validationIssues = validateProject(project);
+    set({ validationIssues });
     const errors = validationIssues.filter((i) => i.severity === 'error');
     if (errors.length > 0) {
       const msg = language === 'ar' ? errors[0].messageAr || errors[0].message : errors[0].message;

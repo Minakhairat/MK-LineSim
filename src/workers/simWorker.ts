@@ -1,4 +1,5 @@
 import { DiscreteEventSimulationEngine } from '../simulation/desEngine';
+import { validateProject } from '../simulation/validator';
 import { ProjectData, SimEvent, SimulationResult, SimulationSnapshot } from '../types/project';
 
 export interface SimWorkerRunMessage {
@@ -38,6 +39,19 @@ const cancelledRequests = new Set<string>();
 
 function runSlicedInWorker(requestId: string, project: ProjectData): void {
   try {
+    const fatalError = validateProject(project).find((i) => i.severity === 'error');
+    if (fatalError) {
+      cancelledRequests.delete(requestId);
+      const fail: SimWorkerCompleteResponse = {
+        type: 'complete',
+        requestId,
+        ok: false,
+        error: fatalError.message,
+      };
+      self.postMessage(fail);
+      return;
+    }
+
     const engine = new DiscreteEventSimulationEngine(project);
     engine.status = 'running';
     const totalSec = Math.max(1e-6, project.simulationConfig.durationSec || 28800);
@@ -73,8 +87,9 @@ function runSlicedInWorker(requestId: string, project: ProjectData): void {
       if (cursor < totalSec - 1e-6) {
         setTimeout(stepSlice, 0);
       } else {
+        cancelledRequests.delete(requestId);
         const result = engine.buildResult();
-        const snapshot = { ...engine.getSnapshot(), status: 'completed' as const, result };
+        const snapshot = { ...engine.getSnapshot(false), status: 'completed' as const, result };
         const allEvents = engine.getAllEvents();
         const done: SimWorkerCompleteResponse = {
           type: 'complete',

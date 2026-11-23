@@ -1,39 +1,71 @@
 import { ProjectData, ValidationIssue } from '../types/project';
-import { getRotatedBounds } from '../utils/units';
+import { doOrientedBoxesOverlap, getRotatedBounds } from '../utils/units';
 import { runEngineeringValidations } from '../engineering/validationEngine';
+
+function isFinitePositive(n: unknown): boolean {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0;
+}
+
+function isFiniteNonNeg(n: unknown): boolean {
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0;
+}
 
 export function validateProject(project: ProjectData): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const { factory, layoutObjects, stages, workers, products, simulationConfig } = project;
 
   // 1. Factory dimensions
-  if (factory.lengthM <= 0 || factory.widthM <= 0 || factory.heightM <= 0) {
+  if (
+    !isFinitePositive(factory.lengthM) ||
+    !isFinitePositive(factory.widthM) ||
+    !isFinitePositive(factory.heightM)
+  ) {
     issues.push({
       id: 'val_factory_dims',
       severity: 'error',
       code: 'INVALID_FACTORY_DIMENSIONS',
-      message: 'Factory length, width, and height must all be greater than 0.',
-      messageAr: 'يجب أن يكون طول المصنع وعرضه وارتفاعه أكبر من صفر.',
+      message: 'Factory length, width, and height must all be finite numbers greater than 0.',
+      messageAr: 'يجب أن يكون طول المصنع وعرضه وارتفاعه أرقاماً صالحة أكبر من صفر.',
       targetType: 'factory',
     });
   }
 
-  // 2. Layout object boundaries, dimensions & operational checks
+  const allObjectIds = new Set(layoutObjects.map((o) => o.id));
   const activeObjects = layoutObjects.filter((o) => o.rendering.visible);
+
+  // 2. Layout object boundaries, dimensions & operational checks
   for (const obj of activeObjects) {
     const { length, width, height } = obj.geometry.dimensions;
-    if (length <= 0 || width <= 0 || height <= 0) {
+    const { x, y, z } = obj.geometry.position;
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      !Number.isFinite(z) ||
+      !Number.isFinite(obj.geometry.rotationDeg)
+    ) {
+      issues.push({
+        id: `val_pos_${obj.id}`,
+        severity: 'error',
+        code: 'INVALID_OBJECT_TRANSFORM',
+        message: `${obj.name} has invalid (NaN/Infinite) coordinates or rotation.`,
+        messageAr: `إحداثيات أو زاوية دوران "${obj.name}" غير صالحة.`,
+        targetId: obj.id,
+        targetType: 'object',
+      });
+    }
+
+    if (!isFinitePositive(length) || !isFinitePositive(width) || !isFinitePositive(height)) {
       issues.push({
         id: `val_dim_${obj.id}`,
         severity: 'error',
         code: 'INVALID_DIMENSIONS',
-        message: `${obj.name} has non-positive dimensions.`,
+        message: `${obj.name} has non-positive or invalid dimensions.`,
         messageAr: `أبعاد "${obj.name}" غير صالحة (يجب أن تكون أكبر من صفر).`,
         targetId: obj.id,
         targetType: 'object',
       });
     }
-    if (height > factory.heightM) {
+    if (Number.isFinite(height) && Number.isFinite(factory.heightM) && height > factory.heightM) {
       issues.push({
         id: `val_height_${obj.id}`,
         severity: 'warning',
@@ -45,56 +77,82 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
       });
     }
 
-    const bounds = getRotatedBounds(
-      obj.geometry.position.x,
-      obj.geometry.position.z,
-      length,
-      width,
-      obj.geometry.rotationDeg
-    );
-
     if (
-      bounds.minX < -0.02 ||
-      bounds.maxX > factory.lengthM + 0.02 ||
-      bounds.minZ < -0.02 ||
-      bounds.maxZ > factory.widthM + 0.02
+      Number.isFinite(x) &&
+      Number.isFinite(z) &&
+      isFinitePositive(length) &&
+      isFinitePositive(width) &&
+      Number.isFinite(obj.geometry.rotationDeg) &&
+      isFinitePositive(factory.lengthM) &&
+      isFinitePositive(factory.widthM)
     ) {
-      issues.push({
-        id: `val_oob_${obj.id}`,
-        severity: 'error',
-        code: 'OUT_OF_FACTORY_BOUNDS',
-        message: `${obj.name} extends outside the ${factory.lengthM}m × ${factory.widthM}m factory perimeter.`,
-        messageAr: `"${obj.name}" يمتد خارج حدود المصنع (${factory.lengthM}م × ${factory.widthM}م).`,
-        targetId: obj.id,
-        targetType: 'object',
-      });
+      const bounds = getRotatedBounds(x, z, length, width, obj.geometry.rotationDeg);
+      if (
+        bounds.minX < -0.02 ||
+        bounds.maxX > factory.lengthM + 0.02 ||
+        bounds.minZ < -0.02 ||
+        bounds.maxZ > factory.widthM + 0.02
+      ) {
+        issues.push({
+          id: `val_oob_${obj.id}`,
+          severity: 'error',
+          code: 'OUT_OF_FACTORY_BOUNDS',
+          message: `${obj.name} extends outside the ${factory.lengthM}m × ${factory.widthM}m factory perimeter.`,
+          messageAr: `"${obj.name}" يمتد خارج حدود المصنع (${factory.lengthM}م × ${factory.widthM}م).`,
+          targetId: obj.id,
+          targetType: 'object',
+        });
+      }
     }
 
-    if (obj.operations.processingTimeSec < 0 || obj.operations.setupTimeSec < 0) {
+    if (
+      !isFiniteNonNeg(obj.operations.processingTimeSec) ||
+      !isFiniteNonNeg(obj.operations.setupTimeSec) ||
+      !isFiniteNonNeg(obj.operations.loadingTimeSec) ||
+      !isFiniteNonNeg(obj.operations.unloadingTimeSec) ||
+      (obj.operations.batchTransferTimeSec !== undefined &&
+        !isFiniteNonNeg(obj.operations.batchTransferTimeSec))
+    ) {
       issues.push({
         id: `val_negtime_${obj.id}`,
         severity: 'error',
         code: 'NEGATIVE_TIME',
-        message: `${obj.name} has negative processing or setup time.`,
-        messageAr: `"${obj.name}" يحتوي على زمن تشغيل أو تجهيز سالب.`,
+        message: `${obj.name} has negative or invalid operation timing parameters.`,
+        messageAr: `"${obj.name}" يحتوي على أزمنة تشغيل أو تجهيز غير صالحة.`,
         targetId: obj.id,
         targetType: 'object',
       });
     }
 
-    if (obj.kind === 'conveyor' && (!obj.operations.speedMps || obj.operations.speedMps <= 0)) {
+    if (obj.operations.batchSize !== undefined && (!Number.isFinite(obj.operations.batchSize) || obj.operations.batchSize < 1)) {
+      issues.push({
+        id: `val_obj_batch_${obj.id}`,
+        severity: 'error',
+        code: 'INVALID_BATCH_SIZE',
+        message: `${obj.name} batch size must be at least 1.`,
+        messageAr: `حجم الدفعة لـ "${obj.name}" يجب أن يكون 1 على الأقل.`,
+        targetId: obj.id,
+        targetType: 'object',
+      });
+    }
+
+    if (
+      obj.kind === 'conveyor' &&
+      (!isFinitePositive(obj.operations.speedMps) ||
+        (obj.operations.productSpacingM !== undefined && !isFiniteNonNeg(obj.operations.productSpacingM)))
+    ) {
       issues.push({
         id: `val_convspeed_${obj.id}`,
         severity: 'error',
         code: 'INVALID_CONVEYOR_SPEED',
-        message: `${obj.name} must have conveyor speed > 0 m/s.`,
-        messageAr: `يجب أن تكون سرعة السير "${obj.name}" أكبر من 0 م/ث.`,
+        message: `${obj.name} must have conveyor speed > 0 m/s and non-negative spacing.`,
+        messageAr: `يجب أن تكون سرعة السير "${obj.name}" أكبر من 0 م/ث وتباعد غير سالب.`,
         targetId: obj.id,
         targetType: 'object',
       });
     }
 
-    if (obj.kind === 'buffer' && obj.operations.capacity <= 0) {
+    if (obj.kind === 'buffer' && !isFinitePositive(obj.operations.capacity)) {
       issues.push({
         id: `val_bufcap_${obj.id}`,
         severity: 'error',
@@ -105,9 +163,24 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
         targetType: 'object',
       });
     }
+
+    if (
+      (obj.kind === 'machine' || obj.kind === 'workstation') &&
+      !isFinitePositive(obj.operations.capacity)
+    ) {
+      issues.push({
+        id: `val_cap_${obj.id}`,
+        severity: 'error',
+        code: 'INVALID_MACHINE_CAPACITY',
+        message: `${obj.name} processing capacity must be at least 1.`,
+        messageAr: `السعة التشغيلية للمحطة "${obj.name}" يجب أن تكون 1 على الأقل.`,
+        targetId: obj.id,
+        targetType: 'object',
+      });
+    }
   }
 
-  // 3. Pairwise physical collision check (ignore intentional conveyor junctions & vehicles)
+  // 3. Pairwise physical OBB SAT collision check (ignore intentional conveyor junctions & vehicles)
   for (let i = 0; i < activeObjects.length; i++) {
     for (let j = i + 1; j < activeObjects.length; j++) {
       const a = activeObjects[i];
@@ -115,23 +188,25 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
       if (a.kind === 'conveyor' && b.kind === 'conveyor') continue;
       if (a.kind === 'vehicle' || b.kind === 'vehicle') continue;
 
-      const ba = getRotatedBounds(
-        a.geometry.position.x,
-        a.geometry.position.z,
-        a.geometry.dimensions.length,
-        a.geometry.dimensions.width,
-        a.geometry.rotationDeg
-      );
-      const bb = getRotatedBounds(
-        b.geometry.position.x,
-        b.geometry.position.z,
-        b.geometry.dimensions.length,
-        b.geometry.dimensions.width,
-        b.geometry.rotationDeg
-      );
-      const overlapX = Math.min(ba.maxX, bb.maxX) - Math.max(ba.minX, bb.minX);
-      const overlapZ = Math.min(ba.maxZ, bb.maxZ) - Math.max(ba.minZ, bb.minZ);
-      if (overlapX > 0.08 && overlapZ > 0.08) {
+      if (
+        doOrientedBoxesOverlap(
+          {
+            cx: a.geometry.position.x,
+            cz: a.geometry.position.z,
+            length: a.geometry.dimensions.length,
+            width: a.geometry.dimensions.width,
+            rotationDeg: a.geometry.rotationDeg,
+          },
+          {
+            cx: b.geometry.position.x,
+            cz: b.geometry.position.z,
+            length: b.geometry.dimensions.length,
+            width: b.geometry.dimensions.width,
+            rotationDeg: b.geometry.rotationDeg,
+          },
+          0.08
+        )
+      ) {
         issues.push({
           id: `val_col_${a.id}_${b.id}`,
           severity: 'warning',
@@ -159,24 +234,73 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
 
   const stageIds = new Set(stages.map((s) => s.id));
   for (const stage of stages) {
-    if (stage.processingTimeSec < 0) {
+    if (
+      !isFiniteNonNeg(stage.processingTimeSec) ||
+      !isFiniteNonNeg(stage.setupTimeSec) ||
+      !isFiniteNonNeg(stage.loadingTimeSec) ||
+      !isFiniteNonNeg(stage.unloadingTimeSec) ||
+      (stage.batchTransferTimeSec !== undefined && !isFiniteNonNeg(stage.batchTransferTimeSec))
+    ) {
       issues.push({
         id: `val_stg_time_${stage.id}`,
         severity: 'error',
         code: 'NEGATIVE_STAGE_TIME',
-        message: `Stage "${stage.name}" has negative processing time.`,
-        messageAr: `المرحلة "${stage.name}" تحتوي على زمن تشغيل سالب.`,
+        message: `Stage "${stage.name}" has negative or invalid timing values.`,
+        messageAr: `المرحلة "${stage.name}" تحتوي على أزمنة تشغيل غير صالحة.`,
         targetId: stage.id,
         targetType: 'stage',
       });
     }
-    if (stage.bufferCapacity < 0) {
+    if (!isFiniteNonNeg(stage.bufferCapacity)) {
       issues.push({
         id: `val_stg_buf_${stage.id}`,
         severity: 'error',
         code: 'INVALID_BUFFER_CAPACITY',
-        message: `Stage "${stage.name}" cannot have negative buffer capacity.`,
-        messageAr: `سعة المخزن المؤقت للمرحلة "${stage.name}" لا يمكن أن تكون سالبة.`,
+        message: `Stage "${stage.name}" cannot have negative or invalid buffer capacity.`,
+        messageAr: `سعة المخزن المؤقت للمرحلة "${stage.name}" غير صالحة.`,
+        targetId: stage.id,
+        targetType: 'stage',
+      });
+    }
+    if (!isFiniteNonNeg(stage.requiredWorkers) || !isFiniteNonNeg(stage.requiredMachines)) {
+      issues.push({
+        id: `val_stg_req_${stage.id}`,
+        severity: 'error',
+        code: 'INVALID_RESOURCE_REQUIREMENT',
+        message: `Stage "${stage.name}" has invalid worker or machine requirement.`,
+        messageAr: `متطلبات العمال أو الآلات للمرحلة "${stage.name}" غير صالحة.`,
+        targetId: stage.id,
+        targetType: 'stage',
+      });
+    }
+    if (stage.batchSize !== undefined && (!Number.isFinite(stage.batchSize) || stage.batchSize < 1)) {
+      issues.push({
+        id: `val_stg_batch_${stage.id}`,
+        severity: 'error',
+        code: 'INVALID_BATCH_SIZE',
+        message: `Stage "${stage.name}" batch size must be at least 1.`,
+        messageAr: `حجم الدفعة للمرحلة "${stage.name}" يجب أن يكون 1 على الأقل.`,
+        targetId: stage.id,
+        targetType: 'stage',
+      });
+    }
+    const scrap = Number(stage.scrapRate);
+    const rework = Number(stage.reworkProbability);
+    if (
+      !Number.isFinite(scrap) ||
+      !Number.isFinite(rework) ||
+      scrap < 0 ||
+      scrap > 1 ||
+      rework < 0 ||
+      rework > 1 ||
+      scrap + rework > 1 + 1e-9
+    ) {
+      issues.push({
+        id: `val_stg_qual_${stage.id}`,
+        severity: 'error',
+        code: 'INVALID_QUALITY_RATES',
+        message: `Stage "${stage.name}" scrap + rework rates must be in [0, 1] and sum to <= 1.`,
+        messageAr: `نسب الهالك وإعادة التشغيل في "${stage.name}" يجب أن تكون بين 0 و 1 وألا يتجاوز مجموعهما 1.`,
         targetId: stage.id,
         targetType: 'stage',
       });
@@ -188,6 +312,27 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
         code: 'MISSING_STATION_MACHINE',
         message: `Stage "${stage.name}" has no assigned workstation or conveyor on the floor.`,
         messageAr: `المرحلة "${stage.name}" غير مربوطة بأي محطة أو سير على أرضية المصنع.`,
+        targetId: stage.id,
+        targetType: 'stage',
+      });
+    } else if (stage.assignedObjectIds.some((oid) => !allObjectIds.has(oid))) {
+      issues.push({
+        id: `val_stg_missing_obj_${stage.id}`,
+        severity: 'error',
+        code: 'BROKEN_OBJECT_REFERENCE',
+        message: `Stage "${stage.name}" references a deleted or missing floor object.`,
+        messageAr: `المرحلة "${stage.name}" تشير إلى معدة غير موجودة على أرضية المصنع.`,
+        targetId: stage.id,
+        targetType: 'stage',
+      });
+    }
+    if (stage.conveyorObjectId && !allObjectIds.has(stage.conveyorObjectId)) {
+      issues.push({
+        id: `val_stg_missing_conv_${stage.id}`,
+        severity: 'error',
+        code: 'BROKEN_OBJECT_REFERENCE',
+        message: `Stage "${stage.name}" links to a non-existent conveyor.`,
+        messageAr: `المرحلة "${stage.name}" تشير إلى سير نقل غير موجود.`,
         targetId: stage.id,
         targetType: 'stage',
       });
@@ -257,13 +402,46 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
           targetType: 'product',
         });
       }
-      if (prod.dimensions.length <= 0 || prod.dimensions.width <= 0 || prod.dimensions.height <= 0) {
+      if (
+        prod.routeStageIds.some((sid) => !stageIds.has(sid)) ||
+        (prod.entryStageIds && prod.entryStageIds.some((sid) => !stageIds.has(sid)))
+      ) {
+        issues.push({
+          id: `val_prod_badroute_${prod.id}`,
+          severity: 'error',
+          code: 'BROKEN_ROUTE_REFERENCE',
+          message: `Product "${prod.name}" references a non-existent production stage in its route.`,
+          messageAr: `المنتج "${prod.name}" يشير إلى مرحلة غير موجودة في مسار إنتاجه.`,
+          targetId: prod.id,
+          targetType: 'product',
+        });
+      }
+      if (
+        !isFinitePositive(prod.dimensions.length) ||
+        !isFinitePositive(prod.dimensions.width) ||
+        !isFinitePositive(prod.dimensions.height)
+      ) {
         issues.push({
           id: `val_prod_dim_${prod.id}`,
           severity: 'error',
           code: 'INVALID_PRODUCT_DIMENSIONS',
-          message: `Product "${prod.name}" dimensions must be positive.`,
-          messageAr: `أبعاد المنتج "${prod.name}" يجب أن تكون موجبة.`,
+          message: `Product "${prod.name}" dimensions must be finite positive numbers.`,
+          messageAr: `أبعاد المنتج "${prod.name}" يجب أن تكون أرقاماً موجبة صالحة.`,
+          targetId: prod.id,
+          targetType: 'product',
+        });
+      }
+      if (
+        !isFiniteNonNeg(prod.targetQuantity) ||
+        (prod.cycleTimeMultiplier !== undefined && !isFinitePositive(prod.cycleTimeMultiplier)) ||
+        (prod.mixWeight !== undefined && !isFiniteNonNeg(prod.mixWeight))
+      ) {
+        issues.push({
+          id: `val_prod_qty_${prod.id}`,
+          severity: 'error',
+          code: 'INVALID_PRODUCT_PARAMETERS',
+          message: `Product "${prod.name}" has invalid quantity, mix weight, or cycle multiplier.`,
+          messageAr: `الكمية المستهدفة أو معامل الدورة للمنتج "${prod.name}" غير صالحة.`,
           targetId: prod.id,
           targetType: 'product',
         });
@@ -271,36 +449,76 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
     }
   }
 
-  // 6. Shift config
-  if (simulationConfig.durationSec <= 0) {
+  // 5b. Workers validation
+  for (const w of workers) {
+    if (
+      !Number.isFinite(w.position.x) ||
+      !Number.isFinite(w.position.z) ||
+      !isFinitePositive(w.walkingSpeedMps) ||
+      !isFinitePositive(w.efficiencyFactor)
+    ) {
+      issues.push({
+        id: `val_wrk_param_${w.id}`,
+        severity: 'error',
+        code: 'INVALID_WORKER_PARAMETERS',
+        message: `Worker "${w.name}" has invalid coordinates, walking speed, or efficiency factor.`,
+        messageAr: `بيانات العامل "${w.name}" (الموقع أو سرعة المشي أو الكفاءة) غير صالحة.`,
+        targetId: w.id,
+        targetType: 'worker',
+      });
+    }
+  }
+
+  // 6. Shift & Simulation timing config
+  if (!isFinitePositive(simulationConfig.durationSec)) {
     issues.push({
       id: 'val_sim_dur',
       severity: 'error',
       code: 'INVALID_SHIFT_DURATION',
-      message: 'Simulation duration must be greater than 0 seconds.',
+      message: 'Simulation duration must be a finite number greater than 0 seconds.',
       messageAr: 'مدة المحاكاة يجب أن تكون أكبر من صفر ثانية.',
       targetType: 'shift',
     });
   }
+  if (!isFinitePositive(simulationConfig.arrivalIntervalSec)) {
+    issues.push({
+      id: 'val_sim_arrival',
+      severity: 'error',
+      code: 'INVALID_ARRIVAL_INTERVAL',
+      message: 'Arrival interval must be a finite number greater than 0 seconds.',
+      messageAr: 'زمن وصول الوحدات يجب أن يكون أكبر من صفر ثانية.',
+      targetType: 'shift',
+    });
+  }
+  if (!isFiniteNonNeg(simulationConfig.maxPlannedUnits)) {
+    issues.push({
+      id: 'val_sim_planned',
+      severity: 'error',
+      code: 'INVALID_PLANNED_UNITS',
+      message: 'Planned production units must be a finite number >= 0.',
+      messageAr: 'كمية الإنتاج المخططة يجب أن تكون رقماً صالحاً >= 0.',
+      targetType: 'shift',
+    });
+  }
   for (const shift of simulationConfig.shifts) {
-    if (shift.durationSec <= 0) {
+    if (!isFiniteNonNeg(shift.startSec) || !isFinitePositive(shift.durationSec)) {
       issues.push({
         id: `val_shift_${shift.id}`,
         severity: 'error',
         code: 'INVALID_SHIFT_CONFIG',
-        message: `Shift "${shift.name}" must have duration > 0.`,
-        messageAr: `الوردية "${shift.name}" يجب أن تكون مدتها أكبر من صفر.`,
+        message: `Shift "${shift.name}" must have start >= 0 and duration > 0.`,
+        messageAr: `الوردية "${shift.name}" يجب أن يكون وقت بدايتها >= 0 ومدتها أكبر من صفر.`,
         targetType: 'shift',
       });
     }
     for (const brk of shift.breaks) {
-      if (brk.durationSec < 0 || brk.startSec < 0) {
+      if (!isFiniteNonNeg(brk.durationSec) || !isFiniteNonNeg(brk.startSec)) {
         issues.push({
           id: `val_brk_${brk.id}`,
           severity: 'error',
           code: 'INVALID_BREAK_CONFIG',
-          message: `Break "${brk.name}" has negative start or duration.`,
-          messageAr: `الاستراحة "${brk.name}" لها توقيت أو مدة سالبة.`,
+          message: `Break "${brk.name}" has negative or invalid start/duration.`,
+          messageAr: `الاستراحة "${brk.name}" لها توقيت أو مدة غير صالحة.`,
           targetType: 'shift',
         });
       }

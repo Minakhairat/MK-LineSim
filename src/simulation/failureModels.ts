@@ -89,7 +89,8 @@ export function resolveObjectFailureParams(
 ): FailureModelParams {
   const failureModel: FailureDistributionType = obj.operations.failureModel ?? 'exponential';
   const repairModel: RepairDistributionType = obj.operations.repairModel ?? 'exponential';
-  const weibullShape = Math.max(0.2, Number(obj.operations.weibullShape ?? 1.5));
+  const rawShape = Number(obj.operations.weibullShape ?? 1.5);
+  const weibullShape = Number.isFinite(rawShape) ? Math.max(0.2, rawShape) : 1.5;
 
   if (!config.enableBreakdowns || (obj.kind !== 'machine' && obj.kind !== 'workstation')) {
     return {
@@ -105,10 +106,14 @@ export function resolveObjectFailureParams(
     };
   }
 
-  const avail = Math.min(1, Math.max(0.01, Number(obj.operations.availability ?? 1)));
-  const rawMtbf = Number(obj.operations.mtbfSec || 0);
-  const rawMttr = Number(obj.operations.mttrSec || 0);
-  const rawScale = Number(obj.operations.weibullScaleSec || 0);
+  const rawAvail = Number(obj.operations.availability ?? 1);
+  const avail = Number.isFinite(rawAvail) ? Math.min(1, Math.max(0.01, rawAvail)) : 1;
+  const rawMtbfVal = Number(obj.operations.mtbfSec || 0);
+  const rawMttrVal = Number(obj.operations.mttrSec || 0);
+  const rawScaleVal = Number(obj.operations.weibullScaleSec || 0);
+  const rawMtbf = Number.isFinite(rawMtbfVal) ? Math.max(0, rawMtbfVal) : 0;
+  const rawMttr = Number.isFinite(rawMttrVal) ? Math.max(0, rawMttrVal) : 0;
+  const rawScale = Number.isFinite(rawScaleVal) ? Math.max(0, rawScaleVal) : 0;
 
   let mtbfSec = 0;
   let mttrSec = 0;
@@ -116,13 +121,22 @@ export function resolveObjectFailureParams(
   if (rawMtbf > 0 && rawMttr > 0) {
     mtbfSec = rawMtbf;
     mttrSec = rawMttr;
-  } else if (avail < 0.9999) {
-    mttrSec = rawMttr > 0 ? rawMttr : Math.max(10, (obj.operations.processingTimeSec || 30) * 3);
-    mtbfSec =
-      rawMtbf > 0 ? rawMtbf : Math.max(1, (mttrSec * avail) / Math.max(1e-4, 1 - avail));
   } else if (failureModel === 'weibull' && rawScale > 0 && rawMttr > 0) {
     mttrSec = rawMttr;
     mtbfSec = rawScale * gammaFn(1 + 1 / weibullShape);
+  } else if (avail < 0.9999) {
+    if (rawMtbf > 0) {
+      mtbfSec = rawMtbf;
+      mttrSec = Math.max(0.1, (rawMtbf * (1 - avail)) / Math.max(1e-4, avail));
+    } else if (rawMttr > 0) {
+      mttrSec = rawMttr;
+      mtbfSec = Math.max(1, (rawMttr * avail) / Math.max(1e-4, 1 - avail));
+    } else {
+      const proc = Number(obj.operations.processingTimeSec);
+      const baseProc = Number.isFinite(proc) && proc > 0 ? proc : 30;
+      mttrSec = Math.max(10, baseProc * 3);
+      mtbfSec = Math.max(1, (mttrSec * avail) / Math.max(1e-4, 1 - avail));
+    }
   } else {
     return {
       enabled: false,
@@ -137,6 +151,7 @@ export function resolveObjectFailureParams(
     };
   }
 
+  const inherentAvailability = mtbfSec + mttrSec > 0 ? mtbfSec / (mtbfSec + mttrSec) : 1;
   const weibullScaleSec =
     rawScale > 0 ? rawScale : mtbfSec / Math.max(1e-6, gammaFn(1 + 1 / weibullShape));
   const rawStdDev = obj.operations.mttrStdDevSec;
@@ -154,7 +169,7 @@ export function resolveObjectFailureParams(
     mttrStdDevSec,
     weibullShape,
     weibullScaleSec,
-    availability: avail,
+    availability: inherentAvailability,
   };
 }
 

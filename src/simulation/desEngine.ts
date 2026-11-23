@@ -4056,7 +4056,7 @@ export class DiscreteEventSimulationEngine {
     }
   }
 
-  public getSnapshot(): SimulationSnapshot {
+  public getSnapshot(includeResult = true): SimulationSnapshot {
     this.updateInterpolatedPositions(this.clockSec);
     const objects: Record<string, ObjectRuntimeState> = {};
     for (const [k, v] of this.objectStates.entries()) {
@@ -4134,7 +4134,10 @@ export class DiscreteEventSimulationEngine {
       stageBatches,
       recentEvents: this.eventLog.slice(-150),
       totalEventsExecuted: this.totalEventsExecuted,
-      result: this.status === 'completed' || this.clockSec > 0 ? this.buildResult() : undefined,
+      result:
+        includeResult && (this.status === 'completed' || this.clockSec > 0)
+          ? this.buildResult()
+          : undefined,
     };
   }
 
@@ -4204,6 +4207,11 @@ export class DiscreteEventSimulationEngine {
     let stageBatchWaitCountSum = 0;
     let stageQueueWaitWeightedSum = 0;
     let stageEnteredSum = 0;
+
+    const maxStageEffectiveCycle = this.project.stages.reduce((mx, candidate) => {
+      const cp = computeStageCapacityProfile(candidate, this.project.layoutObjects);
+      return Math.max(mx, cp.effectiveUnitCycleSec);
+    }, 0);
 
     for (const st of this.project.stages) {
       const acc = this.stageAcc.get(st.id)!;
@@ -4293,12 +4301,19 @@ export class DiscreteEventSimulationEngine {
       const avgQueueWait =
         acc.entered > 0 ? acc.queueWaitTimeSum / acc.entered : avgUnitWait;
 
+      const stageProfile = computeStageCapacityProfile(st, this.project.layoutObjects);
+      const cyclePressureBonus =
+        maxStageEffectiveCycle > 0
+          ? (stageProfile.effectiveUnitCycleSec / maxStageEffectiveCycle) *
+            8 *
+            Math.min(1, (utilPct + setupPct) / 100)
+          : 0;
       const stTaskTime =
         (st.processingTimeSec || 0) + (st.loadingTimeSec || 0) + (st.unloadingTimeSec || 0);
       const effectiveQueueSignal = blkPct < 20 ? Math.min(25, avgQueue * 0.5) : 0;
       const bottleneckScore =
         stTaskTime > 0
-          ? utilPct + setupPct + effectiveQueueSignal - blkPct * 0.25
+          ? utilPct + setupPct + effectiveQueueSignal + cyclePressureBonus - blkPct * 0.25
           : utilPct * 0.1;
       if (bottleneckScore > highestUtilOrWait) {
         highestUtilOrWait = bottleneckScore;

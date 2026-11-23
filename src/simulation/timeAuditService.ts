@@ -376,12 +376,12 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
             (effectiveCycles.length * bottleneckCycleSec)) *
             100
         )
-      : 100;
+      : 0;
 
   const lineTaktTimeSec =
     shiftAudit.plannedUnits > 0 ? shiftAudit.fullShiftNetSec / shiftAudit.plannedUnits : 0;
   const theoreticalHourlyCapacity =
-    bottleneckCycleSec > 0 ? 3600 / bottleneckCycleSec : 3600 / shiftAudit.arrivalIntervalSec;
+    bottleneckCycleSec > 0 ? 3600 / bottleneckCycleSec : 0;
 
   const feedRatePerHour = 3600 / shiftAudit.arrivalIntervalSec;
   const activeHours = Math.max(1e-6, shiftAudit.activeSimTimeSec / 3600);
@@ -603,19 +603,15 @@ export function buildAuditedSimulationKPIs(params: {
       (s, r) => s + (r.idealCycleTimeSec > 0 ? r.idealCycleTimeSec * r.processedCount : 0),
       0
     );
-    const sumTotalUnits = activeRes.reduce((s, r) => s + r.processedCount, 0);
-    const sumGoodUnits = activeRes.reduce((s, r) => s + r.goodCount, 0);
-
     const availPct = sumSPT > 1e-6 ? Math.min(100, Math.max(0, (sumOT / sumSPT) * 100)) : 0;
     const perfPct =
-      sumOT > 1e-6
-        ? sumIdealTime > 0
-          ? Math.min(100, Math.max(0, (sumIdealTime / sumOT) * 100))
-          : sumTotalUnits > 0
-          ? 100
-          : 0
+      sumOT > 1e-6 && sumIdealTime > 0
+        ? Math.min(100, Math.max(0, (sumIdealTime / sumOT) * 100))
         : 0;
-    const qualPct = sumTotalUnits > 0 ? Math.min(100, Math.max(0, (sumGoodUnits / sumTotalUnits) * 100)) : 100;
+    const qualPct =
+      actualProduction > 0
+        ? Math.min(100, Math.max(0, (goodUnits / actualProduction) * 100))
+        : 0;
     const oeePct = sumSPT > 1e-6 ? (availPct / 100) * (perfPct / 100) * (qualPct / 100) * 100 : 0;
 
     lineOee = {
@@ -659,9 +655,7 @@ export function buildAuditedSimulationKPIs(params: {
       unplannedDowntimeSec: lineUnplannedDownSec,
       setupTimeSec: lineSetupSec,
       idealCycleTimeSec:
-        timingAudit.bottleneckCycleSec > 0
-          ? timingAudit.bottleneckCycleSec
-          : shiftAudit.arrivalIntervalSec,
+        timingAudit.bottleneckCycleSec > 0 ? timingAudit.bottleneckCycleSec : 0,
       totalUnitsProcessed: actualProduction,
       goodUnitsProduced: goodUnits,
     });
@@ -672,7 +666,7 @@ export function buildAuditedSimulationKPIs(params: {
       ? timingAudit.lineBalanceEfficiencyPct
       : params.avgLeadTimeSec > 0
       ? Math.min(100, (params.avgProcessingTimeSec / params.avgLeadTimeSec) * 100)
-      : 100;
+      : 0;
 
   const totalBatchesCompleted =
     params.totalBatchesCompleted ??

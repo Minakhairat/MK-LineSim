@@ -62,3 +62,61 @@ export function getRotatedBounds(
     maxZ: cz + halfZ,
   };
 }
+
+export interface OrientedBox2D {
+  cx: number;
+  cz: number;
+  length: number;
+  width: number;
+  rotationDeg: number;
+}
+
+/**
+ * Exact 2D Separating Axis Theorem (SAT) overlap test for two rotated rectangles.
+ * Returns true iff the oriented footprints intersect by more than `toleranceM` along every SAT axis.
+ */
+export function doOrientedBoxesOverlap(
+  a: OrientedBox2D,
+  b: OrientedBox2D,
+  toleranceM = 0.08
+): boolean {
+  const radA = ((Number.isFinite(a.rotationDeg) ? a.rotationDeg : 0) * Math.PI) / 180;
+  const radB = ((Number.isFinite(b.rotationDeg) ? b.rotationDeg : 0) * Math.PI) / 180;
+
+  const uxA = Math.cos(radA);
+  const uzA = Math.sin(radA);
+  const vxA = -uzA;
+  const vzA = uxA;
+
+  const uxB = Math.cos(radB);
+  const uzB = Math.sin(radB);
+  const vxB = -uzB;
+  const vzB = uxB;
+
+  const hLA = Math.max(0, a.length) / 2;
+  const hWA = Math.max(0, a.width) / 2;
+  const hLB = Math.max(0, b.length) / 2;
+  const hWB = Math.max(0, b.width) / 2;
+
+  const dx = b.cx - a.cx;
+  const dz = b.cz - a.cz;
+
+  const axes: ReadonlyArray<readonly [number, number]> = [
+    [uxA, uzA],
+    [vxA, vzA],
+    [uxB, uzB],
+    [vxB, vzB],
+  ];
+
+  for (const [ax, az] of axes) {
+    const centerDist = Math.abs(dx * ax + dz * az);
+    const projA = hLA * Math.abs(uxA * ax + uzA * az) + hWA * Math.abs(vxA * ax + vzA * az);
+    const projB = hLB * Math.abs(uxB * ax + uzB * az) + hWB * Math.abs(vxB * ax + vzB * az);
+    const penetration = projA + projB - centerDist;
+    if (penetration <= toleranceM) {
+      return false;
+    }
+  }
+
+  return true;
+}
