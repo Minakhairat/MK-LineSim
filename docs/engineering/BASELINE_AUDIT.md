@@ -1,11 +1,11 @@
-# MK LineSim — Phase 0, 0.1, 0.2, 0.2.2 & 0.2.3: Engineering Baseline, Evidence Reconciliation & CI Hardening
+# MK LineSim — Phase 0, 0.1, 0.2, 0.2.3 & Phase 1: Engineering Baseline & Industrial Capacity Verification
 
-**Program Phase:** Phase 0 / 0.1 / 0.2 / 0.2.1 / 0.2.2 / 0.2.3 (Engineering Baseline, Lockfile Reconciliation & CI Evidence Closure)  
+**Program Phase:** Phase 1 — Industrial Capacity Mathematics Verification (building on Phase 0–0.2.3 baseline & CI reconciliation)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
 **Stated Baseline Commit (Phase 0):** `dc8f6557912bf2fb8c1a78437ab331f485aea2d8`  
 **Latest Verified GitHub CI Commit (Phase 0.2.3):** `a36d723` (`main`, `"Delete bun.lock"`, Run `#17`, `Success`, `47s`)  
 **Audit Date:** 2026-11-23  
-**Workspace Constraints:** Documentation-only Phase 0.2.3 update confined strictly to `docs/engineering/BASELINE_AUDIT.md`, `docs/engineering/ENGINEERING_RISK_REGISTER.md`, and `docs/engineering/TEST_COVERAGE_MATRIX.md`. Zero edits were made to `src/`, `tests/`, `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, or `.github/workflows/deploy.yml`.
+**Phase 1 Scope Constraints:** Analytical capacity, conveyor physics, validation error propagation, and centralized timing audit (`capacityEngine.ts`, `conveyorPhysics.ts`, `validationEngine.ts`, `timeAuditService.ts`) verified and hardened with zero modifications to `src/simulation/desEngine.ts`, `package.json`, `package-lock.json`, `tsconfig.json`, `vite.config.ts`, or `.github/workflows/deploy.yml`.
 
 ---
 
@@ -90,9 +90,9 @@ Local commands below were executed in `/app/applet` during Phase 0.2.2 (source, 
 
 ---
 
-## 3. Complete Codebase & Test Inventory (Task 2)
+## 3. Complete Codebase & Test Inventory (Task 2 & Phase 1)
 
-Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813 lines (`wc -l`)**.
+Total tracked source and test code under `src/` and `tests/`: **65 files (`50` `src/` + `15` `tests/`), 38,651 lines (`wc -l`)**.
 
 ### 3.1 Application Shell, State, Data, Storage & Infrastructure
 
@@ -140,18 +140,18 @@ Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813
 
 | File Path | `wc -l` | Primary Responsibility |
 | :--- | :---: | :--- |
-| `/src/engineering/capacityEngine.ts` | 210 | Stage batching rules (`resolveStageBatchConfig`), equipment role breakdown (`resolveStageEquipmentBreakdown`), server count (`resolveStageParallelServerCount`), analytical stage throughput (`computeStageCapacityProfile`). |
-| `/src/engineering/conveyorPhysics.ts` | 111 | Physical fit guard (`LENGTH_EXCEEDS_BELT`, `WIDTH_EXCEEDS_BELT`), belt pitch, min headway, transport capacity/min & hr, finite belt capacity, path traversal duration. |
+| `/src/engineering/capacityEngine.ts` | 1103 | Stage batching rules (`resolveStageBatchConfig`), physical/virtual/non-processing equipment separation (`resolveStageEquipmentBreakdown`), server count (`resolveStageParallelServerCount`), heterogeneous parallel & analytical throughput (`computeStageCapacityProfile`), finite-run & partial-batch planning (`computeBatchRunPlan`), shift-adjusted capacity (`computeShiftAdjustedStageCapacity`). |
+| `/src/engineering/conveyorPhysics.ts` | 234 | Physical fit guard (`LENGTH_EXCEEDS_BELT`, `WIDTH_EXCEEDS_BELT`), strict invalid physical input rejection (`INVALID_*`), belt pitch, min headway, transport capacity/min & hr, finite belt capacity, path traversal duration. |
 | `/src/engineering/conveyorWorkerAssignment.ts` | 437 | Angle normalization, cardinal station-side (`N/S/E/W`) and rotated conveyor-segment (`Side A/B`) geometric worker placement & segment resolution. |
 | `/src/engineering/oeeEngine.ts` | 95 | Formal ISO 22400 / SEMI E10 Time Hierarchy (`CT -> PDT -> SPT -> UDT/SET -> OT`) and `A × P × Q = OEE` computation (`computeOeeMetrics`). |
-| `/src/engineering/validationEngine.ts` | 301 | Shared engineering validations (`runEngineeringValidations`): calendars, conveyor-to-product physical fit, availability/MTBF/MTTR/Weibull/lognormal checks. |
+| `/src/engineering/validationEngine.ts` | 303 | Shared engineering validations (`runEngineeringValidations`): calendars, conveyor-to-product physical fit & physics integrity, availability/MTBF/MTTR/Weibull/lognormal checks. |
 
 ### 3.4 Simulation Engine & Web Worker Modules (`/src/simulation/`, `/src/workers/`)
 
 | File Path | `wc -l` | Primary Responsibility |
 | :--- | :---: | :--- |
 | `/src/simulation/desEngine.ts` | 4691 | Event-driven DES kernel (`DiscreteEventSimulationEngine`): event queue, arrivals, batching/unbatching, worker walking/allocation, accumulating conveyors, breakdown/maintenance preemption, quality/scrap/rework, KPI/analytics aggregation. |
-| `/src/simulation/timeAuditService.ts` | 808 | Shift window audit, arrival interval resolution, buffer admission guard, worker travel audit, stage setup/processing time calculation, centralized project timing audit, and final `buildAuditedSimulationKPIs` (Stage/Line OEE + bottleneck root cause). |
+| `/src/simulation/timeAuditService.ts` | 922 | Shift window audit, arrival interval resolution, buffer admission guard, worker travel audit, stage setup/processing time calculation, centralized project timing audit (with physical vs virtual isolation, shift-adjusted capacity, and shared resource flags), and final `buildAuditedSimulationKPIs` (Stage/Line OEE + bottleneck root cause). |
 | `/src/simulation/resourceCalendar.ts` | 747 | `ResourceCalendarEngine`, interval algebra (`merge`, `clip`, `subtract`, `intersect`), transition schedule builder, shift/break/maintenance validation (`validateSimulationCalendars`). |
 | `/src/simulation/resourceStateTracker.ts` | 362 | `ResourceStateTracker`: non-overlapping state interval accumulator bounded to `[0, horizonSec]` for machines, workers, and conveyors; idempotent `finalizeAt(horizon)`. |
 | `/src/simulation/failureModels.ts` | 264 | Mulberry32 PRNG (`createSeededRng`), Lanczos `gammaFn`, Method-of-Moments lognormal converter, failure parameter resolver, failure (`fixed`, `exponential`, `weibull`) & repair (`fixed`, `triangular`, `lognormal`, `exponential`) samplers. |
@@ -166,9 +166,10 @@ Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813
 
 ### 3.5 Test Suite (`/tests/*.test.ts`)
 
-14 test files (`3,610` `wc -l` total across `tests/*.test.ts`; combined `src/` + `tests/` = `36,813` lines, `57` top-level `test()` cases executed by `node`/`tsx --test`; full classification in `TEST_COVERAGE_MATRIX.md`):
+15 test files (`4,316` `wc -l` total across `tests/*.test.ts`; combined `src/` + `tests/` = `38,651` lines, `65` top-level `test()` cases executed by `node`/`tsx --test`; full classification in `TEST_COVERAGE_MATRIX.md`):
 - `benchmarksAndRegression.test.ts` (52 lines, 2 tests)
 - `capacityEngine.regression.test.ts` (172 lines, 2 tests)
+- `capacityMathematicsVerification.test.ts` (706 lines, 8 tests — Phase 1 independent analytical reference suite)
 - `conveyorAndOee.test.ts` (429 lines, 6 tests)
 - `conveyorWorkerDragAndRotation.test.ts` (402 lines, 9 tests)
 - `engineeringAuditVerification.test.ts` (874 lines, 13 tests)
@@ -248,13 +249,13 @@ Total tracked source and test code under `src/` and `tests/`: **64 files, 36,813
 
 | KPI / Analytical Output | Exact Formula / Logic | Source File & Lines | Classification |
 | :--- | :--- | :--- | :--- |
-| **Stage Base Task Time** | `max(0, proc) + max(0, load) + max(0, unload)` (preferring `stage.*` else primary processing `obj.operations.*`) | `src/engineering/capacityEngine.ts:173-176` | `Verified behavior` |
-| **Effective Batch Divisor** | `batchMode === 'collect_batch' ? max(1, round(batchSize)) : 1` (`single` forces `batchSize = 1`; `unbatch` preserves carrier size but processes 1/cycle) | `src/engineering/capacityEngine.ts:52-87` | `Verified behavior` |
-| **Parallel Server Count** | `sum(max(1, round(obj.capacity)))` strictly for `kind === 'machine' \|\| 'workstation'`; `0` if only conveyors/buffers assigned; fallback `max(1, round(stage.requiredMachines \|\| 1))` when `assignedObjects.length === 0` | `src/engineering/capacityEngine.ts:94-144` | `Verified behavior` (empty-array fallback is `Design assumption`) |
-| **Stage Effective Unit Cycle & Hourly Capacity** | `effectiveUnitCycleSec = (parallelServers > 0 && totalCycle > 0) ? (baseTask + batchTransfer) / (parallelServers * divisor) : 0`; `capPerHr = effectiveUnitCycleSec > 0 ? 3600 / effectiveUnitCycleSec : 0` | `src/engineering/capacityEngine.ts:188-194` | `Verified behavior` |
-| **Conveyor Fit, Headway & Transport Capacity** | `canFit = (prodL <= beltL + 1e-6) && (prodW <= beltW + 1e-6)`; `pitch = max(0.01, prodL + spacing)`; `minHeadway = pitch / speed`; `capPerMin = 60 / minHeadway`; `capPerHr = 3600 / minHeadway`; `physicalCap = min(declaredCap \|\| Inf, 1 + floor((beltL - prodL)/pitch))` | `src/engineering/conveyorPhysics.ts:59-97` | `Verified behavior` |
-| **Line Balance Efficiency (%)** | `min(100, (sum(effectiveCycles) / (effectiveCycles.length * bottleneckCycleSec)) * 100)` across stages with `baseTaskTimeSec > 0` | `src/simulation/timeAuditService.ts:349-379` | `Potential defect` (`0` pushed when conveyor-only stage has `baseTaskTimeSec > 0`) |
-| **Theoretical Bottleneck Cycle & Capacity** | `bottleneckCycleSec = max(profile.effectiveUnitCycleSec)` for `baseTaskTimeSec > 0`; `theoreticalHourlyCapacity = 3600 / bottleneckCycleSec`; `effectiveTheoreticalThroughputPerHour = min(theoreticalHourlyCapacity, 3600/arrivalInterval, plannedUnitsCap/activeHours)` | `src/simulation/timeAuditService.ts:349-396` | `Potential defect` (product-agnostic; misses `cycleTimeMultiplier` / `stageProcessingTimes`) |
+| **Stage Base Task Time** | Per-server `proc + load + unload` respecting heterogeneous machine overrides when machines differ; harmonic equivalent at stage level | `src/engineering/capacityEngine.ts` | `Verified behavior` |
+| **Effective Batch Divisor & Batch Rate** | `collect_batch` uses `B` (`batchCycle = baseTask + batchTransfer`, `C_batch = sum(c_i * 3600 / t_batchCycle_i)`); `single` & `unbatch` use `d = 1` (`batchTransfer = 0`). `computeBatchRunPlan` models partial end-of-run batches (`floor(Q/B)` + `Q % B`) | `src/engineering/capacityEngine.ts` | `Verified behavior` |
+| **Parallel Server Count (Physical vs Virtual)** | `physicalProcessingServerCount` sums valid positive integer capacities strictly of real non-virtual `machine`/`workstation` objects; `virtualServerCount` tracks `virt_*` or unassigned `requiredMachines >= 1` (with task time `> 0`); `0` for `requiredMachines = 0`, conveyor/buffer-only, or invalid inputs | `src/engineering/capacityEngine.ts` | `Verified behavior` |
+| **Stage Effective Unit Cycle & Hourly Capacity** | `C_stage = sum_i(c_i * 3600 * d_i / t_cycle_i)` across heterogeneous or identical parallel servers; `effectiveUnitCycleSec = 3600 / C_stage`; separates `physicalCapacityPerHour` from `virtualCapacityPerHour`; `computeShiftAdjustedStageCapacity` adjusts for scheduled shift & setup time | `src/engineering/capacityEngine.ts` | `Verified behavior` |
+| **Conveyor Fit, Headway & Transport Capacity** | `canFit = isValid && (prodL <= beltL + 1e-6) && (prodW <= beltW + 1e-6)`; rejects `<= 0` dims/speed or `< 0` spacing with `0` capacity; `pitch = prodL + spacing`; `minHeadway = pitch / speed`; `capPerMin = 60 / minHeadway`; `capPerHr = 3600 / minHeadway`; `physicalCap = min(declaredCap \|\| Inf, 1 + floor((beltL - prodL)/pitch))` | `src/engineering/conveyorPhysics.ts` | `Verified behavior` |
+| **Line Balance Efficiency (%)** | `min(100, (sum(effectiveCycles) / (effectiveCycles.length * bottleneckCycleSec)) * 100)` across active processing stages with `baseTaskTimeSec > 0 && effectiveUnitCycleSec > 0` (`RISK-03` fixed) | `src/simulation/timeAuditService.ts` | `Verified behavior` |
+| **Theoretical Bottleneck Cycle, Physical vs Shift Capacity** | `bottleneckCycleSec = max(profile.effectiveUnitCycleSec)` over active processing stages; `physicalHourlyCapacity = 0` when any processing stage lacks physical equipment; `shiftAdjustedLineCapacityUnits = min(shiftAdjustedCapacityUnits)`; flags `sharedResourceIds` | `src/simulation/timeAuditService.ts` | `Verified behavior` (`Potential defect` remains for multi-product SKU overrides `RISK-04`) |
 | **OEE Time Hierarchy & A / P / Q / OEE (%)** | `SPT = max(0, CT - PDT)`; `OT = max(0, SPT - min(SPT, UDT) - min(rem, SET))`; `A = OT/SPT * 100`; `P = min(100, (idealCycle * totalCount / OT) * 100)`; `Q = goodCount / totalCount * 100`; `OEE = A * P * Q / 10000` | `src/engineering/oeeEngine.ts:48-95` | `Verified behavior` (upper `100%` clamp on `P` is `Design assumption`) |
 | **Stage-Level OEE** | Uses pooled `downPct` / `setupPct` applied to `avgSchedSec = stageScheduledSum / objCount`, with `idealCycleTimeSec = profile.effectiveUnitCycleSec` and `totalUnitsProcessed = sa.completedCount` | `src/simulation/desEngine.ts:4275-4290`, `src/simulation/timeAuditService.ts:478-511` | `Potential defect` (uniform average across heterogeneous parallel machines) |
 | **Line-Level OEE (Homogeneous vs Heterogeneous)** | Selects bottleneck stage (heterogeneous uses min `schedSec / effectiveUnitCycleSec`), derives `lineCalendar`, `linePDT`, `lineUDT`, `lineSET`, `lineIdealCycleSec` (`bottleneckCycleSec`), and evaluates against actual line `actualProduction` and `goodUnits` | `src/simulation/timeAuditService.ts:578-731` | `Design assumption` / `Potential defect` (bottleneck-derived `Availability`, ignores multi-product cycle scaling) |

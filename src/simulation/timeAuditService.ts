@@ -18,8 +18,11 @@ import {
   evaluateConveyorPhysics,
 } from '../engineering/conveyorPhysics';
 import {
+  computeShiftAdjustedStageCapacity,
   computeStageCapacityProfile,
+  isVirtualWorkstationObject,
   resolveStageBatchConfig,
+  StageAssignmentMode,
   StageBatchConfig,
 } from '../engineering/capacityEngine';
 import {
@@ -51,12 +54,30 @@ export interface StageTimingSummary {
   stageId: string;
   stageName: string;
   baseTaskTimeSec: number;
+  setupTimeSec: number;
+  batchTransferTimeSec: number;
   batchSize: number;
+  batchMode: StageBatchConfig['batchMode'];
+  effectiveBatchDivisor: number;
   parallelCapacity: number;
+  physicalParallelCapacity: number;
+  virtualParallelCapacity: number;
+  stageAssignmentMode: StageAssignmentMode;
+  isVirtual: boolean;
+  isHeterogeneous: boolean;
   effectiveUnitCycleSec: number;
   theoreticalCapacityPerHour: number;
+  physicalCapacityPerHour: number;
+  virtualCapacityPerHour: number;
+  theoreticalBatchCapacityPerHour: number;
+  netScheduledSec: number;
+  netProductionAfterSetupSec: number;
+  shiftAdjustedCapacityUnits: number;
+  shiftAdjustedDiscreteUnits: number;
+  shiftAdjustedHourlyCapacity: number;
   requiredWorkers: number;
   bufferCapacity: number;
+  isValid: boolean;
 }
 
 export interface ProjectTimingAudit {
@@ -68,8 +89,15 @@ export interface ProjectTimingAudit {
   bottleneckStageName?: string;
   bottleneckCycleSec: number;
   theoreticalHourlyCapacity: number;
+  physicalHourlyCapacity: number;
+  hasVirtualStages: boolean;
+  virtualStageIds: string[];
+  shiftBottleneckStageId?: string;
+  shiftAdjustedLineCapacityUnits: number;
   effectiveTheoreticalThroughputPerHour: number;
   lineBalanceEfficiencyPct: number;
+  hasSharedResources: boolean;
+  sharedResourceIds: string[];
   stages: StageTimingSummary[];
 }
 
@@ -322,36 +350,83 @@ export function computeWorkerTravelAudit(
  * Centralized industrial engineering audit delegating stage capacity math to capacityEngine.ts.
  */
 export function auditProjectTiming(project: ProjectData, simClockSec?: number): ProjectTimingAudit {
+  const horizonSec = simClockSec ?? project.simulationConfig.durationSec;
   const shiftAudit = computeShiftWindowAudit(
     project.simulationConfig,
     project.products[0],
-    simClockSec ?? project.simulationConfig.durationSec,
+    horizonSec,
     project.layoutObjects,
     project.products
   );
   const objectsMap = new Map(project.layoutObjects.map((o) => [o.id, o]));
+  const calEngine = new ResourceCalendarEngine(project.simulationConfig, horizonSec);
 
   const stages: StageTimingSummary[] = [];
   const effectiveCycles: number[] = [];
+  const virtualStageIds: string[] = [];
+  const physicalObjUsageCounts = new Map<string, number>();
+
   let totalTaskTimeSec = 0;
   let bottleneckStageId: string | undefined;
   let bottleneckStageName: string | undefined;
   let bottleneckCycleSec = 0;
+  let shiftBottleneckStageId: string | undefined;
+  let minShiftCapacityUnits = Infinity;
+  let maxPhysicalCycleSec = 0;
+  let hasActiveProcessingStages = false;
 
   for (const st of project.stages) {
-    const assignedObjs = st.assignedObjectIds
-      .map((oid) => objectsMap.get(oid))
-      .filter((o): o is LayoutObject => Boolean(o));
+    const seenIds = new Set<string>();
+    const assignedObjs: LayoutObject[] = [];
+    for (const oid of st.assignedObjectIds) {
+      if (seenIds.has(oid)) continue;
+      seenIds.add(oid);
+      const obj = objectsMap.get(oid);
+      if (obj) {
+        assignedObjs.push(obj);
+        if ((obj.kind === 'machine' || obj.kind === 'workstation') && !isVirtualWorkstationObject(obj)) {
+          physicalObjUsageCounts.set(obj.id, (physicalObjUsageCounts.get(obj.id) ?? 0) + 1);
+        }
+      }
+    }
 
     const profile = computeStageCapacityProfile(st, assignedObjs);
-    totalTaskTimeSec += (profile.baseTaskTimeSec + profile.batchTransferTimeSec) / profile.effectiveBatchDivisor;
+    const serverSchedMap: Record<string, number> = {};
+    for (const sp of profile.serverProfiles) {
+      const obj = objectsMap.get(sp.objectId);
+      if (obj) {
+        serverSchedMap[sp.objectId] = calEngine.getObjectCalendarMetrics(obj, horizonSec).scheduledProductionTimeSec;
+      }
+    }
 
-    if (profile.baseTaskTimeSec > 0) {
+    const shiftCap = computeShiftAdjustedStageCapacity(profile, {
+      netScheduledTimeSec: shiftAudit.activeSimTimeSec,
+      serverScheduledTimeSec: serverSchedMap,
+    });
+
+    if (profile.isValid && profile.effectiveUnitCycleSec > 0) {
+      totalTaskTimeSec += (profile.baseTaskTimeSec + profile.batchTransferTimeSec) / profile.effectiveBatchDivisor;
+    }
+
+    if (profile.baseTaskTimeSec > 0 && profile.effectiveUnitCycleSec > 0 && profile.theoreticalCapacityPerHour > 0) {
+      hasActiveProcessingStages = true;
       effectiveCycles.push(profile.effectiveUnitCycleSec);
       if (profile.effectiveUnitCycleSec > bottleneckCycleSec) {
         bottleneckCycleSec = profile.effectiveUnitCycleSec;
         bottleneckStageId = st.id;
         bottleneckStageName = st.name;
+      }
+      if (profile.isVirtual) {
+        virtualStageIds.push(st.id);
+      } else if (profile.physicalCapacityPerHour > 0) {
+        const physUnitCycle = 3600 / profile.physicalCapacityPerHour;
+        if (physUnitCycle > maxPhysicalCycleSec) {
+          maxPhysicalCycleSec = physUnitCycle;
+        }
+      }
+      if (shiftCap.shiftAdjustedCapacityUnits < minShiftCapacityUnits) {
+        minShiftCapacityUnits = shiftCap.shiftAdjustedCapacityUnits;
+        shiftBottleneckStageId = st.id;
       }
     }
 
@@ -359,14 +434,36 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
       stageId: st.id,
       stageName: st.name,
       baseTaskTimeSec: profile.baseTaskTimeSec,
+      setupTimeSec: profile.setupTimeSec,
+      batchTransferTimeSec: profile.batchTransferTimeSec,
       batchSize: profile.batchSize,
+      batchMode: profile.batchMode,
+      effectiveBatchDivisor: profile.effectiveBatchDivisor,
       parallelCapacity: profile.parallelServers,
+      physicalParallelCapacity: profile.physicalProcessingServersCount,
+      virtualParallelCapacity: profile.virtualServerCount,
+      stageAssignmentMode: profile.stageAssignmentMode,
+      isVirtual: profile.isVirtual,
+      isHeterogeneous: profile.isHeterogeneous,
       effectiveUnitCycleSec: profile.effectiveUnitCycleSec,
       theoreticalCapacityPerHour: profile.theoreticalCapacityPerHour,
+      physicalCapacityPerHour: profile.physicalCapacityPerHour,
+      virtualCapacityPerHour: profile.virtualCapacityPerHour,
+      theoreticalBatchCapacityPerHour: profile.theoreticalBatchCapacityPerHour,
+      netScheduledSec: shiftCap.netScheduledTimeSec,
+      netProductionAfterSetupSec: shiftCap.netProductionTimeSec,
+      shiftAdjustedCapacityUnits: shiftCap.shiftAdjustedCapacityUnits,
+      shiftAdjustedDiscreteUnits: shiftCap.shiftAdjustedDiscreteUnits,
+      shiftAdjustedHourlyCapacity: shiftCap.shiftAdjustedHourlyCapacity,
       requiredWorkers: st.requiredWorkers,
       bufferCapacity: Math.max(0, Number(st.bufferCapacity ?? 0)),
+      isValid: profile.isValid,
     });
   }
+
+  const sharedResourceIds = Array.from(physicalObjUsageCounts.entries())
+    .filter(([, count]) => count > 1)
+    .map(([id]) => id);
 
   const lineBalanceEfficiencyPct =
     effectiveCycles.length > 0 && bottleneckCycleSec > 0
@@ -382,6 +479,16 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
     shiftAudit.plannedUnits > 0 ? shiftAudit.fullShiftNetSec / shiftAudit.plannedUnits : 0;
   const theoreticalHourlyCapacity =
     bottleneckCycleSec > 0 ? 3600 / bottleneckCycleSec : 0;
+
+  const hasVirtualStages = virtualStageIds.length > 0;
+  const physicalHourlyCapacity =
+    !hasActiveProcessingStages || hasVirtualStages || maxPhysicalCycleSec <= 0
+      ? 0
+      : 3600 / maxPhysicalCycleSec;
+
+  const shiftAdjustedLineCapacityUnits = Number.isFinite(minShiftCapacityUnits)
+    ? minShiftCapacityUnits
+    : 0;
 
   const feedRatePerHour = 3600 / shiftAudit.arrivalIntervalSec;
   const activeHours = Math.max(1e-6, shiftAudit.activeSimTimeSec / 3600);
@@ -404,10 +511,17 @@ export function auditProjectTiming(project: ProjectData, simClockSec?: number): 
     bottleneckStageName,
     bottleneckCycleSec,
     theoreticalHourlyCapacity,
+    physicalHourlyCapacity,
+    hasVirtualStages,
+    virtualStageIds,
+    shiftBottleneckStageId,
+    shiftAdjustedLineCapacityUnits,
     effectiveTheoreticalThroughputPerHour: Number.isFinite(effectiveTheoreticalThroughputPerHour)
       ? effectiveTheoreticalThroughputPerHour
       : 0,
     lineBalanceEfficiencyPct,
+    hasSharedResources: sharedResourceIds.length > 0,
+    sharedResourceIds,
     stages,
   };
 }

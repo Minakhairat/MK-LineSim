@@ -1,8 +1,8 @@
 # MK LineSim — Test Coverage Matrix & Verification Gaps
 
-**Program Phase:** Phase 0, 0.1, 0.2, 0.2.2 & 0.2.3 (Engineering Baseline, Lockfile Reconciliation & CI Evidence Closure)  
+**Program Phase:** Phase 0–0.2.3 & Phase 1 (Industrial Capacity Mathematics Verification)  
 **Target System:** MK LineSim (`https://github.com/Minakhairat/MK-LineSim`)  
-**Execution Evidence:** Local `npm test` (`tsx --test tests/*.test.ts`, Phase 0.2.2) -> **`57/57` passed, `0` failed, `0` skipped (`4051.55 ms`, exit code `0`)**; Remote GitHub Actions `Deploy MK LineSim to GitHub Pages` Run `#17` (commit `a36d723`, `main`) -> **`Success` (`47s`)**.
+**Execution Evidence:** Local `npm test` (`tsx --test tests/*.test.ts`, Phase 1) -> **`65/65` passed, `0` failed, `0` skipped (`4036.90 ms`, exit code `0`)**; Remote GitHub Actions `Deploy MK LineSim to GitHub Pages` Run `#17` (commit `a36d723`, `main`) -> **`Success` (`47s`)**.
 
 ---
 
@@ -12,6 +12,7 @@
 | :--- | :---: | :---: | :--- | :--- |
 | `tests/benchmarksAndRegression.test.ts` | 52 | 2 | Full DES Suite Regression & Sample Project Migration | Executes all 16 embedded benchmarks (`runAllEngineeringBenchmarks()`) with 0 failures; validates/simulates/migrates `createDesertAirCoolerProject()`. |
 | `tests/capacityEngine.regression.test.ts` | 172 | 2 | Capacity Math & DES Throughput Scaling | Scenario A1 (buffers, conveyors, storage, vehicles, duplicate IDs never inflate server count); Scenario A2 (2 true parallel machines double analytical capacity & DES throughput). |
+| `tests/capacityMathematicsVerification.test.ts` | 706 | 8 | Phase 1 Analytical Capacity Reference Verification | Independent analytical reference tests with explicit derivation, expected, actual, absError & relError across Reqs 1–8: single machine, identical parallel, heterogeneous parallel (`60s+30s=180 u/hr`), sequential bottleneck (`75%` balance + `RISK-03`), independent conveyor & invalid input rejection, physical vs virtual vs unassigned vs non-processing isolation, batch modes + partial end-of-run batches, setup + shift-adjusted capacity + zero double-counting. |
 | `tests/conveyorAndOee.test.ts` | 429 | 6 | Conveyor Physics, Accumulating DES & OEE Time Hierarchy | Physical belt fit guard (`LENGTH_EXCEEDS_BELT`, `WIDTH_EXCEEDS_BELT`), headway/capacity, `computeOeeMetrics` hierarchy, non-overlap at rapid arrivals, accumulating pitch hold behind blocked leader, multi-slot spatial separation. |
 | `tests/conveyorWorkerDragAndRotation.test.ts` | 402 | 9 | Worker Ergonomics, Geometry, Accounting & Schema Migration | `normalizeRotationDeg`, perpendicular conveyor-segment worker placement, DES tracking, `rotation`/`rotationDeg` & `assignedTo`/`assignedStationId` sync, exclusion of passive belt transit & breakdown repair from worker Busy, N/S/E/W & Side B persistence, `capacity=2` `idealUnitCycleSec` amortization. |
 | `tests/engineeringAuditVerification.test.ts` | 874 | 13 | Core Acceptance Suite, Line OEE, OBB SAT & Regression Fixes | Tests 1–8 (60 u/hr single, 120 u/hr parallel, 90 u/hr bottleneck, 120 u/min conveyor & 0-machine isolation, MTBF=3600/MTTR=180 availability `95.238%`, formal 90% Quality OEE, 7h shift `25200s`, heterogeneous Line OEE separation), 2D OBB SAT rotated collision, NaN/migration rejection, stage-specific bottleneck `assignedObjectIds`, `availability=0` zero-running, `Number.isInteger()` enforcement. |
@@ -24,7 +25,7 @@
 | `tests/resourceSpecificCalendar.test.ts` | 244 | 3 | Resource-Specific Shifts & Conveyor Manual Stages | Invalid explicit `shiftId`/`operatingSchedule` stays unavailable (no plant fallback); `heatmap.ts` per-resource denominator; manual inspection/work on conveyor stages via `importFlowchartToSimulationData` & DES. |
 | `tests/resourceStateAccounting.test.ts` | 184 | 2 | State Conservation & Off-Shift/Break Attribution | `ResourceStateTracker` `unavailable` separation & idempotent `finalizeAt`; Scenario C1 DES off-shift/break horizon conservation (`total === horizon`). |
 | `tests/resourceStateTracker.test.ts` | 86 | 3 | State Tracker Boundary Safety | Unfinished interval closure at horizon, non-monotonic/out-of-horizon guards, worker & conveyor state totals. |
-| **Total** | **3,610 (`wc -l`)** | **57** | **10 Engineering Domains** | **57/57 passing (`0` fail, `0` skip) via `npm test`** |
+| **Total** | **4,316 (`wc -l`)** | **65** | **10 Engineering Domains** | **65/65 passing (`0` fail, `0` skip) via `npm test`** |
 
 ---
 
@@ -57,7 +58,7 @@
 
 | Engineering / Software Domain | Current Coverage Status | Classification | Identified Missing Verification Gaps |
 | :--- | :---: | :--- | :--- |
-| **1. Capacity & Batching** | High (`10+` tests + 4 benchmarks) | `Verified behavior` / `Missing verification` | Missing test for `batchSize > 1` with `stage.requiredMachines = 0` unassigned fallback (`capacityEngine.ts:100`), and missing check for manual-work-on-conveyor (`baseTaskTimeSec > 0`, `parallelServers = 0`) effect on `auditProjectTiming.lineBalanceEfficiencyPct`. |
+| **1. Capacity & Batching** | High (`18+` tests + 4 benchmarks) | `Verified behavior` (Phase 1 analytical math complete) | Analytical math verified for single, identical & heterogeneous parallel machines, sequential bottleneck/balance (`RISK-03` resolved), virtual vs physical isolation (`RISK-15` resolved), partial end-of-run batches, setup/shift-adjusted capacity, and invalid physical input rejection. DES multi-product cycle overrides (`RISK-04`) remain for DES/OEE phases. |
 | **2. Core DES Flow & Blocking** | High (`12+` tests + 4 benchmarks) | `Verified behavior` / `Missing verification` | Missing test verifying `bufferCapacity = 0` survives `importFlowchartToSimulationData` / `autoWireProjectForSimulation` / `useAppStore.startSimulation` (currently fails due to `RISK-02`: `bufferCapacity < 1 -> 4`); missing non-linear manual flowchart DAGs (parallel split/merge routing, rework loops, unreachable nodes). |
 | **3. Conveyor Physics & Ergonomics** | High (`12+` tests + 1 benchmark) | `Verified behavior` / `Missing verification` | Missing multi-conveyor chained junctions, 90°/270° rotated conveyors with non-accumulating vs accumulating transitions, and `workstationEnabled` conveyor inspection stops under breakdowns/breaks. |
 | **4. OEE Hierarchy (Resource/Stage/Line)** | High (`8+` tests + 2 benchmarks) | `Verified behavior` / `Missing verification` | Missing Stage OEE test with heterogeneous parallel machines inside a **single stage** (`RISK-09`); missing multi-product Line OEE with differing `cycleTimeMultiplier` / `stageProcessingTimes` (`RISK-04`); missing `avgBatchSize` verification when downstream stage produces scrap (`RISK-10`). |
@@ -81,7 +82,7 @@
    - Verifies compile-time TypeScript consistency across `src/` and `tests/` (`exit 0`).
    - **Boundary:** Executes `tsc --noEmit` with `"strict": false` (`tsconfig.json`) — it does **not** run ESLint or style/lint rule sets.
 3. **Automated Software Regression & Engineering Tests (`npm test` -> `tsx --test tests/*.test.ts`)**:
-   - Executes all `57` Node/`tsx` tests (`0` fail, `0` skip) covering unit/regression logic and the 16 embedded benchmarks.
+   - Executes all `65` Node/`tsx` tests (`0` fail, `0` skip) covering unit/regression logic, Phase 1 independent analytical capacity verification, and the 16 embedded benchmarks.
    - **Boundary:** Passing `npm test` verifies existing software regression checks only; it does **not** establish complete physical/real-world simulation validity, Web Worker sliced execution parity (`simWorker.ts`), DOM/UI component behavior, or WebGL/CAD rendering.
 4. **Production Bundle & PWA Verification (`npm run build` -> `vite build`)**:
    - Verifies Vite client + worker bundling and `vite-plugin-pwa` Service Worker generation (`dist/sw.js`).

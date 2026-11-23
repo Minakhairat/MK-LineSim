@@ -157,7 +157,9 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
           messageAr:
             fit.fitErrorCode === 'LENGTH_EXCEEDS_BELT'
               ? `طول المنتج "${prod.name}" (${fit.productLengthM.toFixed(2)}م) يتجاوز طول السير "${conv.name}" (${fit.beltLengthM.toFixed(2)}م).`
-              : `عرض المنتج "${prod.name}" (${fit.productWidthM.toFixed(2)}م) يتجاوز عرض السير "${conv.name}" (${fit.beltWidthM.toFixed(2)}م).`,
+              : fit.fitErrorCode === 'WIDTH_EXCEEDS_BELT'
+              ? `عرض المنتج "${prod.name}" (${fit.productWidthM.toFixed(2)}م) يتجاوز عرض السير "${conv.name}" (${fit.beltWidthM.toFixed(2)}م).`
+              : `معاملات السير أو المنتج على "${conv.name}" غير صالحة فيزيائياً.`,
           recommendation: `Widen or lengthen conveyor "${conv.name}" or adjust product "${prod.name}" dimensions.`,
           recommendationAr: `قم بزيادة عرض أو طول السير "${conv.name}" أو تعديل أبعاد المنتج "${prod.name}".`,
           resourceName: conv.name,
