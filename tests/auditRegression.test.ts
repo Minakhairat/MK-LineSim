@@ -239,3 +239,23 @@ test('availability 0 with MTBF/MTTR set raises a reliability conflict warning; s
   m.operations.availability = 0; m.operations.mtbfSec = 3600; m.operations.mttrSec = 300;
   assert.ok(runEngineeringValidations(p).some((i) => i.code === 'CONFLICTING_RELIABILITY_PARAMS' && i.targetId === m.id));
 });
+
+test('scenario target production 0 keeps the unlimited meaning; positive values still apply', () => {
+  const p: any = createDesertAirCoolerProject();
+  p.simulationConfig.maxPlannedUnits = 0;
+  const ov = { workerCount: 10, processingTimeScale: 1, conveyorSpeedMps: 0.5, shiftDurationSec: 28800, enableBreakdowns: false, targetProduction: 0 } as any;
+  const q = applyScenarioOverrides(p, ov);
+  assert.equal(q.simulationConfig.maxPlannedUnits, 0);
+  assert.ok(new DiscreteEventSimulationEngine(q).runToCompletion().kpis.goodUnits > 100);
+  assert.equal(applyScenarioOverrides(p, { ...ov, targetProduction: 50 }).simulationConfig.maxPlannedUnits, 50);
+});
+
+test('avgBatchSize reports units per batch at the batch stage even with scrap', () => {
+  for (const sc of [0, 0.25]) {
+    const p: any = createDesertAirCoolerProject();
+    p.stages.forEach((s: any) => { s.scrapRate = 0; s.reworkProbability = 0; });
+    p.stages.find((s: any) => s.id === 'stg_7_packing').scrapRate = sc;
+    const r: any = new DiscreteEventSimulationEngine(p).runToCompletion();
+    assert.ok(Math.abs(r.kpis.avgBatchSize - 4) < 0.05, `scrap ${sc}: ${r.kpis.avgBatchSize}`);
+  }
+});
