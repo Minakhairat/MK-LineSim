@@ -686,15 +686,35 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
       const colW = tableW * weights[i];
       ctx.fillStyle = '#0f172a';
       ctx.font = i === 0 ? `bold 15px ${FONT_STACK}` : `500 15px ${FONT_STACK}`;
-      if (isAr) {
-        ctx.textAlign = i === 0 ? 'right' : 'center';
-        ctx.fillText(v, i === 0 ? cx - 12 : cx - colW / 2, ry + rowH / 2, colW - 10);
-        cx -= colW;
+      const x = isAr ? (i === 0 ? cx - 12 : cx - colW / 2) : i === 0 ? cx + 12 : cx + colW / 2;
+      ctx.textAlign = isAr ? (i === 0 ? 'right' : 'center') : i === 0 ? 'left' : 'center';
+      if (i === 0) {
+        // Scenario names wrap to at most two lines instead of being squeezed into one; a name longer than two lines ends with an ellipsis.
+        ctx.font = `bold 14px ${FONT_STACK}`;
+        const maxW = colW - 24;
+        const words = v.split(/\s+/);
+        const lines: string[] = [];
+        let cur = '';
+        for (const wd of words) {
+          const t = cur ? `${cur} ${wd}` : wd;
+          if (cur && ctx.measureText(t).width > maxW) {
+            lines.push(cur);
+            cur = wd;
+          } else cur = t;
+        }
+        if (cur) lines.push(cur);
+        if (lines.length > 2) {
+          let last = lines.slice(1).join(' ');
+          while (last.length > 1 && ctx.measureText(`${last}\u2026`).width > maxW) last = last.slice(0, -1);
+          lines.length = 1;
+          lines.push(`${last}\u2026`);
+        }
+        if (lines.length === 1) ctx.fillText(lines[0], x, ry + rowH / 2, maxW);
+        else lines.forEach((ln, li) => ctx.fillText(ln, x, ry + rowH / 2 + (li === 0 ? -9 : 9), maxW));
       } else {
-        ctx.textAlign = i === 0 ? 'left' : 'center';
-        ctx.fillText(v, i === 0 ? cx + 12 : cx + colW / 2, ry + rowH / 2, colW - 10);
-        cx += colW;
+        ctx.fillText(v, x, ry + rowH / 2, colW - 10);
       }
+      cx += isAr ? -colW : colW;
     });
   });
 
