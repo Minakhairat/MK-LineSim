@@ -141,3 +141,19 @@ test('Partly overlapping routes (neither nested nor disjoint) get no weighted fi
   const r = run(indepFixture((ids) => ids.slice(2, 6)));
   assert.equal(r.kpis.oeeMixedTimeWeighted, undefined);
 });
+
+// Independent lines with downtime (Availability below 100%): breakdowns switched on with the sample
+// project's own machine failure settings (enableBreakdowns, seed 1). Recorded: A 107 good + 5 scrap, B 110 + 1, scheduled 27000 s,
+// operating 22948.21 s (unplanned 4051.79 s is counted at line level for the whole project, so it also lowers the other line in the A/P split).
+// Hand: OEE = ideal good time / (2 lines x scheduled) = (60 x 107 + 40 x 110) / 54000 = 20.04%, whatever the operating time,
+// because operating time cancels in A x P x Q. Performance = (60 x 112 + 40 x 111) / (2 x 22948.21) = 24.32%.
+test('Independent lines with downtime: final OEE equals good output time over planned time of all lines', () => {
+  const p = indepFixture((ids) => ids.slice(4));
+  p.simulationConfig.enableBreakdowns = true; p.simulationConfig.randomSeed = 1;
+  const r = run(p);
+  const [A, B] = r.productAnalytics;
+  assert.deepEqual([A.completedGoodQty, A.scrappedQty, B.completedGoodQty, B.scrappedQty], [107, 5, 110, 1]);
+  assert.ok(r.kpis.availabilityPct < 100);
+  near(r.kpis.oeePct, ((60 * 107 + 40 * 110) / 54000) * 100);
+  near(r.kpis.performancePct, ((60 * 112 + 40 * 111) / (2 * r.kpis.operatingTimeSec)) * 100);
+});
