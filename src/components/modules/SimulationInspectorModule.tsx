@@ -1,3 +1,4 @@
+import { isStalledResult, stallLocationNames } from '../../utils/units';
 import React, { useState } from 'react';
 import { Flame, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
@@ -25,7 +26,9 @@ export const SimulationInspectorModule: React.FC = () => {
   const [editingBreakId, setEditingBreakId] = useState<string | null>(null);
 
   const shift = project.simulationConfig.shifts[0];
-  const bottleneckId = simSnapshot.result?.kpis.bottleneckStageId;
+  const stalledRun = isStalledResult(simSnapshot.result);
+  // A stalled run has no established bottleneck; do not tag a stage as one.
+  const bottleneckId = stalledRun ? undefined : simSnapshot.result?.kpis.bottleneckStageId;
   const activeHeatWindowSec = resolveHeatmapActiveTimeSec(
     project.simulationConfig,
     project.products[0],
@@ -451,6 +454,7 @@ export const SimulationInspectorModule: React.FC = () => {
             const actRate = kpis.throughputPerHour ?? 0;
             const ratioPct = theoRate > 0 ? Math.min(100, Math.max(0, (actRate / theoRate) * 100)) : 100;
             const bnShifted =
+              !stalledRun &&
               kpis.theoreticalBottleneckStageId &&
               kpis.bottleneckStageId &&
               kpis.theoreticalBottleneckStageId !== kpis.bottleneckStageId;
@@ -539,11 +543,17 @@ export const SimulationInspectorModule: React.FC = () => {
                       {t.simInspector.measuredBottleneck}:
                     </span>
                     <span className="font-semibold text-red-600 dark:text-red-400 truncate">
-                      {kpis.bottleneckStageName || '—'}
+                      {stalledRun ? (isAr ? 'غير محدد (تعليق)' : 'n/a (stall)') : kpis.bottleneckStageName || '—'}
                     </span>
                   </div>
                   <div className="mt-1 text-[10px] opacity-90">
-                    {bnShifted ? t.simInspector.bottleneckShifted : t.simInspector.bottleneckMatched}
+                    {stalledRun
+                      ? isAr
+                        ? `تعليق في النموذج عند (${stallLocationNames(simSnapshot.result) || '—'}). لم يُحدد اختناق.`
+                        : `Modeled stall at (${stallLocationNames(simSnapshot.result) || '—'}). No bottleneck established.`
+                      : bnShifted
+                      ? t.simInspector.bottleneckShifted
+                      : t.simInspector.bottleneckMatched}
                   </div>
                 </div>
 
