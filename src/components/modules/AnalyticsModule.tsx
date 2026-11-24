@@ -362,8 +362,9 @@ export const AnalyticsModule: React.FC = () => {
             </h3>
             <span className="text-[11px] font-mono-tabular text-neutral-500">
               {t.labels.oee}: {(k.oeePct ?? 0).toFixed(1)}% ={' '}
-              {(k.availabilityPct ?? 0).toFixed(1)}% × {(k.performancePct ?? 0).toFixed(1)}% ×{' '}
-              {(k.qualityPct ?? 100).toFixed(1)}%
+              {(k.availabilityPct ?? 0).toFixed(1)}% ×{' '}
+              {(k.actualProduction ?? 0) > 0 ? `${(k.performancePct ?? 0).toFixed(1)}%` : '—'} ×{' '}
+              {(k.actualProduction ?? 0) > 0 ? `${(k.qualityPct ?? 100).toFixed(1)}%` : '—'}
             </span>
           </div>
 
@@ -383,13 +384,13 @@ export const AnalyticsModule: React.FC = () => {
             <div>
               <div className="text-[11px] text-neutral-500">{t.labels.performance}</div>
               <div className="text-base font-semibold font-mono-tabular text-neutral-900 dark:text-neutral-100">
-                {(k.performancePct ?? 0).toFixed(1)}%
+                {(k.actualProduction ?? 0) > 0 ? `${(k.performancePct ?? 0).toFixed(1)}%` : '—'}
               </div>
             </div>
             <div>
               <div className="text-[11px] text-neutral-500">{t.labels.quality}</div>
               <div className="text-base font-semibold font-mono-tabular text-emerald-700 dark:text-emerald-400">
-                {(k.qualityPct ?? 100).toFixed(1)}%
+                {(k.actualProduction ?? 0) > 0 ? `${(k.qualityPct ?? 100).toFixed(1)}%` : '—'}
               </div>
             </div>
           </div>
