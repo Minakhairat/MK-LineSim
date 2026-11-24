@@ -728,7 +728,7 @@ export interface SimulationResult {
   recentEvents: SimEvent[];
   totalEventsExecuted: number;
   /** Post-run: batch stages left holding units that can never complete a batch. Set only for completed runs. */
-  stallWarnings?: Array<{ stageId: string; heldUnits: number }>;
+  stallWarnings?: Array<{ stageId: string; heldUnits: number; kind: 'batch_starved' | 'blocking_cycle' }>;
 }
 
 export interface StageBatchSnapshot {

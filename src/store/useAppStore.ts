@@ -1433,15 +1433,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       }));
       await saveProjectToDb(get().project);
       if (result.stallWarnings && result.stallWarnings.length > 0) {
-        const names = result.stallWarnings
-          .map((w) => get().project.stages.find((st) => st.id === w.stageId)?.name || w.stageId)
-          .join(', ');
-        setToast(
-          language === 'ar'
-            ? `تحذير: تعليق في تجميع الدُفعات عند (${names}). وحدات محجوزة ولا تكتمل دفعتها، فالنتائج غير صالحة. زِد سعة المخزن.`
-            : `Warning: batch stall at (${names}). Units are held and cannot complete a batch, so results are not valid. Increase the buffer capacity.`,
-          'error'
-        );
+        const nameOf = (id: string) => get().project.stages.find((st) => st.id === id)?.name || id;
+        const batch = result.stallWarnings.filter((w) => w.kind === 'batch_starved').map((w) => nameOf(w.stageId));
+        const cyc = result.stallWarnings.filter((w) => w.kind === 'blocking_cycle').map((w) => nameOf(w.stageId));
+        const ar: string[] = [];
+        const en: string[] = [];
+        if (batch.length > 0) {
+          ar.push(`تعليق في تجميع الدُفعات عند (${batch.join(', ')}): المخزن ممتلئ بوحدات مفيهاش دفعة كاملة من نفس المنتج ووحدات تانية واقفة وراه، فالإنتاج بيقف من نقطة معينة والنتيجة أقل من الحقيقي. زِد سعة المخزن أو غيّر حجم الدفعة أو خليط المنتجات.`);
+          en.push(`batch stall at (${batch.join(', ')}): the buffer is full of units with no complete batch of one product and other units are blocked behind it, so output stops from some point and this run understates production. Increase the buffer, or change the batch size or product mix.`);
+        }
+        if (cyc.length > 0) {
+          ar.push(`انسداد متبادل بين مراحل (${cyc.join(', ')}): وحدات منتظرة بعضها فالتشغيل واقف عندها.`);
+          en.push(`blocking deadlock between stages (${cyc.join(', ')}): units are waiting on each other and cannot move.`);
+        }
+        setToast(language === 'ar' ? `تحذير: ${ar.join(' ')}` : `Warning: ${en.join(' ')}`, 'error');
         return result;
       }
       setToast(

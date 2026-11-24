@@ -5528,7 +5528,13 @@ export class DiscreteEventSimulationEngine {
       const perProd = new Map<string, number>();
       for (const h of holder) perProd.set(h.productId, (perProd.get(h.productId) || 0) + h.units);
       if ([...perProd.values()].some((u) => u >= batchCfg.batchSize)) continue;
-      if (this.getActiveDispatchableProducts().length > 0 || this.calendarEngine.isPlantShiftActiveAt(now)) {
+      const holderUnits = holder.reduce((sum, h) => sum + h.units, 0);
+      const unitsBlockedBehind = activeWipUnits > holderUnits;
+      if (
+        unitsBlockedBehind ||
+        this.getActiveDispatchableProducts().length > 0 ||
+        this.calendarEngine.isPlantShiftActiveAt(now)
+      ) {
         deadlocks.push({ stageIds: [sid], objectIds: [], entityIds: holder.map((h) => h.entityId) });
       }
     }
@@ -6381,7 +6387,11 @@ export class DiscreteEventSimulationEngine {
       stallWarnings:
         this.status === 'completed'
           ? this.auditInvariants().deadlocks.flatMap((d) =>
-              d.stageIds.map((stageId) => ({ stageId, heldUnits: d.entityIds.length }))
+              d.stageIds.map((stageId) => ({
+                stageId,
+                heldUnits: d.entityIds.length,
+                kind: d.objectIds.length > 0 ? ('blocking_cycle' as const) : ('batch_starved' as const),
+              }))
             )
           : undefined,
     };
