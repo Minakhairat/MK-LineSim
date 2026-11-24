@@ -205,11 +205,11 @@ export const BottomSimPanel: React.FC = () => {
         </div>
 
         {/* Timeline Scrub / Clock */}
-        <div className="flex flex-1 items-center gap-2 sm:gap-3 min-w-[140px] max-w-md">
+        <div className="flex flex-1 items-center gap-2 sm:gap-3 min-w-0 max-w-md overflow-hidden">
           <span className="text-[11px] sm:text-xs font-mono-tabular text-neutral-700 dark:text-neutral-200 whitespace-nowrap">
             {formatDuration(simSnapshot.clockSec)} / {formatDuration(duration)}
           </span>
-          <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800 hidden xs:block sm:block">
+          <div className="h-2 flex-1 min-w-[12px] overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800 hidden xs:block sm:block">
             <div
               className="h-full bg-red-600 transition-all duration-150"
               style={{ width: `${progressPct}%` }}
@@ -223,7 +223,7 @@ export const BottomSimPanel: React.FC = () => {
         </div>
 
         {/* Live KPI summary & Event Log Toggle */}
-        <div className="flex items-center gap-2 sm:gap-4 text-xs font-mono-tabular">
+        <div className="flex shrink-0 items-center gap-2 sm:gap-4 text-xs font-mono-tabular">
           <div className="flex items-center gap-2 sm:gap-3 text-neutral-700 dark:text-neutral-300">
             <span>
               {t.labels.good}: <strong className="text-neutral-950 dark:text-white">{kpis?.goodUnits ?? 0}</strong>
