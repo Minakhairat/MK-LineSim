@@ -424,7 +424,11 @@ export const AnalyticsModule: React.FC = () => {
               data-testid="oee-mixed-note"
               className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
             >
-              {k.oeeMixedTimeWeighted
+              {stalledRun
+                ? language === 'ar'
+                  ? 'أكتر من منتج: التشغيل اتعلّق في النموذج، فـPerformance وQuality مش معرّفين وOEE المعروض مش مقياس للمصنع. راجع تحذير التعليق فوق، وده مش قياس من مصنع حقيقي.'
+                  : 'More than one product: the modeled run stalled, so Performance and Quality are undefined and the OEE shown is not a plant measure. See the stall warning above. This is a model result, not a measurement from a real plant.'
+                : k.oeeMixedTimeWeighted
                 ? language === 'ar'
                   ? `أكتر من منتج (حالة مدعومة: كل المنتجات تلقائي وبنفس المسار الكامل): Performance وQuality وOEE محسوبين بزمن الدورة المثالي لكل منتج (موزونين بالزمن). نسبة الوحدات السليمة بالعدد: ${(k.unitYieldPct ?? 0).toFixed(1)}٪ (مقياس منفصل). الحالات خارج النطاق ده (مسار يدوي أو مسار جزئي) لسه بالعدد.`
                   : `More than one product (supported case: all products auto-routed over the full route): Performance, Quality and OEE are weighted by each product's own ideal cycle (time-weighted). Unit yield by count: ${(k.unitYieldPct ?? 0).toFixed(1)}% (a separate metric). Cases outside this scope (manual or partial routes) are still count-based.`
