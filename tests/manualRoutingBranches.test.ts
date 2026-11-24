@@ -166,8 +166,9 @@ test('Split and rejoin with unequal branches stays within the hand bound and con
   }
 });
 
-// Documents current engine semantics: for a product with routingMode 'manual' only the entry stage is taken from the product;
-// the next stage is chosen from the shared stage graph (successorIds), not from the product's own routeStageIds.
+// KNOWN LIMITATION, NOT CORRECT BEHAVIOUR: this test records what the engine does today and must be updated if routing is fixed.
+// For a product with routingMode 'manual' only the entry stage is taken from the product; the next stage is chosen from the
+// shared stage graph (successorIds), not from the product's own routeStageIds. Passing here does not mean the routing is right.
 // Evidence: product B declares route s1 -> sb -> s4, yet completes more than sb alone could process (3600/40 = 90).
 test('Manual-routing semantics: per-product routeStageIds are not used after the entry stage', () => {
   const { r, audit } = graph(2, 2);
