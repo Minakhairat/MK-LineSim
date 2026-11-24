@@ -261,6 +261,9 @@ function draw2DPlanOnCanvas(
     ctx.font = `600 13px ${FONT_STACK}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    // Keep the label readable: the box keeps its true orientation, but text is never drawn upside down.
+    const rotNorm = ((obj.geometry.rotationDeg % 360) + 360) % 360;
+    if (rotNorm > 90 && rotNorm <= 270) ctx.rotate(Math.PI);
     ctx.fillText(obj.name, 0, 0, rw - 6);
     ctx.restore();
   }
@@ -289,9 +292,15 @@ function draw2DPlanOnCanvas(
   ctx.fillStyle = '#475569';
   ctx.font = `600 16px ${FONT_STACK}`;
   ctx.textAlign = 'center';
+  const totalObjs = project.layoutObjects.length;
+  const shownObjs = lineOnly
+    ? project.layoutObjects.filter((o) => o.rendering.visible && (o.productionLineId || o.stageId || o.kind === 'conveyor')).length
+    : totalObjs;
+  const eqAr = lineOnly ? `معدات الخط المعروضة: ${shownObjs} من ${totalObjs} في المصنع` : `المعدات: ${totalObjs}`;
+  const eqEn = lineOnly ? `Line objects shown: ${shownObjs} of ${totalObjs} in factory` : `Equipment: ${totalObjs}`;
   const summary = isAr
-    ? `الأبعاد: ${fL}م × ${fW}م  ·  الشبكة: ${gStep}م  ·  المعدات: ${project.layoutObjects.length}  ·  المراحل: ${project.stages.length}  ·  العمال: ${project.workers.length}`
-    : `Dimensions: ${fL}m × ${fW}m  ·  Grid: ${gStep}m  ·  Equipment: ${project.layoutObjects.length}  ·  Stages: ${project.stages.length}  ·  Operators: ${project.workers.length}`;
+    ? `الأبعاد: ${fL}م × ${fW}م  ·  الشبكة: ${gStep}م  ·  ${eqAr}  ·  المراحل: ${project.stages.length}  ·  العمال: ${project.workers.length}`
+    : `Dimensions: ${fL}m × ${fW}m  ·  Grid: ${gStep}m  ·  ${eqEn}  ·  Stages: ${project.stages.length}  ·  Operators: ${project.workers.length}`;
   ctx.fillText(summary, canvasW / 2, oy + fW * scale + 36);
 
   ctx.restore();
