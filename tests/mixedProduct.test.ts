@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDesertAirCoolerProject } from '../src/data/sampleProject';
 import { DiscreteEventSimulationEngine } from '../src/simulation/desEngine';
+import { validateProject } from '../src/simulation/validator';
 
 // Fixture: default project, Packing batch 1, arrival 120 s, product A (x1) and B (x2, 5% scrap), mix 1:1.
 // Ideal cycle per product = that product's own bottleneck cycle: A 60 s, B 120 s (hand-checked: bottleneck stage has
@@ -156,4 +157,27 @@ test('Independent lines with downtime: final OEE equals good output time over pl
   assert.ok(r.kpis.availabilityPct < 100);
   near(r.kpis.oeePct, ((60 * 107 + 40 * 110) / 54000) * 100);
   near(r.kpis.performancePct, ((60 * 112 + 40 * 111) / (2 * r.kpis.operatingTimeSec)) * 100);
+});
+
+// Batch starvation with two products. Default project: Packing collects batches of 4 per product, arrival 60 s, mix 1:1.
+// Hand rule: with k products and batch size b, the stage can hold k x (b - 1) = 2 x 3 = 6 mixed units with no complete
+// batch, so the buffer must be at least k x (b - 1) + 1 = 7. Recorded runs: buffer 5 and 6 stall (0 good units, one
+// batch_starved warning); buffer 7 flows (411 good units, no warning). The validator warns exactly for 5 and 6.
+// This documents a detected, pre-warned stall, not an engine fix: buffer 6 still stops the line if the user runs it.
+test('Batch starvation: buffer below k x (b - 1) + 1 is warned before the run and stalls; 7 flows', () => {
+  const build = (cap: number) => {
+    const p: any = createDesertAirCoolerProject();
+    p.stages.find((s: any) => s.id === 'stg_7_packing').bufferCapacity = cap;
+    const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; p.products[0].mixWeight = 1;
+    p.products.push(B); p.simulationConfig.arrivalIntervalSec = 60;
+    return p;
+  };
+  const warned = (p: any) => validateProject(p).some((i: any) => String(i.id).startsWith('val_stg_batch_buffer'));
+  for (const cap of [5, 6]) {
+    const p = build(cap); const r = run(p);
+    assert.equal(warned(p), true); assert.equal(r.kpis.goodUnits, 0);
+    assert.equal(r.stallWarnings?.[0]?.kind, 'batch_starved');
+  }
+  const ok = build(7); const r7 = run(ok);
+  assert.equal(warned(ok), false); assert.equal(r7.kpis.goodUnits, 411); assert.equal(r7.stallWarnings?.length ?? 0, 0);
 });
