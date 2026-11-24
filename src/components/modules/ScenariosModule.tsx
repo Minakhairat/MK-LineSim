@@ -376,7 +376,7 @@ export const ScenariosModule: React.FC = () => {
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-end">{sc.overrides.workerCount}</td>
-                    <td className="px-3 py-2.5 text-end">{sc.overrides.conveyorSpeedMps.toFixed(2)}</td>
+                    <td className="px-3 py-2.5 text-end">{Number(sc.overrides.conveyorSpeedMps.toFixed(4)) === Number(sc.overrides.conveyorSpeedMps.toFixed(2)) ? sc.overrides.conveyorSpeedMps.toFixed(2) : String(Number(sc.overrides.conveyorSpeedMps.toFixed(4)))}</td>
                     <td className="px-3 py-2.5 text-end font-semibold">{k ? k.goodUnits : '—'}</td>
                     <td className="px-3 py-2.5 text-end">
                       {k ? `${k.productionAttainmentPct.toFixed(1)}%` : '—'}
