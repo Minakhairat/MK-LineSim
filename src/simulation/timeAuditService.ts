@@ -484,7 +484,7 @@ export function mixedProductTimeWeightedOee(
   project: ProjectData,
   productAnalytics: ReadonlyArray<{ productId: string; completedGoodQty: number; scrappedQty: number; reworkUnits?: number }> | undefined,
   totalUnits: number
-): { idealWorkSec: number; idealGoodWorkSec: number } | null {
+): { idealWorkSec: number; idealGoodWorkSec: number; parallelLines: number } | null {
   const ps = project.products ?? [];
   if (ps.length < 2 || !productAnalytics || productAnalytics.length !== ps.length) return null;
   const allIds = project.stages.map((st) => st.id);
@@ -497,6 +497,18 @@ export function mixedProductTimeWeightedOee(
       // An unknown stage id is out of scope.
       if (!r.every((id) => allIds.includes(id))) return null;
     }
+  }
+  // Route layout. Nested routes (each route inside the longest one) share the same stages: the original basis applies.
+  // Fully disjoint routes are independent lines that run at the same time: their ideal work is divided by the number of
+  // lines, because each line has its own operating time (otherwise Performance could reach 100% x lines). Any other
+  // overlap (partly shared stages) is not verified: no weighted figure is produced.
+  const sets = ps.map((p) => new Set<string>(Array.isArray(p.routeStageIds) && p.routeStageIds.length > 0 ? p.routeStageIds : allIds));
+  const nested = sets.every((a) => sets.every((b) => [...a].every((x) => b.has(x)) || [...b].every((x) => a.has(x))));
+  let parallelLines = 1;
+  if (!nested) {
+    const disjoint = sets.every((a, i) => sets.every((b, j) => i === j || [...a].every((x) => !b.has(x))));
+    if (!disjoint) return null;
+    parallelLines = sets.length;
   }
   let counted = 0;
   let idealWorkSec = 0;
@@ -526,7 +538,7 @@ export function mixedProductTimeWeightedOee(
     idealGoodWorkSec += ideal * a.completedGoodQty;
   }
   if (Math.abs(counted - totalUnits) > 1e-6 || !(idealWorkSec > 0)) return null;
-  return { idealWorkSec, idealGoodWorkSec };
+  return { idealWorkSec, idealGoodWorkSec, parallelLines };
 }
 
 export function auditProjectTiming(rawProject: ProjectData, simClockSec?: number): ProjectTimingAudit {
@@ -1063,7 +1075,7 @@ export function buildAuditedSimulationKPIs(params: {
   {
     const mw = mixedProductTimeWeightedOee(project, params.productAnalytics, actualProduction);
     if (mw && lineOee.operatingTimeSec > 1e-6 && lineOee.scheduledProductionTimeSec > 1e-6) {
-      const perf = (mw.idealWorkSec / lineOee.operatingTimeSec) * 100;
+      const perf = (mw.idealWorkSec / (lineOee.operatingTimeSec * mw.parallelLines)) * 100;
       const qual = (mw.idealGoodWorkSec / mw.idealWorkSec) * 100;
       // Recompute the anomaly flag on the weighted figure; the old flag belonged to the mix-average basis.
       const { performanceAnomalyReason: _staleReason, ...lineOeeRest } = lineOee;
@@ -1074,7 +1086,7 @@ export function buildAuditedSimulationKPIs(params: {
         performancePct: perf,
         performanceAnomaly: perfAnomaly,
         ...(perfAnomaly
-          ? { performanceAnomalyReason: `Performance anomaly: time-weighted performance ${perf.toFixed(2)}% exceeds 100% (ideal work ${mw.idealWorkSec.toFixed(2)}s > operating time ${lineOee.operatingTimeSec.toFixed(2)}s).` }
+          ? { performanceAnomalyReason: `Performance anomaly: time-weighted performance ${perf.toFixed(2)}% exceeds 100% (ideal work ${mw.idealWorkSec.toFixed(2)}s > operating time ${(lineOee.operatingTimeSec * mw.parallelLines).toFixed(2)}s).` }
           : {}),
         qualityPct: qual,
         oeePct: (lineOee.availabilityPct / 100) * (perf / 100) * (qual / 100) * 100,
