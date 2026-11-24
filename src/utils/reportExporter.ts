@@ -399,7 +399,14 @@ export function exportKpiCanvasPdf(
 
   // Page 1: KPI Cards + Stage Table Head
   const p1 = createReportCanvas(opts.orientation);
-  const title = isAr ? 'تقرير مؤشرات الأداء وتحليل الاختناقات (KPI)' : 'Simulation KPI & Bottleneck Report';
+  // A stalled run is not titled as a bottleneck analysis: the report shows where the flow stops.
+  const title = stalled
+    ? isAr
+      ? 'تقرير مؤشرات الأداء وموقع التعليق (KPI)'
+      : 'Simulation KPI & Stall Location Report'
+    : isAr
+      ? 'تقرير مؤشرات الأداء وتحليل الاختناقات (KPI)'
+      : 'Simulation KPI & Bottleneck Report';
   let y = drawReportChrome(p1.ctx, p1.w, p1.h, project, title, isAr, 1, totalPages);
 
   const ctx = p1.ctx;
