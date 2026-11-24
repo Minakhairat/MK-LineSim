@@ -699,6 +699,8 @@ export interface SimulationKPIs {
   performanceAnomaly?: boolean;
   performanceAnomalyReason?: string;
   qualityPct?: number;
+  oeeMixedTimeWeighted?: boolean; // Performance/Quality/OEE use per-product ideal cycles (scoped multi-product case)
+  unitYieldPct?: number; // good units / total units, set only with oeeMixedTimeWeighted
   oeePct?: number;
   linePropagatedDowntimeSec?: number;
   lineCalendarAvailabilityPct?: number;
