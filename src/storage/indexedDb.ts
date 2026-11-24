@@ -286,6 +286,8 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
             mixWeight: rec.mixWeight !== undefined ? Number(rec.mixWeight) : 1,
             cycleTimeMultiplier:
               rec.cycleTimeMultiplier !== undefined ? Number(rec.cycleTimeMultiplier) : 1,
+            // Older files can omit the route list; an empty list means "all stages" and is filled by syncProductRoutes.
+            routeStageIds: Array.isArray(rec.routeStageIds) ? rec.routeStageIds : [],
           };
         }) as ProjectData['products']
       : [],
@@ -353,12 +355,21 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
       };
       return {
         ...sc,
+        // A missing shifts field (older files) becomes one day shift over the whole duration; an explicit empty array is kept.
         shifts: Array.isArray(sc.shifts)
           ? sc.shifts.map((sh) => ({
               ...sh,
               breaks: Array.isArray(sh.breaks) ? sh.breaks : [],
             }))
-          : [],
+          : [
+              {
+                id: 'shift_day',
+                name: 'Day Shift',
+                startSec: 0,
+                durationSec: Number(sc.durationSec) > 0 ? Number(sc.durationSec) : 28800,
+                breaks: [],
+              },
+            ],
         maintenanceWindows: Array.isArray(sc.maintenanceWindows) ? sc.maintenanceWindows : [],
       };
     })(),
