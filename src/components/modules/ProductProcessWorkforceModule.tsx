@@ -529,6 +529,13 @@ export const ProductsModule: React.FC = () => {
                     );
                   })}
                 </div>
+                {prod.routingMode !== 'manual' && prod.routeStageIds.length === 1 && (
+                  <p data-testid="last-stage-note" className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
+                    {isAr
+                      ? 'المنتج في التوجيه التلقائي لازم يفضل له مرحلة واحدة على الأقل، علشان كده مرحلة واحدة فقط متعلّمة ومش هتتشال.'
+                      : 'An auto-routed product keeps at least one stage, so the last ticked stage cannot be unticked.'}
+                  </p>
+                )}
                 <p className="text-[10px] leading-snug text-neutral-500">{t.products.routeManualNote}</p>
               </div>
             </div>
