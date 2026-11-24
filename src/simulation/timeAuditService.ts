@@ -994,8 +994,20 @@ export function buildAuditedSimulationKPIs(params: {
   const totalBatchesCompleted =
     params.totalBatchesCompleted ??
     params.stageAnalytics.reduce((sum, sa) => sum + (sa.batchesCompleted || 0), 0);
+  // Units per batch at the batch stages (units processed there / batches completed there), so scrap
+  // or rework elsewhere in the line does not shrink the reported batch size. Falls back to the
+  // earlier good-units-per-batch figure when no batch stage reports data.
+  const batchStageRows = params.stageAnalytics.filter(
+    (sa) => sa.batchMode === 'collect_batch' && (sa.batchSize ?? 0) > 1 && (sa.batchesCompleted || 0) > 0
+  );
+  const batchStageBatches = batchStageRows.reduce((sum, sa) => sum + (sa.batchesCompleted || 0), 0);
+  const batchStageUnits = batchStageRows.reduce((sum, sa) => sum + (sa.completedCount || 0), 0);
   const avgBatchSize =
-    totalBatchesCompleted > 0 && goodUnits > 0 ? goodUnits / totalBatchesCompleted : 1;
+    batchStageBatches > 0 && batchStageUnits > 0
+      ? batchStageUnits / batchStageBatches
+      : totalBatchesCompleted > 0 && goodUnits > 0
+        ? goodUnits / totalBatchesCompleted
+        : 1;
 
   const calendarUtilizationPct =
     params.calendarUtilizationPct ??
