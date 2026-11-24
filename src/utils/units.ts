@@ -177,3 +177,24 @@ export function oeeSummaryText(
   }
   return `${oee}% = A ${(k.availabilityPct ?? 0).toFixed(1)}% × P ${(k.performancePct ?? 0).toFixed(1)}% × Q ${(k.qualityPct ?? 100).toFixed(1)}%`;
 }
+
+/**
+ * Stage checkbox in the Products tab. A product that is not in manual (flowchart) routing keeps its own route list and stays
+ * in auto routing, with the ticked stages kept in project stage order. A product already in manual routing keeps the previous
+ * behaviour (its route is rebuilt from the flowchart wiring afterwards).
+ */
+export function toggleStageInProductRoute(
+  prod: { routingMode?: 'auto' | 'manual'; routeStageIds: string[] },
+  stageIds: string[],
+  stageId: string
+): { routingMode: 'auto' | 'manual'; routeStageIds: string[]; entryStageIds: string[] } {
+  const isManual = prod.routingMode === 'manual';
+  const active = prod.routeStageIds.includes(stageId);
+  const raw = active ? prod.routeStageIds.filter((x) => x !== stageId) : [...prod.routeStageIds, stageId];
+  const next = isManual ? raw : stageIds.filter((id) => raw.includes(id));
+  return {
+    routingMode: isManual ? 'manual' : 'auto',
+    routeStageIds: next,
+    entryStageIds: next.length > 0 ? [next[0]] : [],
+  };
+}

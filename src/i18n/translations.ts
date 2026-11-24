@@ -404,7 +404,7 @@ export const TRANSLATIONS = {
       targetQty: 'Target Qty',
       routeStages: 'Production Route',
       selectAllStages: 'Assign All Stages',
-      routeManualNote: "Unticking a stage switches this product to flowchart routing. The route then follows the Routing Flowchart wiring (stages reachable from the entry stage), so a stage that is still wired there stays ticked.",
+      routeManualNote: "Unticking a stage skips it for this product in Auto routing. If the product uses the Routing Flowchart (manual routing), the route follows the flowchart wiring instead, so a stage that is still wired there stays ticked.",
       applyAndSimulate: 'Set Active & Run Simulation',
       shapes: {
         air_cooler: 'Desert Air Cooler',
@@ -1153,7 +1153,7 @@ export const TRANSLATIONS = {
       targetQty: 'الكمية المستهدفة',
       routeStages: 'مسار مراحل الإنتاج',
       selectAllStages: 'ربط بكل المراحل',
-      routeManualNote: "إلغاء تحديد مرحلة بيحوّل المنتج لتوجيه المخطط. المسار بعدها بيتبع توصيلات مخطط التوجيه (المراحل اللي ممكن توصل لها من مرحلة الدخول)، فأي مرحلة لسه موصولة فيه هتفضل معلّمة.",
+      routeManualNote: "إلغاء تحديد مرحلة بيتخطاها المنتج في التوجيه التلقائي. لو المنتج بيستخدم مخطط التوجيه (توجيه يدوي)، المسار بيتبع توصيلات المخطط، فأي مرحلة لسه موصولة فيه هتفضل معلّمة.",
       applyAndSimulate: 'تفعيل وتشغيل المحاكاة',
       shapes: {
         air_cooler: 'مبرد هواء صحراوي',

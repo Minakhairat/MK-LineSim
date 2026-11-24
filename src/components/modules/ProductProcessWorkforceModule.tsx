@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { DefectModelType, DispatchingRule, ProductModelShape } from '../../types/project';
-import { uid } from '../../utils/units';
+import { uid, toggleStageInProductRoute } from '../../utils/units';
 import { getT } from '../../i18n/translations';
 import { computeStageCapacityProfile } from '../../engineering/capacityEngine';
 import {
@@ -516,14 +516,10 @@ export const ProductsModule: React.FC = () => {
                           type="checkbox"
                           checked={active}
                           onChange={() => {
-                            const next = active
-                              ? prod.routeStageIds.filter((x) => x !== st.id)
-                              : [...prod.routeStageIds, st.id];
-                            updateProduct(prod.id, {
-                              routingMode: 'manual',
-                              routeStageIds: next,
-                              entryStageIds: next.length > 0 ? [next[0]] : [],
-                            });
+                            updateProduct(
+                              prod.id,
+                              toggleStageInProductRoute(prod, project.stages.map((s) => s.id), st.id)
+                            );
                           }}
                         />
                         <span className="truncate">
