@@ -533,6 +533,7 @@ export const ProductsModule: React.FC = () => {
                     );
                   })}
                 </div>
+                <p className="text-[10px] leading-snug text-neutral-500">{t.products.routeManualNote}</p>
               </div>
             </div>
           );
