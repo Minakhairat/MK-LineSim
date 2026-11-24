@@ -1432,6 +1432,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         project: { ...s.project, lastSimulationResult: result },
       }));
       await saveProjectToDb(get().project);
+      if (result.stallWarnings && result.stallWarnings.length > 0) {
+        const names = result.stallWarnings
+          .map((w) => get().project.stages.find((st) => st.id === w.stageId)?.name || w.stageId)
+          .join(', ');
+        setToast(
+          language === 'ar'
+            ? `تحذير: تعليق في تجميع الدُفعات عند (${names}). وحدات محجوزة ولا تكتمل دفعتها، فالنتائج غير صالحة. زِد سعة المخزن.`
+            : `Warning: batch stall at (${names}). Units are held and cannot complete a batch, so results are not valid. Increase the buffer capacity.`,
+          'error'
+        );
+        return result;
+      }
       setToast(
         language === 'ar'
           ? `اكتملت محاكاة الوردية: ${result.kpis.goodUnits} وحدة سليمة (${result.kpis.productionAttainmentPct.toFixed(1)}% تحقق)`
