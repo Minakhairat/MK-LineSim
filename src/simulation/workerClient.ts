@@ -141,7 +141,9 @@ export function applyScenarioOverrides(
   for (const st of cloned.stages) {
     st.processingTimeSec =
       st.processingTimeSec === 0 ? 0 : Math.max(0.05, Math.round(st.processingTimeSec * scale * 100) / 100);
-    st.bufferCapacity = Math.max(1, overrides.bufferCapacity);
+    if (overrides.bufferCapacity !== undefined && Number.isFinite(overrides.bufferCapacity)) {
+      st.bufferCapacity = Math.max(0, Math.round(overrides.bufferCapacity));
+    }
   }
   for (const obj of cloned.layoutObjects) {
     if (obj.kind === 'conveyor') {
