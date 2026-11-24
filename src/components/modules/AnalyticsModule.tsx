@@ -331,8 +331,8 @@ export const AnalyticsModule: React.FC = () => {
                   ? `كفاءة الخط: ${k.lineEfficiencyPct.toFixed(1)}% · متوسط WIP: ${k.avgWip.toFixed(1)}`
                   : `Line Eff: ${k.lineEfficiencyPct.toFixed(1)}% · Avg WIP: ${k.avgWip.toFixed(1)}`
                 : isAr
-                  ? `الأكثر تحميلًا بحسب نقاط الترتيب${mostLoadedUtilText(result, true)} (ترتيب مش اختبار سعة) · متوسط WIP: ${k.avgWip.toFixed(1)}`
-                  : `Most-loaded stage by ranking score${mostLoadedUtilText(result, false)} (not a capacity test) · Avg WIP: ${k.avgWip.toFixed(1)}`,
+                  ? `الأكثر تحميلًا${mostLoadedUtilText(result, true)}: ترتيب مش اختبار سعة`
+                  : `Most-loaded stage${mostLoadedUtilText(result, false)}: a ranking, not a capacity test`,
             },
             {
               label: t.analytics.cards.leadTime,
@@ -367,7 +367,7 @@ export const AnalyticsModule: React.FC = () => {
               <div className="mt-1 text-lg font-semibold font-mono-tabular text-neutral-900 dark:text-neutral-100 truncate">
                 {item.val}
               </div>
-              <div className="mt-1 text-[11px] font-mono-tabular text-neutral-500 truncate">{item.sub}</div>
+              <div className="mt-1 text-[11px] font-mono-tabular text-neutral-500 break-words">{item.sub}</div>
             </div>
           ))}
         </div>
