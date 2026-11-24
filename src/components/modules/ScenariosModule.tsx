@@ -339,6 +339,14 @@ export const ScenariosModule: React.FC = () => {
                   >
                     <td className="px-4 py-2.5 font-sans font-medium text-neutral-900 dark:text-neutral-100">
                       {sc.name}
+                      {sc.result?.stallWarnings && sc.result.stallWarnings.length > 0 && (
+                        <span
+                          className="ms-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+                          title={isAr ? 'النموذج توقف عند نقطة ما أثناء التشغيل. الأرقام تعكس هذا التوقف.' : 'The modeled flow stops at some point in the run. The figures reflect that stall.'}
+                        >
+                          {isAr ? 'تعليق مرصود' : 'Stall flagged'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-end">{sc.overrides.workerCount}</td>
                     <td className="px-3 py-2.5 text-end">{sc.overrides.conveyorSpeedMps.toFixed(2)}</td>
