@@ -360,11 +360,13 @@ export const AnalyticsModule: React.FC = () => {
             <h3 className="text-xs font-semibold text-neutral-900 dark:text-neutral-100">
               {t.analytics.oeeSectionTitle}
             </h3>
-            <span dir="ltr" className="text-[11px] font-mono-tabular text-neutral-500">
-              {t.labels.oee}: {(k.oeePct ?? 0).toFixed(1)}% ={' '}
-              {(k.availabilityPct ?? 0).toFixed(1)}% ×{' '}
-              {(k.actualProduction ?? 0) > 0 ? `${(k.performancePct ?? 0).toFixed(1)}%` : '—'} ×{' '}
-              {(k.actualProduction ?? 0) > 0 ? `${(k.qualityPct ?? 100).toFixed(1)}%` : '—'}
+            <span className="text-[11px] font-mono-tabular text-neutral-500">
+              {t.labels.oee}:{' '}
+              <bdi dir="ltr">
+                {(k.oeePct ?? 0).toFixed(1)}% = A {(k.availabilityPct ?? 0).toFixed(1)}% × P{' '}
+                {(k.actualProduction ?? 0) > 0 ? `${(k.performancePct ?? 0).toFixed(1)}%` : '—'} × Q{' '}
+                {(k.actualProduction ?? 0) > 0 ? `${(k.qualityPct ?? 100).toFixed(1)}%` : '—'}
+              </bdi>
             </span>
           </div>
 
