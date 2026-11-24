@@ -289,11 +289,17 @@ test('Weighted OEE with a consecutive repeat of one stage (hand-checked fixture)
 // (d) Same as (a) (second Wiring machine, B cycle x2, A ideal 45 s, B 90 s) but arrival 30 s so the line is not arrival-limited.
 //     Recorded A 135 good + 12 scrap, B 140 + 6 (the same counts at arrival 45, 40 and 30 s: the output stops depending on arrival).
 //     Ideal work 45x147 + 90x146 = 19755 s -> P 73.17%. Good 45x135 + 90x140 = 18675 s -> Q 94.53%, OEE 69.17%.
-//     The Motor stage (the ranked bottleneck) is 76% utilized in this run, so it is not saturated: the cause of the flat output
-//     (for example blocking between stages with small buffers) was NOT traced. This test only pins the arithmetic.
-test('Weighted OEE with a parallel machine when arrival no longer limits output (hand-checked, cause of the output limit not traced)', () => {
+//     Traced in this run: the Motor stage (the ranked bottleneck) is 76% utilized, and so is not saturated, but the two Wiring operators
+//     are about 99% busy (labour at Wiring limits output; the added machine sits mostly idle). Performance here is measured against
+//     machine-based ideal cycles, so it does not show the labour limit. Not tested: whether that holds for other staffing.
+test('Weighted OEE with a parallel machine when arrival no longer limits output (hand-checked; Wiring operators are the saturated resource)', () => {
   const r = run(parFixture('wiring', 30));
   assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[135, 12], [140, 6]]);
   near(r.kpis.performancePct, (19755 / 27000) * 100); near(r.kpis.qualityPct, (18675 / 19755) * 100); near(r.kpis.oeePct, (18675 / 27000) * 100);
+  const wiringOps = r.workerAnalytics.filter((w: any) => /Wiring/.test(w.workerName));
+  assert.equal(wiringOps.length, 2);
+  for (const w of wiringOps) assert.ok(w.busyTimeSec / w.scheduledTimeSec > 0.98, `${w.workerName} ${w.busyTimeSec}/${w.scheduledTimeSec}`);
+  const motor = r.stageAnalytics.find((x: any) => x.stageId === 'stg_2_motor');
+  assert.ok(motor.utilizationPct < 80);
   assert.equal(r.kpis.oeeMixedTimeWeighted, true);
 });
