@@ -414,6 +414,17 @@ export const AnalyticsModule: React.FC = () => {
                 : 'Note: a product route skips the slowest stage in the project. Line OEE, Performance, theoretical bottleneck, theoretical throughput and line efficiency are computed over all project stages, not that route, so they may be overstated or name a stage the route skips, even when Performance is below 100%. Sample case only: with a 60 s stage skipped and a 45 s next-slowest stage, theoretical throughput stays at 60/h while simple single-route arithmetic (3600/45) gives 80/h, not validated for multi-product or parallel capacity. The measured Bottleneck Stage comes from the run and is separate. Do not rely on these values until the basis is checked.'}
             </div>
           )}
+          {project.products.length > 1 && (
+            <div
+              role="note"
+              data-testid="oee-mixed-note"
+              className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+            >
+              {language === 'ar'
+                ? 'تنبيه (أكتر من منتج): Quality هنا نسبة وحدات سليمة على إجمالي الوحدات (عدد)، ومش موزونة بزمن الدورة المثالي لكل منتج. لو المنتجات دورتها مختلفة، فالهالك في المنتج الأبطأ بيكلّف وقت خط أكتر، فـQuality وOEE ممكن يبقوا أعلى من النسخة الموزونة (في حالة اتجربت: Quality ‏95.4٪ مقابل 94.8٪ موزونة، وOEE ‏69.3٪ مقابل 68.9٪). الأداء بيستخدم متوسط زمن دورة واحد للمزيج مش لكل منتج. نسبة الوحدات السليمة نفسها مقياس منفصل وصحيح كعدد.'
+                : 'Note (more than one product): Quality here is good units divided by total units (a count), not weighted by each product\'s ideal cycle, and Performance uses one mix-average ideal cycle rather than one per product. When products have different cycle times, scrap on the slower product costs more line time, so Quality and OEE can read higher than a time-weighted figure (one tested case: Quality 95.4% vs 94.8% weighted, OEE 69.3% vs 68.9%). Unit yield itself is a valid separate count metric.'}
+            </div>
+          )}
           {k.performanceAnomaly && (
             <div
               role="alert"
