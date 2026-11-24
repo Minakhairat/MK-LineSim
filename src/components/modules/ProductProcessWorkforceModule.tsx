@@ -1108,6 +1108,13 @@ export const ProcessesModule: React.FC = () => {
                     }
                     className="w-full min-w-0 rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-1.5 py-1 font-mono-tabular"
                   />
+                  {st.batchMode === 'collect_batch' && (st.batchSize ?? 1) > 1 && (
+                    <span data-testid={`effective-capacity-${st.id}`} className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
+                      {isAr
+                        ? `مرحلة تجميع دفعات: السعة الفعلية في المحاكاة = الأكبر بين سعة البفر وحجم الدفعة = ${Math.max(st.bufferCapacity, st.batchSize ?? 1)}، فعدد الوحدات الواقفة ممكن يعدّي سعة البفر المكتوبة.`
+                        : `Batch-collecting stage: the simulation admits up to the larger of this buffer and the batch size = ${Math.max(st.bufferCapacity, st.batchSize ?? 1)}, so queued units can exceed the buffer entered here.`}
+                    </span>
+                  )}
                 </label>
               </div>
               <div className="grid grid-cols-2 gap-1.5 min-w-0">
