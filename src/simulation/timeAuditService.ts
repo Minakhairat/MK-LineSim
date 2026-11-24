@@ -458,6 +458,20 @@ export function applyProductMixTimingFactors(project: ProjectData): ProjectData 
   return out;
 }
 
+/**
+ * Narrow scope: with exactly one product in auto routing and a non-empty route, line-level pace metrics (ideal cycle,
+ * theoretical bottleneck/throughput, line balance) use only the stages on that route. Anything else (several products,
+ * manual routing, empty route) keeps the all-project-stages basis. Per-stage rows are never filtered.
+ */
+export function singleAutoProductRouteScope(project: ProjectData): Set<string> | null {
+  const ps = project.products;
+  if (!ps || ps.length !== 1) return null;
+  const p = ps[0];
+  if (p.routingMode === 'manual' || !Array.isArray(p.routeStageIds) || p.routeStageIds.length === 0) return null;
+  const ids = new Set(p.routeStageIds);
+  return project.stages.some((st) => ids.has(st.id)) ? ids : null;
+}
+
 export function auditProjectTiming(rawProject: ProjectData, simClockSec?: number): ProjectTimingAudit {
   const project = applyProductMixTimingFactors(rawProject);
   const horizonSec = simClockSec ?? project.simulationConfig.durationSec;
@@ -484,8 +498,10 @@ export function auditProjectTiming(rawProject: ProjectData, simClockSec?: number
   let minShiftCapacityUnits = Infinity;
   let maxPhysicalCycleSec = 0;
   let hasActiveProcessingStages = false;
+  const routeScope = singleAutoProductRouteScope(project);
 
   for (const st of project.stages) {
+    const inScope = !routeScope || routeScope.has(st.id);
     const seenIds = new Set<string>();
     const assignedObjs: LayoutObject[] = [];
     for (const oid of st.assignedObjectIds) {
@@ -514,11 +530,11 @@ export function auditProjectTiming(rawProject: ProjectData, simClockSec?: number
       serverScheduledTimeSec: serverSchedMap,
     });
 
-    if (profile.isValid && profile.effectiveUnitCycleSec > 0) {
+    if (inScope && profile.isValid && profile.effectiveUnitCycleSec > 0) {
       totalTaskTimeSec += (profile.baseTaskTimeSec + profile.batchTransferTimeSec) / profile.effectiveBatchDivisor;
     }
 
-    if (profile.baseTaskTimeSec > 0 && profile.effectiveUnitCycleSec > 0 && profile.theoreticalCapacityPerHour > 0) {
+    if (inScope && profile.baseTaskTimeSec > 0 && profile.effectiveUnitCycleSec > 0 && profile.theoreticalCapacityPerHour > 0) {
       hasActiveProcessingStages = true;
       effectiveCycles.push(profile.effectiveUnitCycleSec);
       if (profile.effectiveUnitCycleSec > bottleneckCycleSec) {
@@ -681,6 +697,7 @@ export function buildAuditedSimulationKPIs(params: {
   const { project, shiftAudit, goodUnits, scrappedUnits } = params;
   const timingAudit = auditProjectTiming(project, shiftAudit.simTimeSec);
   const timingByStage = new Map(timingAudit.stages.map((s) => [s.stageId, s]));
+  const lineRouteScope = singleAutoProductRouteScope(project);
   const totalHours = Math.max(1e-6, shiftAudit.activeSimTimeSec / 3600);
   const actualProduction = goodUnits + scrappedUnits;
   const productionAttainmentPct =
@@ -858,6 +875,7 @@ export function buildAuditedSimulationKPIs(params: {
       const tStage = timingByStage.get(sa.stageId);
       const unitCycle = tStage?.effectiveUnitCycleSec ?? 0;
       if (unitCycle <= 0) continue;
+      if (lineRouteScope && !lineRouteScope.has(sa.stageId)) continue;
       const schedSec = resolveStageSchedSec(sa);
       const shiftCap = schedSec / unitCycle;
       const isBetter =
