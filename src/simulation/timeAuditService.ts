@@ -607,6 +607,7 @@ export function buildAuditedSimulationKPIs(params: {
   productAnalytics?: ProductAnalytics[];
   bottleneckStageId?: string;
   bottleneckStageName?: string;
+  linePropagatedDowntimeSec?: number;
 }): SimulationKPIs {
   const { project, shiftAudit, goodUnits, scrappedUnits } = params;
   const timingAudit = auditProjectTiming(project, shiftAudit.simTimeSec);
@@ -662,6 +663,11 @@ export function buildAuditedSimulationKPIs(params: {
     });
     sa.availabilityPct = stageOee.availabilityPct;
     sa.performancePct = stageOee.performancePct;
+    sa.rawPerformancePct = stageOee.rawPerformancePct;
+    sa.performanceAnomaly = stageOee.performanceAnomaly;
+    if (stageOee.performanceAnomalyReason) {
+      sa.performanceAnomalyReason = stageOee.performanceAnomalyReason;
+    }
     sa.qualityPct = stageOee.qualityPct;
     sa.oeePct = stageOee.oeePct;
     sa.operatingTimeSec = stageOee.operatingTimeSec;
@@ -822,20 +828,37 @@ export function buildAuditedSimulationKPIs(params: {
       const lineScheduledSec = Math.max(0, bnAnalytics.scheduledTimeSec);
       linePlannedDownSec =
         bnAnalytics.plannedDowntimeSec ?? Math.max(0, lineCalendarSec - lineScheduledSec);
-      lineUnplannedDownSec = (bnAnalytics.downPct / 100) * lineScheduledSec;
+      const fallbackUnplannedDown = (bnAnalytics.downPct / 100) * lineScheduledSec;
+      lineUnplannedDownSec =
+        params.linePropagatedDowntimeSec !== undefined &&
+        Number.isFinite(params.linePropagatedDowntimeSec)
+          ? Math.min(lineScheduledSec, Math.max(0, params.linePropagatedDowntimeSec))
+          : fallbackUnplannedDown;
       lineSetupSec = ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec;
     } else if (bnResources.length > 0) {
       const n = bnResources.length;
       lineCalendarSec = bnResources.reduce((s, r) => s + r.calendarTimeSec, 0) / n;
       linePlannedDownSec = bnResources.reduce((s, r) => s + r.plannedDowntimeSec, 0) / n;
-      lineUnplannedDownSec = bnResources.reduce((s, r) => s + r.unplannedDowntimeSec, 0) / n;
+      const lineScheduledSec = Math.max(0, lineCalendarSec - linePlannedDownSec);
+      const fallbackUnplannedDown =
+        bnResources.reduce((s, r) => s + r.unplannedDowntimeSec, 0) / n;
+      lineUnplannedDownSec =
+        params.linePropagatedDowntimeSec !== undefined &&
+        Number.isFinite(params.linePropagatedDowntimeSec)
+          ? Math.min(lineScheduledSec, Math.max(0, params.linePropagatedDowntimeSec))
+          : fallbackUnplannedDown;
       lineSetupSec = bnResources.reduce((s, r) => s + r.setupTimeSec, 0) / n;
     } else {
       const stageCount = Math.max(1, params.stageAnalytics.length);
       const lineScheduledSec = Math.max(1e-6, lineCalendarSec - linePlannedDownSec);
-      lineUnplannedDownSec = bnAnalytics
+      const fallbackUnplannedDown = bnAnalytics
         ? (bnAnalytics.downPct / 100) * lineScheduledSec
         : params.totalDowntimeSec / stageCount;
+      lineUnplannedDownSec =
+        params.linePropagatedDowntimeSec !== undefined &&
+        Number.isFinite(params.linePropagatedDowntimeSec)
+          ? Math.min(lineScheduledSec, Math.max(0, params.linePropagatedDowntimeSec))
+          : fallbackUnplannedDown;
       lineSetupSec = bnAnalytics
         ? ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec
         : (params.totalSetupTimeSec ?? 0) / stageCount;
@@ -851,8 +874,10 @@ export function buildAuditedSimulationKPIs(params: {
       goodUnitsProduced: goodUnits,
     });
   } else {
+    const preferredUniformBnId = timingAudit.bottleneckStageId || params.bottleneckStageId;
     const bnAnalytics =
-      params.stageAnalytics.find((s) => s.stageId === (params.bottleneckStageId || timingAudit.bottleneckStageId)) ??
+      params.stageAnalytics.find((s) => s.stageId === preferredUniformBnId) ??
+      params.stageAnalytics.find((s) => s.stageId === params.bottleneckStageId) ??
       params.stageAnalytics[0];
     const stageCount = Math.max(1, params.stageAnalytics.length);
 
@@ -864,11 +889,16 @@ export function buildAuditedSimulationKPIs(params: {
       shiftAudit.simTimeSec,
       shiftAudit.plannedDowntimeSec + extraObjectMaintSec
     );
-    const lineScheduledSec = Math.max(1e-6, shiftAudit.simTimeSec - linePlannedDowntimeSec);
+    const lineScheduledSec = Math.max(0, shiftAudit.simTimeSec - linePlannedDowntimeSec);
 
-    const lineUnplannedDownSec = bnAnalytics
+    const fallbackUnplannedDown = bnAnalytics
       ? (bnAnalytics.downPct / 100) * lineScheduledSec
       : params.totalDowntimeSec / stageCount;
+    const lineUnplannedDownSec =
+      params.linePropagatedDowntimeSec !== undefined &&
+      Number.isFinite(params.linePropagatedDowntimeSec)
+        ? Math.min(lineScheduledSec, Math.max(0, params.linePropagatedDowntimeSec))
+        : fallbackUnplannedDown;
     const lineSetupSec = bnAnalytics
       ? ((bnAnalytics.setupPct ?? 0) / 100) * lineScheduledSec
       : (params.totalSetupTimeSec ?? 0) / stageCount;
@@ -950,8 +980,15 @@ export function buildAuditedSimulationKPIs(params: {
     operatingTimeSec: lineOee.operatingTimeSec,
     availabilityPct: lineOee.availabilityPct,
     performancePct: lineOee.performancePct,
+    rawPerformancePct: lineOee.rawPerformancePct,
+    performanceAnomaly: lineOee.performanceAnomaly,
+    ...(lineOee.performanceAnomalyReason
+      ? { performanceAnomalyReason: lineOee.performanceAnomalyReason }
+      : {}),
     qualityPct: lineOee.qualityPct,
     oeePct: lineOee.oeePct,
+    linePropagatedDowntimeSec: lineOee.unplannedDowntimeSec,
+    lineCalendarAvailabilityPct: lineOee.calendarAvailabilityPct,
     theoreticalThroughputPerHour,
     throughputVariancePct,
     theoreticalBottleneckStageId: timingAudit.bottleneckStageId,

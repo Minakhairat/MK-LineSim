@@ -531,8 +531,14 @@ export interface StageAnalytics {
   isBottleneck: boolean;
   availabilityPct?: number;
   performancePct?: number;
+  rawPerformancePct?: number;
+  performanceAnomaly?: boolean;
+  performanceAnomalyReason?: string;
   qualityPct?: number;
   oeePct?: number;
+  completeStoppageTimeSec?: number;
+  partialCapacityLossTimeSec?: number;
+  propagatedDownTimeSec?: number;
   batchesCompleted?: number;
   batchSize?: number;
   batchMode?: BatchMode;
@@ -594,12 +600,19 @@ export interface ResourceOeeAnalytics {
   calendarUtilizationPct: number;
   availabilityPct: number;
   performancePct: number;
+  rawPerformancePct?: number;
+  performanceAnomaly?: boolean;
+  performanceAnomalyReason?: string;
   qualityPct: number;
   oeePct: number;
   processedCount: number;
   goodCount: number;
   scrapCount: number;
   idealCycleTimeSec: number;
+  failureCount?: number;
+  empiricalMtbfSec?: number;
+  empiricalMttrSec?: number;
+  inherentAvailabilityPct?: number;
 }
 
 export interface WorkerAnalytics {
@@ -682,8 +695,13 @@ export interface SimulationKPIs {
   operatingTimeSec?: number;
   availabilityPct?: number;
   performancePct?: number;
+  rawPerformancePct?: number;
+  performanceAnomaly?: boolean;
+  performanceAnomalyReason?: string;
   qualityPct?: number;
   oeePct?: number;
+  linePropagatedDowntimeSec?: number;
+  lineCalendarAvailabilityPct?: number;
   theoreticalThroughputPerHour?: number;
   throughputVariancePct?: number;
   theoreticalBottleneckStageId?: string;

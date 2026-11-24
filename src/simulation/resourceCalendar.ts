@@ -549,6 +549,39 @@ export class ResourceCalendarEngine {
     return { available: true, reason: 'active' };
   }
 
+  public getObjectActiveProductionIntervals(obj: LayoutObject, upToSec?: number): TimeInterval[] {
+    const horizon = Math.min(this.simDurationSec, Math.max(0, upToSec ?? this.simDurationSec));
+    const shiftIntervals = this.getClippedShiftIntervals(
+      obj.operations.shiftId,
+      obj.operations.operatingSchedule,
+      horizon
+    );
+    const maintIntervals = intersectIntervals(
+      shiftIntervals,
+      this.getObjectMaintenanceIntervals(obj, horizon)
+    );
+    const breakIntervals = isObjectContinuingDuringBreak(obj)
+      ? []
+      : subtractIntervals(
+          intersectIntervals(
+            shiftIntervals,
+            this.getClippedBreakIntervals(obj.operations.shiftId, obj.operations.operatingSchedule, horizon)
+          ),
+          maintIntervals
+        );
+    return subtractIntervals(shiftIntervals, [...maintIntervals, ...breakIntervals]);
+  }
+
+  public sumIntervalOverlapWithActive(
+    obj: LayoutObject,
+    intervals: TimeInterval[],
+    upToSec?: number
+  ): number {
+    if (intervals.length === 0) return 0;
+    const active = this.getObjectActiveProductionIntervals(obj, upToSec);
+    return sumIntervals(intersectIntervals(active, intervals));
+  }
+
   public getObjectCalendarMetrics(obj: LayoutObject, upToSec?: number): ObjectCalendarMetrics {
     const horizon = Math.min(this.simDurationSec, Math.max(0, upToSec ?? this.simDurationSec));
     const shiftIntervals = this.getClippedShiftIntervals(

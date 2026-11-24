@@ -267,3 +267,106 @@ export function getObjectPlannedMaintenanceWindows(
     ...(obj.operations.plannedMaintenance || []),
   ];
 }
+
+/**
+ * Inherent Availability: A_i = MTBF / (MTBF + MTTR) in [0, 1].
+ */
+export function computeInherentAvailability(mtbfSec: number, mttrSec: number): number {
+  if (!Number.isFinite(mttrSec)) return 0;
+  const mtbf = Number.isFinite(mtbfSec) ? Math.max(0, mtbfSec) : 0;
+  const mttr = Math.max(0, mttrSec);
+  if (mtbf <= 0 && mttr > 0) return 0;
+  if (mttr <= 0) return mtbf > 0 ? 1 : 0;
+  return mtbf / (mtbf + mttr);
+}
+
+/**
+ * Operational Availability: A_o = Operating Time / Scheduled Production Time in [0, 1].
+ */
+export function computeOperationalAvailability(
+  operatingTimeSec: number,
+  scheduledProductionTimeSec: number
+): number {
+  if (!Number.isFinite(scheduledProductionTimeSec) || scheduledProductionTimeSec <= 1e-6) {
+    return 0;
+  }
+  const ot = Number.isFinite(operatingTimeSec) ? Math.max(0, operatingTimeSec) : 0;
+  return Math.min(1, ot / scheduledProductionTimeSec);
+}
+
+export interface EmpiricalStatsSummary {
+  n: number;
+  mean: number;
+  stdDev: number;
+  stdErr: number;
+  ci95HalfWidth: number;
+  ci95Lower: number;
+  ci95Upper: number;
+  min: number;
+  max: number;
+}
+
+/**
+ * Two-sided 95% Student's t critical value lookup / normal asymptote for Monte Carlo CIs.
+ */
+function tCritical95(df: number): number {
+  const table: Record<number, number> = {
+    1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+    6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+    11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
+    16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
+    21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
+    26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
+  };
+  if (df <= 30) return table[Math.max(1, Math.round(df))];
+  if (df <= 40) return 2.021;
+  if (df <= 60) return 2.0;
+  if (df <= 120) return 1.98;
+  return 1.959964;
+}
+
+/**
+ * Computes sample mean, unbiased sample standard deviation, standard error, and 95% CI.
+ */
+export function computeEmpiricalStats(rawSamples: number[]): EmpiricalStatsSummary {
+  const samples = rawSamples.filter((x) => Number.isFinite(x));
+  const n = samples.length;
+  if (n === 0) {
+    return {
+      n: 0,
+      mean: 0,
+      stdDev: 0,
+      stdErr: 0,
+      ci95HalfWidth: 0,
+      ci95Lower: 0,
+      ci95Upper: 0,
+      min: 0,
+      max: 0,
+    };
+  }
+  const mean = samples.reduce((s, x) => s + x, 0) / n;
+  let min = samples[0];
+  let max = samples[0];
+  let sqDiff = 0;
+  for (const x of samples) {
+    if (x < min) min = x;
+    if (x > max) max = x;
+    const d = x - mean;
+    sqDiff += d * d;
+  }
+  const stdDev = n > 1 ? Math.sqrt(sqDiff / (n - 1)) : 0;
+  const stdErr = stdDev / Math.sqrt(n);
+  const tCrit = n > 1 ? tCritical95(n - 1) : 0;
+  const ci95HalfWidth = tCrit * stdErr;
+  return {
+    n,
+    mean,
+    stdDev,
+    stdErr,
+    ci95HalfWidth,
+    ci95Lower: mean - ci95HalfWidth,
+    ci95Upper: mean + ci95HalfWidth,
+    min,
+    max,
+  };
+}

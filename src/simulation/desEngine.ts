@@ -31,6 +31,7 @@ import {
   syncProductRoutes,
 } from './autoWire';
 import {
+  auditProjectTiming,
   buildAuditedSimulationKPIs,
   canAdmitToStageBuffer,
   computeConveyorMetrics,
@@ -47,7 +48,11 @@ import {
 } from './timeAuditService';
 import { ResourceAvailabilityState, ResourceCalendarEngine } from './resourceCalendar';
 import { ResourceStateTracker } from './resourceStateTracker';
-import { sampleRepairDurationSec, sampleTimeToFailureSec } from './failureModels';
+import {
+  computeInherentAvailability,
+  sampleRepairDurationSec,
+  sampleTimeToFailureSec,
+} from './failureModels';
 import { computeOeeMetrics } from '../engineering/oeeEngine';
 import { computeStageCapacityProfile } from '../engineering/capacityEngine';
 
@@ -252,6 +257,11 @@ export class DiscreteEventSimulationEngine {
   private rrCursor = 0;
 
   private stageAcc = new Map<string, StageAcc>();
+  private objectStageProcessed = new Map<string, Map<string, number>>();
+  private objectFailureTelemetry = new Map<
+    string,
+    { failureCount: number; completedRepairCount: number; completedRepairDurSum: number }
+  >();
   private entityCounter = 0;
   private completedCount = 0;
   private completedBatches = 0;
@@ -328,7 +338,7 @@ export class DiscreteEventSimulationEngine {
 
     const cfg = this.project.simulationConfig;
     this.calendarEngine = new ResourceCalendarEngine(cfg, cfg.durationSec);
-    this.stateTracker = new ResourceStateTracker(cfg.durationSec, false);
+    this.stateTracker = new ResourceStateTracker(cfg.durationSec, true);
 
     this.shiftActive = this.calendarEngine.isPlantShiftActiveAt(0);
     this.onBreak = this.calendarEngine.isPlantOnBreakAt(0);
@@ -370,6 +380,8 @@ export class DiscreteEventSimulationEngine {
     this.productReworkCycles.clear();
     this.rrCursor = 0;
     this.stageAcc.clear();
+    this.objectStageProcessed.clear();
+    this.objectFailureTelemetry.clear();
     this.hourlyGood.clear();
     this.hourlyScrap.clear();
     this.wipSeries = [];
@@ -3575,13 +3587,22 @@ export class DiscreteEventSimulationEngine {
     }
     this.setObjectStatus(objId, 'down', ev.timestamp);
 
+    const tele = this.objectFailureTelemetry.get(objId) ?? {
+      failureCount: 0,
+      completedRepairCount: 0,
+      completedRepairDurSum: 0,
+    };
+    tele.failureCount += 1;
+    this.objectFailureTelemetry.set(objId, tele);
+
     const repairDur = sampleRepairDurationSec(failureParams, this.rng);
     if (!Number.isFinite(repairDur)) return;
-    const boundedRepairDur = Math.max(0.5, repairDur);
+    const boundedRepairDur = Math.max(0.1, repairDur);
     this.schedule(ev.timestamp + boundedRepairDur, 'RepairCompleted', {
       objectId: objId,
       stageId: ev.stageId || obj.stageId,
       details: `Repair completed on ${obj.name} after ${boundedRepairDur.toFixed(1)}s (${failureParams.repairModel})`,
+      payload: { repairDur: boundedRepairDur },
     });
   }
 
@@ -3589,6 +3610,18 @@ export class DiscreteEventSimulationEngine {
     const objId = ev.objectId;
     if (!objId) return;
     const obj = this.objectsMap.get(objId);
+
+    const repairDur = Number(ev.payload?.repairDur ?? 0);
+    if (Number.isFinite(repairDur) && repairDur > 0) {
+      const tele = this.objectFailureTelemetry.get(objId) ?? {
+        failureCount: 0,
+        completedRepairCount: 0,
+        completedRepairDurSum: 0,
+      };
+      tele.completedRepairCount += 1;
+      tele.completedRepairDurSum += repairDur;
+      this.objectFailureTelemetry.set(objId, tele);
+    }
 
     if (obj) {
       const failureParams = resolveObjectFailureParams(obj, this.project.simulationConfig);
@@ -3747,6 +3780,12 @@ export class DiscreteEventSimulationEngine {
     const exitingUnits = goodInBatch + scrappedInBatch;
     if (exitingUnits > 0) {
       stState.processedCount += exitingUnits;
+      let objStages = this.objectStageProcessed.get(objId);
+      if (!objStages) {
+        objStages = new Map<string, number>();
+        this.objectStageProcessed.set(objId, objStages);
+      }
+      objStages.set(stageId, (objStages.get(stageId) || 0) + exitingUnits);
       acc.completed += exitingUnits;
       acc.batchesCompleted++;
     }
@@ -5564,9 +5603,47 @@ export class DiscreteEventSimulationEngine {
       return Math.max(mx, cp.effectiveUnitCycleSec);
     }, 0);
 
+    // Precompute topological upstream and downstream server/conveyor dependency groups per stage
+    const getStageTargetResources = (
+      stage: ProductionStage
+    ): Array<{ id: string; weight: number }> => {
+      const profile = stageCapacityProfiles.get(stage.id);
+      const uniqueIds = Array.from(new Set(stage.assignedObjectIds));
+      const procObjs = uniqueIds
+        .map((id) => this.objectsMap.get(id))
+        .filter((o): o is LayoutObject => Boolean(o && (o.kind === 'machine' || o.kind === 'workstation')));
+      const targetIds = procObjs.length > 0 ? procObjs.map((o) => o.id) : uniqueIds;
+      const rateWeights = targetIds.map((oid) => {
+        const sp = profile?.serverProfiles.find((s) => s.objectId === oid);
+        return sp && sp.theoreticalCapacityPerHour > 0 ? sp.theoreticalCapacityPerHour : 0;
+      });
+      const hasPositiveRateWeights = rateWeights.some((w) => w > 0);
+      return targetIds.map((id, idx) => ({
+        id,
+        weight: hasPositiveRateWeights && rateWeights[idx] > 0 ? rateWeights[idx] : 1,
+      }));
+    };
+
+    const getStagePrimaryGroupIds = (stage: ProductionStage): string[] => {
+      const uniqueIds = Array.from(new Set(stage.assignedObjectIds));
+      const procIds = uniqueIds.filter((id) => {
+        const o = this.objectsMap.get(id);
+        return o && (o.kind === 'machine' || o.kind === 'workstation');
+      });
+      return procIds.length > 0 ? procIds : uniqueIds;
+    };
+
+    const stagePropagatedDownMap = new Map<string, number>();
+
     for (const st of this.project.stages) {
       const acc = this.stageAcc.get(st.id)!;
       const objIds = Array.from(new Set(st.assignedObjectIds));
+      const targetResources = getStageTargetResources(st);
+      const targetIdSet = new Set(targetResources.map((t) => t.id));
+      const stageProfile =
+        stageCapacityProfiles.get(st.id) ??
+        computeStageCapacityProfile(st, resolveStageObjects(st));
+
       let runT = 0;
       let blkT = 0;
       let starvedT = 0;
@@ -5575,13 +5652,9 @@ export class DiscreteEventSimulationEngine {
       let downT = 0;
       let maintT = 0;
       let unavailT = 0;
-      let stageScheduledSum = 0;
-      let stageCalendarSum = 0;
-      let stagePlannedDownSum = 0;
 
       for (const oid of objIds) {
         const totals = this.stateTracker.getMachineTotals(oid, simTime);
-        const obj = this.objectsMap.get(oid);
         runT += totals.running;
         blkT += totals.blocked;
         starvedT += totals.starved;
@@ -5590,38 +5663,195 @@ export class DiscreteEventSimulationEngine {
         downT += totals.down;
         maintT += totals.maintenance;
         unavailT += totals.unavailable;
+      }
 
-        if (obj) {
-          const cal = this.calendarEngine.getObjectCalendarMetrics(obj, simTime);
-          stageCalendarSum += cal.calendarTimeSec;
-          stageScheduledSum += cal.scheduledProductionTimeSec;
-          stagePlannedDownSum += cal.plannedDowntimeSec;
-        } else {
-          stageCalendarSum += simTime;
-          stageScheduledSum += shiftAudit.activeSimTimeSec;
-          stagePlannedDownSum += shiftAudit.plannedDowntimeSec;
+      // Capacity-weighted aggregation over stage processing servers preserves exact Stage Availability/Performance on heterogeneous parallel stages
+      let wSum = 0;
+      let wCalSum = 0;
+      let wSchedSum = 0;
+      let wPlannedDownSum = 0;
+      let wRunSum = 0;
+      let wBlkSum = 0;
+      let wStarvSum = 0;
+      let wIdleSum = 0;
+      let wSetupSum = 0;
+      let wDownSum = 0;
+      let wMaintSum = 0;
+      let wUnavailSum = 0;
+
+      for (const target of targetResources) {
+        const w = target.weight;
+        const totals = this.stateTracker.getMachineTotals(target.id, simTime);
+        const obj = this.objectsMap.get(target.id);
+        const cal = obj
+          ? this.calendarEngine.getObjectCalendarMetrics(obj, simTime)
+          : {
+              calendarTimeSec: simTime,
+              scheduledProductionTimeSec: shiftAudit.activeSimTimeSec,
+              plannedDowntimeSec: shiftAudit.plannedDowntimeSec,
+            };
+        const downInSpt = obj
+          ? this.calendarEngine.sumIntervalOverlapWithActive(
+              obj,
+              this.stateTracker
+                .getRecordedMachineIntervals(target.id)
+                .filter((iv) => iv.state === 'down')
+                .map((iv) => ({ startSec: iv.startSec, endSec: iv.endSec })),
+              simTime
+            )
+          : totals.down;
+
+        wSum += w;
+        wCalSum += w * cal.calendarTimeSec;
+        wSchedSum += w * cal.scheduledProductionTimeSec;
+        wPlannedDownSum += w * cal.plannedDowntimeSec;
+        wRunSum += w * totals.running;
+        wBlkSum += w * totals.blocked;
+        wStarvSum += w * totals.starved;
+        wIdleSum += w * totals.idle;
+        wSetupSum += w * totals.setup;
+        wDownSum += w * downInSpt;
+        wMaintSum += w * totals.maintenance;
+        wUnavailSum += w * totals.unavailable;
+      }
+
+      const avgCalSec = wSum > 0 ? wCalSum / wSum : simTime;
+      const avgSchedSec = wSum > 0 ? wSchedSum / wSum : shiftAudit.activeSimTimeSec;
+      const avgPlannedDownSec = wSum > 0 ? wPlannedDownSum / wSum : shiftAudit.plannedDowntimeSec;
+
+      const scheduledUtilizationPct =
+        wSchedSum > 1e-6 ? Math.min(100, (wRunSum / wSchedSum) * 100) : 0;
+      const utilPct = scheduledUtilizationPct;
+      const calendarUtilizationPct =
+        wCalSum > 1e-6 ? Math.min(100, (wRunSum / wCalSum) * 100) : 0;
+      const denom = Math.max(1e-6, wSchedSum || Math.max(1, wSum) * shiftAudit.activeSimTimeSec);
+      const blkPct = wSchedSum > 1e-6 ? Math.min(100, (wBlkSum / denom) * 100) : 0;
+      const starvedPct = wSchedSum > 1e-6 ? Math.min(100, (wStarvSum / denom) * 100) : 0;
+      const idlePct = wSchedSum > 1e-6 ? Math.min(100, (wIdleSum / denom) * 100) : 0;
+      const setupPct = wSchedSum > 1e-6 ? Math.min(100, (wSetupSum / denom) * 100) : 0;
+      const downPct = wSchedSum > 1e-6 ? Math.min(100, (wDownSum / denom) * 100) : 0;
+      const calDenom = Math.max(1e-6, wCalSum || Math.max(1, wSum) * simTime);
+      const maintenancePct = Math.min(100, (wMaintSum / calDenom) * 100);
+      const unavailablePct = Math.min(100, (wUnavailSum / calDenom) * 100);
+
+      // Parallel stage interval audit: complete stoppage vs partial capacity loss
+      const stoppageStats = this.stateTracker.analyzeStageAvailabilityIntervals(
+        targetResources.map((t) => t.id),
+        simTime
+      );
+
+      // Build topological upstream/downstream groups (stations + connected/stage conveyors) for line-level failure propagation
+      const upClosure = this.stageUpstreamClosures.get(st.id) || new Set<string>();
+      const downClosure = new Set<string>();
+      for (const candidate of this.project.stages) {
+        if (candidate.id === st.id) continue;
+        if (this.stageUpstreamClosures.get(candidate.id)?.has(st.id)) {
+          downClosure.add(candidate.id);
         }
       }
 
-      const objCount = Math.max(1, objIds.length);
-      const avgCalSec = stageCalendarSum > 0 ? stageCalendarSum / objCount : simTime;
-      const avgSchedSec = stageScheduledSum / objCount;
-      const avgPlannedDownSec = stagePlannedDownSum / objCount;
+      const upstreamServerGroups: string[][] = [];
+      for (const uid of upClosure) {
+        const uStage = this.stagesMap.get(uid);
+        if (!uStage) continue;
+        const grp = getStagePrimaryGroupIds(uStage).filter((id) => !targetIdSet.has(id));
+        if (grp.length > 0) upstreamServerGroups.push(grp);
+        if (uStage.conveyorObjectId && !targetIdSet.has(uStage.conveyorObjectId)) {
+          upstreamServerGroups.push([uStage.conveyorObjectId]);
+        }
+      }
 
-      const scheduledUtilizationPct =
-        stageScheduledSum > 1e-6 ? Math.min(100, (runT / stageScheduledSum) * 100) : 0;
-      const utilPct = scheduledUtilizationPct;
-      const calendarUtilizationPct =
-        stageCalendarSum > 1e-6 ? Math.min(100, (runT / stageCalendarSum) * 100) : 0;
-      const denom = Math.max(1e-6, stageScheduledSum || objCount * shiftAudit.activeSimTimeSec);
-      const blkPct = stageScheduledSum > 1e-6 ? Math.min(100, (blkT / denom) * 100) : 0;
-      const starvedPct = stageScheduledSum > 1e-6 ? Math.min(100, (starvedT / denom) * 100) : 0;
-      const idlePct = stageScheduledSum > 1e-6 ? Math.min(100, (idleT / denom) * 100) : 0;
-      const setupPct = stageScheduledSum > 1e-6 ? Math.min(100, (setupT / denom) * 100) : 0;
-      const downPct = stageScheduledSum > 1e-6 ? Math.min(100, (downT / denom) * 100) : 0;
-      const calDenom = Math.max(1e-6, stageCalendarSum || objCount * simTime);
-      const maintenancePct = Math.min(100, (maintT / calDenom) * 100);
-      const unavailablePct = Math.min(100, (unavailT / calDenom) * 100);
+      const downstreamServerGroups: string[][] = [];
+      for (const did of downClosure) {
+        const dStage = this.stagesMap.get(did);
+        if (!dStage) continue;
+        const grp = getStagePrimaryGroupIds(dStage).filter((id) => !targetIdSet.has(id));
+        if (grp.length > 0) downstreamServerGroups.push(grp);
+        if (dStage.conveyorObjectId && !targetIdSet.has(dStage.conveyorObjectId)) {
+          downstreamServerGroups.push([dStage.conveyorObjectId]);
+        }
+      }
+
+      if (st.conveyorObjectId && !targetIdSet.has(st.conveyorObjectId)) {
+        downstreamServerGroups.push([st.conveyorObjectId]);
+      }
+
+      // Include explicit connectedToIds conveyors entering/leaving stage targets
+      const stageAndUpObjIds = new Set<string>(targetIdSet);
+      for (const uid of upClosure) {
+        for (const oid of this.stagesMap.get(uid)?.assignedObjectIds || []) {
+          stageAndUpObjIds.add(oid);
+        }
+      }
+      const stageAndDownObjIds = new Set<string>(targetIdSet);
+      for (const did of downClosure) {
+        for (const oid of this.stagesMap.get(did)?.assignedObjectIds || []) {
+          stageAndDownObjIds.add(oid);
+        }
+      }
+
+      for (const obj of this.objectsMap.values()) {
+        if (obj.kind !== 'conveyor' || targetIdSet.has(obj.id)) continue;
+        const feedsTarget = obj.connectedToIds.some((cid) => targetIdSet.has(cid));
+        if (feedsTarget) {
+          upstreamServerGroups.push([obj.id]);
+        }
+        const fedByStageOrUp = Array.from(targetIdSet).some((tid) =>
+          this.objectsMap.get(tid)?.connectedToIds.includes(obj.id)
+        );
+        if (fedByStageOrUp) {
+          downstreamServerGroups.push([obj.id]);
+        }
+      }
+
+      // If no explicit conveyor links exist on a stage with breakdowns-enabled conveyors sharing the line, include nearest feeder/exit conveyor
+      const allBreakableConveyors = Array.from(this.objectsMap.values()).filter(
+        (o) =>
+          o.kind === 'conveyor' &&
+          !targetIdSet.has(o.id) &&
+          resolveObjectFailureParams(o, this.project.simulationConfig).enabled
+      );
+      for (const conv of allBreakableConveyors) {
+        const alreadyUpstream = upstreamServerGroups.some((g) => g.includes(conv.id));
+        const alreadyDownstream = downstreamServerGroups.some((g) => g.includes(conv.id));
+        if (!alreadyUpstream && upClosure.size > 0) {
+          // Check if conveyor lies in route/connection graph of upstream stages
+          const touchesUp =
+            conv.connectedToIds.some((cid) => stageAndUpObjIds.has(cid)) ||
+            Array.from(stageAndUpObjIds).some((oid) =>
+              this.objectsMap.get(oid)?.connectedToIds.includes(conv.id)
+            );
+          if (touchesUp) upstreamServerGroups.push([conv.id]);
+        }
+        if (!alreadyDownstream && downClosure.size > 0) {
+          const touchesDown =
+            conv.connectedToIds.some((cid) => stageAndDownObjIds.has(cid)) ||
+            Array.from(stageAndDownObjIds).some((oid) =>
+              this.objectsMap.get(oid)?.connectedToIds.includes(conv.id)
+            );
+          if (touchesDown) downstreamServerGroups.push([conv.id]);
+        }
+      }
+
+      const scheduledWindowsById = new Map<string, Array<{ startSec: number; endSec: number }>>();
+      for (const target of targetResources) {
+        const obj = this.objectsMap.get(target.id);
+        if (obj) {
+          scheduledWindowsById.set(
+            target.id,
+            this.calendarEngine.getObjectActiveProductionIntervals(obj, simTime)
+          );
+        }
+      }
+
+      const propRes = this.stateTracker.computePropagatedDowntimeSec({
+        targetResources,
+        upstreamServerGroups,
+        downstreamServerGroups,
+        horizonSec: simTime,
+        scheduledWindowsById,
+      });
+      stagePropagatedDownMap.set(st.id, propRes.weightedPropagatedDowntimeSec);
 
       sumCalendarUtil += calendarUtilizationPct;
       totalBlocked += blkT;
@@ -5652,9 +5882,6 @@ export class DiscreteEventSimulationEngine {
       const avgQueueWait =
         acc.entered > 0 ? acc.queueWaitTimeSum / acc.entered : avgUnitWait;
 
-      const stageProfile =
-        stageCapacityProfiles.get(st.id) ??
-        computeStageCapacityProfile(st, resolveStageObjects(st));
       const cyclePressureBonus =
         maxStageEffectiveCycle > 0
           ? (stageProfile.effectiveUnitCycleSec / maxStageEffectiveCycle) *
@@ -5709,6 +5936,9 @@ export class DiscreteEventSimulationEngine {
         calendarTimeSec: avgCalSec,
         scheduledTimeSec: avgSchedSec,
         plannedDowntimeSec: avgPlannedDownSec,
+        completeStoppageTimeSec: stoppageStats.completeStoppageTimeSec,
+        partialCapacityLossTimeSec: stoppageStats.partialCapacityLossTimeSec,
+        propagatedDownTimeSec: propRes.weightedPropagatedDowntimeSec,
         isBottleneck: false,
         batchesCompleted: acc.batchesCompleted,
         batchSize: bCfg?.batchSize ?? 1,
@@ -5728,6 +5958,21 @@ export class DiscreteEventSimulationEngine {
       }
     }
 
+    const resolveServerCycleInStage = (st: ProductionStage, obj: LayoutObject): number => {
+      const profile = stageCapacityProfiles.get(st.id);
+      const sp = profile?.serverProfiles.find((s) => s.objectId === obj.id);
+      if (sp && sp.effectiveUnitCycleSec > 0) {
+        return sp.effectiveUnitCycleSec;
+      }
+      if (obj.kind === 'conveyor') {
+        const cMetrics = computeConveyorMetrics(obj, this.project.products[0]);
+        return cMetrics.traversalTimeSec + computeStageProcessingTimeSec(st, obj, [], false);
+      }
+      return profile && profile.effectiveUnitCycleSec > 0 && profile.parallelServers > 0
+        ? profile.effectiveUnitCycleSec * profile.parallelServers
+        : 0;
+    };
+
     const resourceAnalytics: ResourceOeeAnalytics[] = [];
     for (const obj of this.objectsMap.values()) {
       if (obj.kind === 'storage' || obj.kind === 'vehicle' || obj.kind === 'buffer') continue;
@@ -5739,39 +5984,46 @@ export class DiscreteEventSimulationEngine {
       const convTotals =
         obj.kind === 'conveyor' ? this.stateTracker.getConveyorTotals(obj.id, simTime) : undefined;
       const cal = this.calendarEngine.getObjectCalendarMetrics(obj, simTime);
-      const shiftRes = this.calendarEngine.resolveResourceShiftStatus(
-        obj.operations.shiftId,
-        obj.operations.operatingSchedule
-      );
+      const fp = resolveObjectFailureParams(obj, this.project.simulationConfig);
+      const tele = this.objectFailureTelemetry.get(obj.id);
 
       const objCap =
         obj.kind === 'machine' || obj.kind === 'workstation'
           ? Math.max(1, Math.round(Number(obj.operations.capacity || 1)))
           : 1;
+      const processed = stState?.processedCount ?? 0;
+      const objStageCounts = this.objectStageProcessed.get(obj.id);
+
       let idealUnitCycleSec = 0;
-      if (st) {
-        const assignedObjs = st.assignedObjectIds
-          .map((id) => this.objectsMap.get(id))
-          .filter((o): o is LayoutObject => Boolean(o));
-        const profile = computeStageCapacityProfile(st, assignedObjs);
-        idealUnitCycleSec =
-          profile.baseTaskTimeSec > 0
-            ? (profile.baseTaskTimeSec + profile.batchTransferTimeSec) /
-              (objCap * profile.effectiveBatchDivisor)
-            : 0;
-      } else {
-        const opTask =
-          (obj.operations.processingTimeSec || 0) +
-          (obj.operations.loadingTimeSec || 0) +
-          (obj.operations.unloadingTimeSec || 0);
-        const bDiv =
-          obj.operations.batchMode === 'collect_batch'
-            ? Math.max(1, obj.operations.batchSize || 1)
-            : 1;
-        idealUnitCycleSec = opTask > 0 ? opTask / (objCap * bDiv) : 0;
+      if (objStageCounts && objStageCounts.size > 0 && processed > 0) {
+        let weightedIdealWorkSec = 0;
+        let countedUnits = 0;
+        for (const [sid, cnt] of objStageCounts.entries()) {
+          const stageRef = this.stagesMap.get(sid);
+          if (!stageRef || cnt <= 0) continue;
+          weightedIdealWorkSec += cnt * resolveServerCycleInStage(stageRef, obj);
+          countedUnits += cnt;
+        }
+        if (countedUnits > 0) {
+          idealUnitCycleSec = weightedIdealWorkSec / countedUnits;
+        }
+      }
+      if (idealUnitCycleSec <= 0) {
+        if (st) {
+          idealUnitCycleSec = resolveServerCycleInStage(st, obj);
+        } else {
+          const opTask =
+            (obj.operations.processingTimeSec || 0) +
+            (obj.operations.loadingTimeSec || 0) +
+            (obj.operations.unloadingTimeSec || 0);
+          const bDiv =
+            obj.operations.batchMode === 'collect_batch'
+              ? Math.max(1, obj.operations.batchSize || 1)
+              : 1;
+          idealUnitCycleSec = opTask > 0 ? opTask / (objCap * bDiv) : 0;
+        }
       }
 
-      const processed = stState?.processedCount ?? 0;
       const scrapRes = stState?.scrapCount ?? 0;
       const goodRes = Math.max(0, processed - scrapRes);
       const runTime =
@@ -5779,10 +6031,19 @@ export class DiscreteEventSimulationEngine {
       const unavailTime =
         totals.unavailable > 0 ? totals.unavailable : convTotals?.unavailable ?? totals.unavailable;
 
+      const downInSpt = this.calendarEngine.sumIntervalOverlapWithActive(
+        obj,
+        this.stateTracker
+          .getRecordedMachineIntervals(obj.id)
+          .filter((iv) => iv.state === 'down')
+          .map((iv) => ({ startSec: iv.startSec, endSec: iv.endSec })),
+        simTime
+      );
+
       const resOee = computeOeeMetrics({
         calendarTimeSec: cal.calendarTimeSec,
         plannedDowntimeSec: cal.plannedDowntimeSec,
-        unplannedDowntimeSec: totals.down,
+        unplannedDowntimeSec: downInSpt,
         setupTimeSec: totals.setup,
         idealCycleTimeSec: idealUnitCycleSec,
         totalUnitsProcessed: processed,
@@ -5796,6 +6057,22 @@ export class DiscreteEventSimulationEngine {
           : 0;
       const calUtilPct =
         cal.calendarTimeSec > 1e-6 ? Math.min(100, (runTime / cal.calendarTimeSec) * 100) : 0;
+
+      const failureCount = tele?.failureCount ?? 0;
+      const empiricalMtbfSec =
+        failureCount > 0
+          ? Math.max(0, resOee.scheduledProductionTimeSec - resOee.unplannedDowntimeSec) /
+            failureCount
+          : undefined;
+      const empiricalMttrSec =
+        tele && tele.completedRepairCount > 0
+          ? tele.completedRepairDurSum / tele.completedRepairCount
+          : failureCount > 0
+          ? resOee.unplannedDowntimeSec / failureCount
+          : undefined;
+      const inherentAvailabilityPct = fp.enabled
+        ? computeInherentAvailability(fp.mtbfSec, fp.mttrSec) * 100
+        : 100;
 
       resourceAnalytics.push({
         objectId: obj.id,
@@ -5823,8 +6100,17 @@ export class DiscreteEventSimulationEngine {
         scrapCount: scrapRes,
         availabilityPct: resOee.availabilityPct,
         performancePct: resOee.performancePct,
+        rawPerformancePct: resOee.rawPerformancePct,
+        performanceAnomaly: resOee.performanceAnomaly,
+        ...(resOee.performanceAnomalyReason
+          ? { performanceAnomalyReason: resOee.performanceAnomalyReason }
+          : {}),
         qualityPct: resOee.qualityPct,
         oeePct: resOee.oeePct,
+        failureCount,
+        ...(empiricalMtbfSec !== undefined ? { empiricalMtbfSec } : {}),
+        ...(empiricalMttrSec !== undefined ? { empiricalMttrSec } : {}),
+        inherentAvailabilityPct,
       });
     }
 
@@ -5967,6 +6253,52 @@ export class DiscreteEventSimulationEngine {
     const avgQueueWaitingTimeSec =
       stageEnteredSum > 0 ? stageQueueWaitWeightedSum / stageEnteredSum : avgUnitWaitingTimeSec;
 
+    // Select structural constraint stage consistently with buildAuditedSimulationKPIs for Line Availability propagation
+    const timingAuditForLine = auditProjectTiming(this.project, simTime);
+    const processingRes = resourceAnalytics.filter(
+      (r) => r.kind !== 'conveyor' || r.idealCycleTimeSec > 0 || r.processedCount > 0
+    );
+    const activeLineRes = processingRes.length > 0 ? processingRes : resourceAnalytics;
+    const hasCustomShifts =
+      activeLineRes.length > 0 &&
+      (activeLineRes.some(
+        (r) =>
+          Math.abs(r.scheduledProductionTimeSec - shiftAudit.activeSimTimeSec) > 1e-1 ||
+          Math.abs(r.plannedDowntimeSec - shiftAudit.plannedDowntimeSec) > 1e-1
+      ) ||
+        activeLineRes.some((r) => Boolean(r.shiftId)));
+
+    let lineConstraintStageId: string | undefined;
+    if (hasCustomShifts) {
+      let minShiftCap = Infinity;
+      let maxCycleTie = -1;
+      for (const sa of stageAnalytics) {
+        const cp = stageCapacityProfiles.get(sa.stageId);
+        const unitCycle = cp?.effectiveUnitCycleSec ?? 0;
+        if (unitCycle <= 0) continue;
+        const schedSec = sa.scheduledTimeSec ?? shiftAudit.activeSimTimeSec;
+        const cap = schedSec / unitCycle;
+        if (
+          cap < minShiftCap - 1e-6 ||
+          (Math.abs(cap - minShiftCap) <= 1e-6 &&
+            (unitCycle > maxCycleTie + 1e-6 ||
+              (Math.abs(unitCycle - maxCycleTie) <= 1e-6 &&
+                sa.stageId === (bottleneckStageId || timingAuditForLine.bottleneckStageId))))
+        ) {
+          minShiftCap = cap;
+          maxCycleTie = unitCycle;
+          lineConstraintStageId = sa.stageId;
+        }
+      }
+    }
+    if (!lineConstraintStageId) {
+      lineConstraintStageId =
+        timingAuditForLine.bottleneckStageId || bottleneckStageId || stageAnalytics[0]?.stageId;
+    }
+    const linePropagatedDowntimeSec = lineConstraintStageId
+      ? stagePropagatedDownMap.get(lineConstraintStageId)
+      : undefined;
+
     const kpis = buildAuditedSimulationKPIs({
       project: this.project,
       shiftAudit,
@@ -6003,6 +6335,7 @@ export class DiscreteEventSimulationEngine {
       productAnalytics,
       bottleneckStageId,
       bottleneckStageName,
+      linePropagatedDowntimeSec,
     });
 
     return {
