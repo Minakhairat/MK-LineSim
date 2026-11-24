@@ -49,3 +49,21 @@ test('Out of scope stays count-based and unflagged: single product, manual routi
   assert.equal(run(fixture((p) => { p.products[1].routingMode = 'manual'; })).kpis.oeeMixedTimeWeighted, undefined);
   assert.equal(run(fixture((p) => { p.products[1].routeStageIds = p.products[1].routeStageIds.slice(0, 4); })).kpis.oeeMixedTimeWeighted, undefined);
 });
+
+// Live-like fixture (default project, second product x2, Packing single-item, arrival default). Recorded counts:
+// A 137 good + 10 scrap, B 140 good + 7 scrap (147 each), operating 27000 s. Hand: ideal work (60+120) x 147 = 26460 s,
+// good 60 x 137 + 120 x 140 = 25020 s. P = 98.00%, Q = 94.56%. Unit yield (277/294) = 94.22% is a different number.
+// Regression: the anomaly flag from the old mix-average basis must not survive (P is below 100%).
+test('Weighted case below 100% Performance carries no stale anomaly flag', () => {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.cycleTimeMultiplier = 2; p.products.push(B);
+  const r = run(p);
+  const [A2, B2] = r.productAnalytics;
+  assert.deepEqual([A2.completedGoodQty, A2.scrappedQty, B2.completedGoodQty, B2.scrappedQty], [137, 10, 140, 7]);
+  near(r.kpis.performancePct, (26460 / 27000) * 100);
+  near(r.kpis.qualityPct, (25020 / 26460) * 100);
+  near(r.kpis.unitYieldPct, (277 / 294) * 100);
+  assert.equal(r.kpis.performanceAnomaly, false);
+  assert.equal(r.kpis.performanceAnomalyReason, undefined);
+});

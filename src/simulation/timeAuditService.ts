@@ -1051,10 +1051,17 @@ export function buildAuditedSimulationKPIs(params: {
     if (mw && lineOee.operatingTimeSec > 1e-6 && lineOee.scheduledProductionTimeSec > 1e-6) {
       const perf = (mw.idealWorkSec / lineOee.operatingTimeSec) * 100;
       const qual = (mw.idealGoodWorkSec / mw.idealWorkSec) * 100;
+      // Recompute the anomaly flag on the weighted figure; the old flag belonged to the mix-average basis.
+      const { performanceAnomalyReason: _staleReason, ...lineOeeRest } = lineOee;
+      const perfAnomaly = perf > 100.05;
       lineOee = {
-        ...lineOee,
+        ...lineOeeRest,
         rawPerformancePct: perf,
         performancePct: perf,
+        performanceAnomaly: perfAnomaly,
+        ...(perfAnomaly
+          ? { performanceAnomalyReason: `Performance anomaly: time-weighted performance ${perf.toFixed(2)}% exceeds 100% (ideal work ${mw.idealWorkSec.toFixed(2)}s > operating time ${lineOee.operatingTimeSec.toFixed(2)}s).` }
+          : {}),
         qualityPct: qual,
         oeePct: (lineOee.availabilityPct / 100) * (perf / 100) * (qual / 100) * 100,
       };
