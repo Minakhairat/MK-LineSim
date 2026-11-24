@@ -126,7 +126,18 @@ export const ScenariosModule: React.FC = () => {
   const baselineResult = project.scenarios.find((s) => s.isBaseline)?.result || project.lastSimulationResult;
 
   const recommendations: string[] = [];
-  if (baselineResult) {
+  const baselineStalled = !!(baselineResult && baselineResult.stallWarnings && baselineResult.stallWarnings.length > 0);
+  if (baselineResult && baselineStalled) {
+    // A stalled run has measured zero utilization downstream of the stall point. That is a symptom of the stall,
+    // not evidence that a station is slow, so no bottleneck, buffer or staffing recommendation is derived from it.
+    const nm = new Map(project.stages.map((s) => [s.id, s.name]));
+    const names = Array.from(new Set(baselineResult.stallWarnings!.map((w) => nm.get(w.stageId) || w.stageId))).join(', ');
+    recommendations.push(
+      isAr
+        ? `نتيجة خط الأساس انتهت بتعليق في النموذج عند (${names}). أرقام الاستغلال والاختناق في هذه النتيجة أعراض للتعليق وليست دليلاً على بطء محطة، لذلك لا تُستنتج منها توصيات سعة أو عمالة. راجع أولاً سعة المخزن وحجم الدفعة وخليط المنتجات.`
+        : `The baseline run ended in a modeled stall at (${names}). Utilization and bottleneck figures from this run are symptoms of the stall, not evidence that a station is slow, so no capacity or staffing recommendations are derived from it. Review buffer capacity, batch size and product mix assumptions first.`
+    );
+  } else if (baselineResult) {
     const b = baselineResult.kpis;
     const bn = baselineResult.stageAnalytics.find((s) => s.isBottleneck);
     if (bn) {
@@ -354,7 +365,7 @@ export const ScenariosModule: React.FC = () => {
                     <td className="px-3 py-2.5 text-end">
                       {k ? `${k.productionAttainmentPct.toFixed(1)}%` : '—'}
                     </td>
-                    <td className="px-3 py-2.5 text-end">{k ? formatDuration(k.avgLeadTimeSec) : '—'}</td>
+                    <td className="px-3 py-2.5 text-end">{k && k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '—'}</td>
                     <td className="px-3 py-2.5 text-end">{k ? k.avgWip.toFixed(1) : '—'}</td>
                     <td className="px-3 py-2.5 text-end">
                       {k ? `${k.workerUtilizationPct.toFixed(1)}%` : '—'}

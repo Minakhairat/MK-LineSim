@@ -687,7 +687,8 @@ export function createDesertAirCoolerProject(): ProjectData {
           workerCount: 10,
           processingTimeScale: 1.0,
           conveyorSpeedMps: 0.05,
-          bufferCapacity: 4,
+          // No uniform buffer override: the baseline must reproduce the project's per-stage buffers
+          // (Packing needs more buffer than 4 for its batch size of 4).
           shiftDurationSec: 28800,
           enableBreakdowns: false,
           targetProduction: 600,

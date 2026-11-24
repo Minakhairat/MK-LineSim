@@ -318,7 +318,7 @@ export const AnalyticsModule: React.FC = () => {
             },
             {
               label: t.analytics.cards.leadTime,
-              val: formatDuration(k.avgLeadTimeSec),
+              val: k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '—',
               sub: isAr
                 ? `تشغيل: ${k.avgProcessingTimeSec.toFixed(0)}ث · انتظار وحدة: ${(k.avgUnitWaitingTimeSec ?? k.avgWaitingTimeSec).toFixed(0)}ث`
                 : `Proc: ${k.avgProcessingTimeSec.toFixed(0)}s · Unit Wait: ${(k.avgUnitWaitingTimeSec ?? k.avgWaitingTimeSec).toFixed(0)}s`,
@@ -593,7 +593,7 @@ export const AnalyticsModule: React.FC = () => {
                       {pa.reworkUnits}
                     </td>
                     <td className="px-3 py-2 text-end">{pa.wipQty}</td>
-                    <td className="px-3 py-2 text-end">{formatDuration(pa.avgLeadTimeSec)}</td>
+                    <td className="px-3 py-2 text-end">{pa.avgLeadTimeSec > 0 ? formatDuration(pa.avgLeadTimeSec) : '—'}</td>
                     <td className="px-3 py-2 text-end font-semibold">
                       {pa.attainmentPct.toFixed(1)}%
                     </td>
