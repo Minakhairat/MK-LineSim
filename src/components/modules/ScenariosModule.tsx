@@ -255,6 +255,13 @@ export const ScenariosModule: React.FC = () => {
                 }}
                 className="rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-2.5 py-1.5 font-mono-tabular"
               />
+              {bufferTouched && !project.stages.every((s) => s.bufferCapacity === bufferCap) && (
+                <span className="text-[10px] leading-tight text-amber-700 dark:text-amber-400">
+                  {isAr
+                    ? `تنبيه: هذه القيمة تُطبَّق على كل المراحل وتستبدل سعات المخزن الخاصة بكل مرحلة (${Math.min(...project.stages.map((s) => s.bufferCapacity))}–${Math.max(...project.stages.map((s) => s.bufferCapacity))}). اتركها بدون تعديل للإبقاء على القيم الأصلية.`
+                    : `Applies one value to every stage and replaces each stage's own buffer (${Math.min(...project.stages.map((s) => s.bufferCapacity))}–${Math.max(...project.stages.map((s) => s.bufferCapacity))} now). Leave it untouched to keep per-stage values.`}
+                </span>
+              )}
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-[11px] text-neutral-500">{t.scenarios.shiftDur}</span>
@@ -350,6 +357,15 @@ export const ScenariosModule: React.FC = () => {
                   >
                     <td className="px-4 py-2.5 font-sans font-medium text-neutral-900 dark:text-neutral-100">
                       {sc.name}
+                      {sc.overrides.bufferCapacity !== undefined &&
+                        !project.stages.every((s) => s.bufferCapacity === sc.overrides.bufferCapacity) && (
+                          <span
+                            className="ms-2 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800"
+                            title={isAr ? 'سعة مخزن موحدة تستبدل قيم المراحل الأصلية' : 'One buffer value replaces each stage\'s own buffer capacity'}
+                          >
+                            {isAr ? `مخزن موحد ${sc.overrides.bufferCapacity}` : `Uniform buffer ${sc.overrides.bufferCapacity}`}
+                          </span>
+                        )}
                       {sc.result?.stallWarnings && sc.result.stallWarnings.length > 0 && (
                         <span
                           className="ms-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
@@ -371,7 +387,9 @@ export const ScenariosModule: React.FC = () => {
                       {k ? `${k.workerUtilizationPct.toFixed(1)}%` : '—'}
                     </td>
                     <td className="px-3 py-2.5 font-sans text-neutral-600 dark:text-neutral-400">
-                      {k?.bottleneckStageName || '—'}
+                      {sc.result?.stallWarnings && sc.result.stallWarnings.length > 0
+                        ? isAr ? 'غير محدد (تعليق)' : 'n/a (stall)'
+                        : k?.bottleneckStageName || '—'}
                     </td>
                     <td className="px-3 py-2.5 text-end">
                       <div className="inline-flex items-center gap-1">
