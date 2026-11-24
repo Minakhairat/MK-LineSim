@@ -249,7 +249,7 @@ test('Batch stage admits up to max(buffer, batch size): buffer 1 to 4 identical 
 // (c) B visits Testing twice in a row (route ... Testing, Testing, Final ...), no other change. A ideal 60 s (wiring); B Testing load 2x35 = 70 s > 60, so 70 s.
 //     Recorded A 100 + 10, B 107 + 3 (Testing completed 330 = 110 + 2x110): ideal 60x110 + 70x110 = 14300 s, good 60x100 + 70x107 = 13490 s.
 //     P = 52.96%, Q = 94.34%, OEE = 49.96%.
-function parFixture(extra: 'wiring' | 'both') {
+function parFixture(extra: 'wiring' | 'both', arrival = 120) {
   const p: any = createDesertAirCoolerProject();
   for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
   const dup = (stageId: string, objId: string) => {
@@ -260,7 +260,7 @@ function parFixture(extra: 'wiring' | 'both') {
   dup('stg_3_wiring', 'obj_st_3');
   if (extra === 'both') dup('stg_2_motor', 'obj_st_2');
   const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; B.cycleTimeMultiplier = 2;
-  p.products[0].mixWeight = 1; p.products.push(B); p.simulationConfig.arrivalIntervalSec = 120;
+  p.products[0].mixWeight = 1; p.products.push(B); p.simulationConfig.arrivalIntervalSec = arrival;
   return p;
 }
 test('Weighted OEE with parallel machines in one stage (hand-checked fixtures)', () => {
@@ -283,5 +283,17 @@ test('Weighted OEE with a consecutive repeat of one stage (hand-checked fixture)
   assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[100, 10], [107, 3]]);
   assert.equal(r.stageAnalytics.find((s: any) => s.stageId === 'stg_4_testing').completedCount, 330);
   near(r.kpis.performancePct, (14300 / 27000) * 100); near(r.kpis.qualityPct, (13490 / 14300) * 100); near(r.kpis.oeePct, (13490 / 27000) * 100);
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+});
+
+// (d) Same as (a) (second Wiring machine, B cycle x2, A ideal 45 s, B 90 s) but arrival 30 s so the line is not arrival-limited.
+//     Recorded A 135 good + 12 scrap, B 140 + 6 (the same counts at arrival 45, 40 and 30 s: the output stops depending on arrival).
+//     Ideal work 45x147 + 90x146 = 19755 s -> P 73.17%. Good 45x135 + 90x140 = 18675 s -> Q 94.53%, OEE 69.17%.
+//     The Motor stage (the ranked bottleneck) is 76% utilized in this run, so it is not saturated: the cause of the flat output
+//     (for example blocking between stages with small buffers) was NOT traced. This test only pins the arithmetic.
+test('Weighted OEE with a parallel machine when arrival no longer limits output (hand-checked, cause of the output limit not traced)', () => {
+  const r = run(parFixture('wiring', 30));
+  assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[135, 12], [140, 6]]);
+  near(r.kpis.performancePct, (19755 / 27000) * 100); near(r.kpis.qualityPct, (18675 / 19755) * 100); near(r.kpis.oeePct, (18675 / 27000) * 100);
   assert.equal(r.kpis.oeeMixedTimeWeighted, true);
 });
