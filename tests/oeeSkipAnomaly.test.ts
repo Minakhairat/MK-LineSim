@@ -22,16 +22,20 @@ import { createDesertAirCoolerProject } from '../src/data/sampleProject';
     assert.equal(k.performanceAnomaly, false);
     assert.ok(k.performancePct <= 100);
   });
-  test('OEE skipped-stage (KNOWN LIMITATION): skipping OP-30 gives performance above 100% and sets the anomaly flag', () => {
+  // Hand-derived: single auto product skipping OP-30 (60 s): route pacemaker is OP-20 at 45 s.
+  // Arrival 45 s: 583 units in the run; Performance = 45 s x units / operating time, no longer above 100%.
+  test('OEE skipped-stage (scoped fix, single auto product): ideal cycle comes from the route pacemaker', () => {
     const k = run(true);
-    assert.ok(k.performancePct > 100);
-    assert.equal(k.performanceAnomaly, true);
+    assert.equal(k.theoreticalBottleneckStageId, 'stg_2_motor');
+    assert.equal(k.theoreticalBottleneckCycleSec, 45);
+    assert.equal(k.performanceAnomaly, false);
+    assert.ok(k.performancePct <= 100);
   });
 }
 
 import { oeeBasisUsesSkippedStage } from '../src/utils/oeeBasis';
 
-test('oeeBasisUsesSkippedStage: detects an auto route that skips the project slowest stage, even with Performance below 100%', () => {
+test('single auto product skipping OP-30 at arrival 60: Performance = 97.3 (same run, 60 s basis) x 45/60 = 72.975% (hand arithmetic; the full-route 97.8 is a different run), basis on route', () => {
   const p: any = createDesertAirCoolerProject();
   p.simulationConfig.arrivalIntervalSec = 60;
   const A = p.products[0];
@@ -39,11 +43,28 @@ test('oeeBasisUsesSkippedStage: detects an auto route that skips the project slo
   A.routeStageIds = A.routeStageIds.filter((x: string) => x !== 'stg_3_wiring');
   A.entryStageIds = [A.routeStageIds[0]];
   const k = (new DiscreteEventSimulationEngine(p) as any).runToCompletion().kpis;
-  // Current behaviour: no anomaly flag and Performance below 100%, but the ideal cycle still comes from OP-30 (60 s).
-  assert.equal(k.performanceAnomaly, false);
-  assert.ok(k.performancePct < 100);
+  assert.ok(Math.abs(k.performancePct - 73.0) < 0.5, 'got ' + k.performancePct);
+  assert.equal(k.theoreticalBottleneckStageId, 'stg_2_motor');
+  assert.equal(oeeBasisUsesSkippedStage(p.products, k.theoreticalBottleneckStageId), false);
+});
+
+test('single auto product, full route: unchanged (Electrical Wiring 60 s, line efficiency 57.29%)', () => {
+  const p: any = createDesertAirCoolerProject();
+  const k = (new DiscreteEventSimulationEngine(p) as any).runToCompletion().kpis;
   assert.equal(k.theoreticalBottleneckStageId, 'stg_3_wiring');
-  assert.equal(oeeBasisUsesSkippedStage(p.products, k.theoreticalBottleneckStageId), true);
+  assert.ok(Math.abs(k.lineEfficiencyPct - 57.29) < 0.01);
+});
+
+test('two products, one skipping OP-30: still all-stages basis (unsupported case stays qualified)', () => {
+  const p: any = createDesertAirCoolerProject();
+  const B = structuredClone(p.products[0]);
+  B.id = 'prodB'; B.code = 'B';
+  p.products.push(B);
+  p.products[0].routingMode = 'auto';
+  p.products[0].routeStageIds = p.products[0].routeStageIds.filter((x: string) => x !== 'stg_3_wiring');
+  p.products[0].entryStageIds = [p.products[0].routeStageIds[0]];
+  const k = (new DiscreteEventSimulationEngine(p) as any).runToCompletion().kpis;
+  assert.equal(k.theoreticalBottleneckStageId, 'stg_3_wiring');
 });
 
 test('oeeBasisUsesSkippedStage: false for full route, manual products, empty route, or no stage id', () => {
@@ -53,4 +74,18 @@ test('oeeBasisUsesSkippedStage: false for full route, manual products, empty rou
   assert.equal(oeeBasisUsesSkippedStage([{ routingMode: 'auto', routeStageIds: [] }], 'b'), false);
   assert.equal(oeeBasisUsesSkippedStage(full, undefined), false);
   assert.equal(oeeBasisUsesSkippedStage(full, 'z'), true);
+});
+
+test('single auto product skipping OP-30: line balance hand-derived 215 / (7 x 45) = 68.25%, throughput cap uses current arrival (3600/55)', async () => {
+  const { auditProjectTiming } = await import('../src/simulation/timeAuditService');
+  const p: any = createDesertAirCoolerProject();
+  const A = p.products[0];
+  A.routingMode = 'auto';
+  A.routeStageIds = A.routeStageIds.filter((x: string) => x !== 'stg_3_wiring');
+  A.entryStageIds = [A.routeStageIds[0]];
+  const t: any = auditProjectTiming(p);
+  assert.ok(Math.abs(t.lineBalanceEfficiencyPct - (215 / 315) * 100) < 1e-6);
+  assert.ok(Math.abs(t.effectiveTheoreticalThroughputPerHour - 3600 / 55) < 1e-6);
+  p.simulationConfig.arrivalIntervalSec = 60;
+  assert.ok(Math.abs((auditProjectTiming(p) as any).effectiveTheoreticalThroughputPerHour - 60) < 1e-6);
 });
