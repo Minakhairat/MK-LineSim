@@ -1,4 +1,4 @@
-import { leadTimeText } from '../../utils/units';
+import { leadTimeText, oeeSummaryText } from '../../utils/units';
 import React, { useEffect, useRef } from 'react';
 import {
   Chart,
@@ -371,9 +371,7 @@ export const AnalyticsModule: React.FC = () => {
             <span className="text-[11px] font-mono-tabular text-neutral-500">
               {t.labels.oee}:{' '}
               <bdi dir="ltr">
-                {(k.oeePct ?? 0).toFixed(1)}% = A {(k.availabilityPct ?? 0).toFixed(1)}% × P{' '}
-                {(k.actualProduction ?? 0) > 0 ? `${(k.performancePct ?? 0).toFixed(1)}%` : '—'} × Q{' '}
-                {(k.actualProduction ?? 0) > 0 ? `${(k.qualityPct ?? 100).toFixed(1)}%` : '—'}
+                {oeeSummaryText(k, language === 'ar')}
               </bdi>
             </span>
           </div>

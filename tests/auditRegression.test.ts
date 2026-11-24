@@ -11,6 +11,8 @@ import {
   leadTimeText,
   stallLocationNames,
   uniformBufferReplacesStages,
+  isEventLogTruncated,
+  oeeSummaryText,
 } from '../src/utils/units';
 
 function neutralOverrides(base: any) {
@@ -333,4 +335,26 @@ test('presentation helpers', () => {
   assert.equal(formatBeltSpeed(0.0534), '0.0534');
   assert.equal(isStalledResult(undefined), false);
   assert.equal(isStalledResult({ stallWarnings: [] } as any), false);
+});
+
+test('OEE summary text: no output explains undefined P and Q; output keeps the A x P x Q line; engine value untouched', () => {
+  const none = oeeSummaryText({ oeePct: 0, availabilityPct: 100, performancePct: 0, qualityPct: 0, actualProduction: 0 }, false);
+  assert.match(none, /^0\.0% \(no output/);
+  assert.ok(!none.includes('—'));
+  const ar = oeeSummaryText({ oeePct: 0, actualProduction: 0 }, true);
+  assert.ok(ar.includes('لا إنتاج'));
+  const some = oeeSummaryText({ oeePct: 45, availabilityPct: 90, performancePct: 80, qualityPct: 62.5, actualProduction: 10 }, false);
+  assert.equal(some, '45.0% = A 90.0% × P 80.0% × Q 62.5%');
+});
+
+test('Event log truncation: engine caps the log at 25,000 entries and the helper detects it', () => {
+  assert.equal(isEventLogTruncated(100, 100), false);
+  assert.equal(isEventLogTruncated(25000, 26448), true);
+  assert.equal(isEventLogTruncated(5, undefined), false);
+  const base: any = createDesertAirCoolerProject();
+  const e: any = new DiscreteEventSimulationEngine(structuredClone(base));
+  const r: any = e.runToCompletion();
+  const logged = e.getAllEvents().length;
+  assert.equal(logged, Math.min(25000, r.totalEventsExecuted));
+  assert.equal(isEventLogTruncated(logged, r.totalEventsExecuted), r.totalEventsExecuted > 25000);
 });
