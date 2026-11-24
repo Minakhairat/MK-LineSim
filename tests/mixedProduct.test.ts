@@ -239,3 +239,49 @@ test('Batch stage admits up to max(buffer, batch size): buffer 1 to 4 identical 
   assert.equal(r.kpis.goodUnits, 0);
   assert.equal(r.stallWarnings?.[0]?.heldUnits, 4);
 });
+
+// Parallel machines and a consecutive repeat, weighted OEE (one fixture each, hand-derived, arrival 120 s, Packing batch 1, 27000 s operating).
+// (a) Second Electrical Wiring machine; B has cycle multiplier 2. Solo bottleneck A: Motor 45 s (wiring 60/2 = 30 s), B 90 s.
+//     Recorded A 101 good + 9 scrap, B 106 + 3: ideal 45x110 + 90x109 = 14760 s, good 45x101 + 90x106 = 14085 s.
+//     P = 54.67%, Q = 95.43%, OEE = 52.17%.
+// (b) Second machines at Motor Assembly and Electrical Wiring; B multiplier 2. A ideal 40 s (Final Assembly and Packing), B 80 s.
+//     Recorded A 105 + 4, B 104 + 5: ideal 40x109 + 80x109 = 13080 s, good 40x105 + 80x104 = 12520 s. P = 48.44%, Q = 95.72%, OEE = 46.37%.
+// (c) B visits Testing twice in a row (route ... Testing, Testing, Final ...), no other change. A ideal 60 s (wiring); B Testing load 2x35 = 70 s > 60, so 70 s.
+//     Recorded A 100 + 10, B 107 + 3 (Testing completed 330 = 110 + 2x110): ideal 60x110 + 70x110 = 14300 s, good 60x100 + 70x107 = 13490 s.
+//     P = 52.96%, Q = 94.34%, OEE = 49.96%.
+function parFixture(extra: 'wiring' | 'both') {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const dup = (stageId: string, objId: string) => {
+    const st = p.stages.find((s: any) => s.id === stageId); const o = p.layoutObjects.find((x: any) => x.id === objId);
+    const o2 = structuredClone(o); o2.id = objId + 'b'; o2.name = o.name + ' 2'; o2.geometry.position.x += 3; o2.stageId = stageId;
+    p.layoutObjects.push(o2); st.assignedObjectIds = [...st.assignedObjectIds, o2.id];
+  };
+  dup('stg_3_wiring', 'obj_st_3');
+  if (extra === 'both') dup('stg_2_motor', 'obj_st_2');
+  const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; B.cycleTimeMultiplier = 2;
+  p.products[0].mixWeight = 1; p.products.push(B); p.simulationConfig.arrivalIntervalSec = 120;
+  return p;
+}
+test('Weighted OEE with parallel machines in one stage (hand-checked fixtures)', () => {
+  const a = run(parFixture('wiring'));
+  assert.deepEqual(a.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[101, 9], [106, 3]]);
+  near(a.kpis.performancePct, (14760 / 27000) * 100); near(a.kpis.qualityPct, (14085 / 14760) * 100); near(a.kpis.oeePct, (14085 / 27000) * 100);
+  const b = run(parFixture('both'));
+  assert.deepEqual(b.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[105, 4], [104, 5]]);
+  near(b.kpis.performancePct, (13080 / 27000) * 100); near(b.kpis.qualityPct, (12520 / 13080) * 100); near(b.kpis.oeePct, (12520 / 27000) * 100);
+  assert.equal(a.kpis.oeeMixedTimeWeighted, true); assert.equal(b.kpis.oeeMixedTimeWeighted, true);
+});
+test('Weighted OEE with a consecutive repeat of one stage (hand-checked fixture)', () => {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; p.products[0].mixWeight = 1; p.products.push(B);
+  const r0: string[] = [...B.routeStageIds]; const i = r0.indexOf('stg_4_testing');
+  B.routeStageIds = [...r0.slice(0, i + 1), 'stg_4_testing', ...r0.slice(i + 1)];
+  p.simulationConfig.arrivalIntervalSec = 120;
+  const r = run(p);
+  assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[100, 10], [107, 3]]);
+  assert.equal(r.stageAnalytics.find((s: any) => s.stageId === 'stg_4_testing').completedCount, 330);
+  near(r.kpis.performancePct, (14300 / 27000) * 100); near(r.kpis.qualityPct, (13490 / 14300) * 100); near(r.kpis.oeePct, (13490 / 27000) * 100);
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+});
