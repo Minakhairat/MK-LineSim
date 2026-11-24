@@ -264,7 +264,46 @@ function draw2DPlanOnCanvas(
     // Keep the label readable: the box keeps its true orientation, but text is never drawn upside down.
     const rotNorm = ((obj.geometry.rotationDeg % 360) + 360) % 360;
     if (rotNorm > 90 && rotNorm <= 270) ctx.rotate(Math.PI);
-    ctx.fillText(obj.name, 0, 0, rw - 6);
+    {
+      // Fit the label without squeezing glyphs: shrink the font, then wrap on a space, then fall back to compression.
+      const maxW = rw - 6;
+      const weight = '600';
+      let size = 13;
+      const fitOne = (t: string) => {
+        size = 13;
+        ctx.font = `${weight} ${size}px ${FONT_STACK}`;
+        while (size > 8 && ctx.measureText(t).width > maxW) {
+          size -= 1;
+          ctx.font = `${weight} ${size}px ${FONT_STACK}`;
+        }
+        return ctx.measureText(t).width <= maxW;
+      };
+      if (fitOne(obj.name)) {
+        ctx.fillText(obj.name, 0, 0, maxW);
+      } else {
+        const words = obj.name.split(' ');
+        let best: [string, string] | null = null;
+        let bestW = Infinity;
+        for (let i = 1; i < words.length; i++) {
+          const a = words.slice(0, i).join(' ');
+          const b = words.slice(i).join(' ');
+          const w = Math.max(ctx.measureText(a).width, ctx.measureText(b).width);
+          if (w < bestW) { bestW = w; best = [a, b]; }
+        }
+        if (best && rh >= 18) {
+          size = 13;
+          ctx.font = `${weight} ${size}px ${FONT_STACK}`;
+          while (size > 7 && Math.max(ctx.measureText(best[0]).width, ctx.measureText(best[1]).width) > maxW) {
+            size -= 1;
+            ctx.font = `${weight} ${size}px ${FONT_STACK}`;
+          }
+          ctx.fillText(best[0], 0, -size * 0.55, maxW);
+          ctx.fillText(best[1], 0, size * 0.55, maxW);
+        } else {
+          ctx.fillText(obj.name, 0, 0, maxW);
+        }
+      }
+    }
     ctx.restore();
   }
 
