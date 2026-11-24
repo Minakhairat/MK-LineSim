@@ -663,8 +663,9 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
     ctx.lineWidth = 1;
     ctx.strokeRect(48, ry, tableW, rowH);
 
+    const stallFlag = sc.result?.stallWarnings && sc.result.stallWarnings.length > 0;
     const vals = [
-      sc.name,
+      stallFlag ? `${sc.name} ${isAr ? '[تعليق مرصود]' : '[stall flagged]'}` : sc.name,
       `${sc.overrides.workerCount}`,
       sc.overrides.conveyorSpeedMps.toFixed(2),
       k ? `${k.goodUnits}` : isAr ? 'لم يعمل' : 'Not Run',
