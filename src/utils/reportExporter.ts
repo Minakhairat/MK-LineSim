@@ -1,3 +1,4 @@
+import { mostLoadedUtilText } from './bottleneckLabel';
 import { formatBeltSpeed, leadTimeText } from './units';
 import { jsPDF } from 'jspdf';
 import { ProjectData, SimulationResult } from '../types/project';
@@ -443,7 +444,13 @@ export function exportKpiCanvasPdf(
     {
       label: stalled ? (isAr ? 'موقع التعليق' : 'Stall Location') : isAr ? 'مرحلة الاختناق' : 'Bottleneck Stage',
       val: stalled ? stallNames || 'N/A' : k.bottleneckStageName || 'N/A',
-      sub: isAr ? `كفاءة الخط: ${k.lineEfficiencyPct.toFixed(1)}%` : `Line Eff: ${k.lineEfficiencyPct.toFixed(1)}%`,
+      sub: stalled
+        ? isAr
+          ? `كفاءة الخط: ${k.lineEfficiencyPct.toFixed(1)}%`
+          : `Line Eff: ${k.lineEfficiencyPct.toFixed(1)}%`
+        : isAr
+          ? `الأكثر تحميلًا بالترتيب${mostLoadedUtilText(result, true)}، مش اختبار سعة`
+          : `Most-loaded by ranking${mostLoadedUtilText(result, false)}, not a capacity test`,
     },
     {
       label: isAr ? 'متوسط زمن التسليم' : 'Avg Lead Time',
