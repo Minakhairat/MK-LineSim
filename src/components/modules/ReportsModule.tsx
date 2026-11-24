@@ -4,7 +4,6 @@ import { useAppStore } from '../../store/useAppStore';
 import { getT } from '../../i18n/translations';
 import {
   export2DFactoryCanvasPdf,
-  export2DFactoryPng,
   exportKpiCanvasPdf,
   exportScenariosCanvasPdf,
 } from '../../utils/reportExporter';
@@ -74,13 +73,12 @@ export const ReportsModule: React.FC = () => {
       setToast(isAr ? 'تم تصدير صورة المصنع 3D PNG' : 'Exported 3D Factory PNG Snapshot', 'success');
       return;
     }
-    // Seamless fallback to 2D high-res PNG when user is in full-page Reports view
-    await export2DFactoryPng(project, isAr);
+    // No live 3D canvas is available from the Reports view. Never deliver a 2D image under a 3D label.
     setToast(
       isAr
-        ? 'تم تصدير صورة مخطط المصنع PNG (لصورة 3D التقطها من شريط نافذة العرض 3D)'
-        : 'Exported high-res 2D Factory PNG (for 3D render, use Photo PNG on the 3D toolbar)',
-      'success'
+        ? 'لا يوجد عرض 3D نشط لالتقاط صورة. افتح عرض 3D أو المحاكاة واستخدم زر Photo PNG.'
+        : 'No live 3D view to capture. Open the 3D or Simulation view and use Photo PNG on its toolbar.',
+      'error'
     );
   };
 
