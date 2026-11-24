@@ -407,7 +407,7 @@ export const AnalyticsModule: React.FC = () => {
               </div>
             </div>
           </div>
-          {oeeBasisUsesSkippedStage(project.products, k.theoreticalBottleneckStageId) && (
+          {!k.oeeMixedTimeWeighted && oeeBasisUsesSkippedStage(project.products, k.theoreticalBottleneckStageId) && (
             <div
               role="note"
               data-testid="oee-basis-warning"
@@ -430,8 +430,8 @@ export const AnalyticsModule: React.FC = () => {
                   : 'More than one product: the modeled run stalled, so Performance and Quality are undefined and the OEE shown is not a plant measure. See the stall warning above. This is a model result, not a measurement from a real plant.'
                 : k.oeeMixedTimeWeighted
                 ? language === 'ar'
-                  ? `أكتر من منتج (حالة مدعومة: كل المنتجات تلقائي وبنفس المسار الكامل): Performance وQuality وOEE محسوبين بزمن الدورة المثالي لكل منتج (موزونين بالزمن). نسبة الوحدات السليمة بالعدد: ${(k.unitYieldPct ?? 0).toFixed(1)}٪ (مقياس منفصل). الحالات خارج النطاق ده (مسار يدوي أو مسار جزئي) لسه بالعدد.`
-                  : `More than one product (supported case: all products auto-routed over the full route): Performance, Quality and OEE are weighted by each product's own ideal cycle (time-weighted). Unit yield by count: ${(k.unitYieldPct ?? 0).toFixed(1)}% (a separate metric). Cases outside this scope (manual or partial routes) are still count-based.`
+                  ? `أكتر من منتج (حالة مدعومة: كل المنتجات تلقائي وكل منتج بمساره الخاص بدون تكرار مرحلة): Performance وQuality وOEE محسوبين بزمن الدورة المثالي لكل منتج (موزونين بالزمن). نسبة الوحدات السليمة بالعدد: ${(k.unitYieldPct ?? 0).toFixed(1)}٪ (مقياس منفصل). الحالات خارج النطاق ده (مسار يدوي أو مرحلة بتتكرر في المسار) لسه بالعدد.`
+                  : `More than one product (supported case: all products auto-routed, each over its own route, no repeated stage): Performance, Quality and OEE are weighted by each product's own ideal cycle (time-weighted). Unit yield by count: ${(k.unitYieldPct ?? 0).toFixed(1)}% (a separate metric). Cases outside this scope (manual routing or a repeated stage in a route) are still count-based.`
                 : language === 'ar'
                 ? 'تنبيه (أكتر من منتج): Quality هنا نسبة وحدات سليمة على إجمالي الوحدات (عدد)، ومش موزونة بزمن الدورة المثالي لكل منتج. لو المنتجات دورتها مختلفة، فالهالك في المنتج الأبطأ بيكلّف وقت خط أكتر، فـQuality وOEE ممكن يبقوا أعلى من النسخة الموزونة (في حالة اتجربت: Quality ‏95.4٪ مقابل 94.8٪ موزونة، وOEE ‏69.3٪ مقابل 68.9٪). الأداء بيستخدم متوسط زمن دورة واحد للمزيج مش لكل منتج. نسبة الوحدات السليمة نفسها مقياس منفصل وصحيح كعدد.'
                 : 'Note (more than one product): Quality here is good units divided by total units (a count), not weighted by each product\'s ideal cycle, and Performance uses one mix-average ideal cycle rather than one per product. When products have different cycle times, scrap on the slower product costs more line time, so Quality and OEE can read higher than a time-weighted figure (one tested case: Quality 95.4% vs 94.8% weighted, OEE 69.3% vs 68.9%). Unit yield itself is a valid separate count metric.'}
