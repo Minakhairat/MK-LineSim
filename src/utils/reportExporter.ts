@@ -519,7 +519,42 @@ export function exportKpiCanvasPdf(
     targetCtx.restore();
   };
 
-  drawStageTableSlice(ctx, p1.w, y, rows.slice(0, firstPageRowsCap));
+  const firstSlice = rows.slice(0, firstPageRowsCap);
+  drawStageTableSlice(ctx, p1.w, y, firstSlice);
+
+  // Modeled-flow stall notice: shown only when the post-run check flagged a stall.
+  if (result.stallWarnings && result.stallWarnings.length > 0) {
+    const nameOf = (id: string) => rows.find((r) => r.stageId === id)?.stageName || id;
+    const names = Array.from(new Set(result.stallWarnings.map((w) => nameOf(w.stageId)))).join(', ');
+    const lines = isAr
+      ? [
+          `تحذير: الإنتاج في النموذج بيقف عند (${names}) من نقطة معينة في التشغيل (تعليق دفعات أو انسداد متبادل)،`,
+          'والأرقام اللي فوق بتعكس الوقوف ده. راجع افتراضات سعة المخزن وحجم الدفعة وخليط المنتجات.',
+        ]
+      : [
+          `Warning: the modeled flow stops at (${names}) from some point in the run (batch stall or blocking deadlock).`,
+          'The figures above reflect that stall. Review buffer capacity, batch size and product mix assumptions.',
+        ];
+    const boxY = y + 22 + 44 * (firstSlice.length + 1) + 24;
+    const boxH = 40 + lines.length * 26;
+    if (boxY + boxH < p1.h - 90) {
+      ctx.save();
+      ctx.direction = isAr ? 'rtl' : 'ltr';
+      ctx.fillStyle = '#fffbeb';
+      ctx.strokeStyle = '#f59e0b';
+      ctx.lineWidth = 2;
+      ctx.fillRect(48, boxY, p1.w - 96, boxH);
+      ctx.strokeRect(48, boxY, p1.w - 96, boxH);
+      ctx.fillStyle = '#92400e';
+      ctx.font = `600 17px ${FONT_STACK}`;
+      ctx.textAlign = isAr ? 'right' : 'left';
+      ctx.textBaseline = 'alphabetic';
+      lines.forEach((ln, i) => {
+        ctx.fillText(ln, isAr ? p1.w - 66 : 66, boxY + 32 + i * 26, p1.w - 132);
+      });
+      ctx.restore();
+    }
+  }
   pages.push(p1.canvas);
 
   let offset = firstPageRowsCap;
