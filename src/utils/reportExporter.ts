@@ -383,6 +383,10 @@ export function exportKpiCanvasPdf(
 ): void {
   const { isAr } = opts;
   const k = result.kpis;
+  // A stalled run has no established bottleneck: report where the flow stops, as a location only.
+  const stallIds = new Set((result.stallWarnings || []).map((w) => w.stageId));
+  const stalled = stallIds.size > 0;
+  const stallNames = result.stageAnalytics.filter((s) => stallIds.has(s.stageId)).map((s) => s.stageName).join(', ');
   const rows = result.stageAnalytics;
 
   const firstPageRowsCap = opts.orientation === 'landscape' ? 8 : 16;
@@ -429,8 +433,8 @@ export function exportKpiCanvasPdf(
       sub: isAr ? `متوسط الدورة: ${k.avgCycleTimeSec.toFixed(1)}ث` : `Avg Cycle: ${k.avgCycleTimeSec.toFixed(1)}s`,
     },
     {
-      label: isAr ? 'مرحلة الاختناق' : 'Bottleneck Stage',
-      val: k.bottleneckStageName || 'N/A',
+      label: stalled ? (isAr ? 'موقع التعليق' : 'Stall Location') : isAr ? 'مرحلة الاختناق' : 'Bottleneck Stage',
+      val: stalled ? stallNames || 'N/A' : k.bottleneckStageName || 'N/A',
       sub: isAr ? `كفاءة الخط: ${k.lineEfficiencyPct.toFixed(1)}%` : `Line Eff: ${k.lineEfficiencyPct.toFixed(1)}%`,
     },
     {
@@ -529,14 +533,15 @@ export function exportKpiCanvasPdf(
 
     slice.forEach((sa, idx) => {
       const ry = ty + rowH * (idx + 1);
-      targetCtx.fillStyle = sa.isBottleneck ? '#fef2f2' : idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+      const isBn = sa.isBottleneck && !stalled;
+      targetCtx.fillStyle = isBn ? '#fef2f2' : stallIds.has(sa.stageId) ? '#fffbeb' : idx % 2 === 0 ? '#ffffff' : '#f8fafc';
       targetCtx.fillRect(48, ry, tableW, rowH);
       targetCtx.strokeStyle = '#e2e8f0';
       targetCtx.lineWidth = 1;
       targetCtx.strokeRect(48, ry, tableW, rowH);
 
       const vals = [
-        sa.isBottleneck ? `${sa.stageName} ★` : sa.stageName,
+        isBn ? `${sa.stageName} ★` : stallIds.has(sa.stageId) ? `${sa.stageName} (${isAr ? 'نقطة التعليق' : 'stall point'})` : sa.stageName,
         `${sa.enteredCount}`,
         `${sa.completedCount}`,
         `${sa.scrapCount}`,
@@ -550,8 +555,8 @@ export function exportKpiCanvasPdf(
       let cx = isAr ? pw - 48 : 48;
       vals.forEach((v, i) => {
         const colW = tableW * weights[i];
-        targetCtx.fillStyle = i === 0 && sa.isBottleneck ? '#dc2626' : '#0f172a';
-        targetCtx.font = i === 0 && sa.isBottleneck ? `bold 15px ${FONT_STACK}` : `500 15px ${FONT_STACK}`;
+        targetCtx.fillStyle = i === 0 && isBn ? '#dc2626' : '#0f172a';
+        targetCtx.font = i === 0 && isBn ? `bold 15px ${FONT_STACK}` : `500 15px ${FONT_STACK}`;
         if (isAr) {
           targetCtx.textAlign = i === 0 ? 'right' : 'center';
           targetCtx.fillText(v, i === 0 ? cx - 12 : cx - colW / 2, ry + rowH / 2, colW - 10);
@@ -619,6 +624,9 @@ export function exportKpiCanvasPdf(
   appendCanvasPagesToPdf(pages, opts, `${sanitizeFilename(project.name)}_kpi_report.pdf`);
 }
 
+// Show the stored belt speed exactly (at least 2 decimals, up to 4) so 0.0534 is never displayed as 0.05.
+const fmtSpeed = (v: number) => (Number(v.toFixed(4)) === Number(v.toFixed(2)) ? v.toFixed(2) : String(Number(v.toFixed(4))));
+
 export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOptions): void {
   const { isAr } = opts;
   const { canvas, ctx, w, h } = createReportCanvas(opts.orientation);
@@ -667,7 +675,7 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
     const vals = [
       stallFlag ? `${sc.name} ${isAr ? '[تعليق مرصود]' : '[stall flagged]'}` : sc.name,
       `${sc.overrides.workerCount}`,
-      sc.overrides.conveyorSpeedMps.toFixed(2),
+      fmtSpeed(sc.overrides.conveyorSpeedMps),
       k ? `${k.goodUnits}` : isAr ? 'لم يعمل' : 'Not Run',
       k ? `${k.productionAttainmentPct.toFixed(1)}%` : '-',
       k && k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '-',
