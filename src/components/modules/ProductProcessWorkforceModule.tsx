@@ -1110,9 +1110,13 @@ export const ProcessesModule: React.FC = () => {
                   />
                   {st.batchMode === 'collect_batch' && (st.batchSize ?? 1) > 1 && (
                     <span data-testid={`effective-capacity-${st.id}`} className="text-[10px] leading-snug text-amber-700 dark:text-amber-400">
-                      {isAr
-                        ? `مرحلة تجميع دفعات: السعة الفعلية في المحاكاة = الأكبر بين سعة البفر وحجم الدفعة = ${Math.max(st.bufferCapacity, st.batchSize ?? 1)}، فعدد الوحدات الواقفة ممكن يعدّي سعة البفر المكتوبة.`
-                        : `Batch-collecting stage: the simulation admits up to the larger of this buffer and the batch size = ${Math.max(st.bufferCapacity, st.batchSize ?? 1)}, so queued units can exceed the buffer entered here.`}
+                      {(st.batchSize ?? 1) > st.bufferCapacity
+                        ? isAr
+                          ? `حجم الدفعة (${st.batchSize}) أكبر من سعة البفر (${st.bufferCapacity}): المحاكاة بتقبل لحد ${st.batchSize} وحدة في المرحلة دي، فعدد الوحدات الواقفة ممكن يعدّي سعة البفر المكتوبة.`
+                          : `Batch size (${st.batchSize}) is above the buffer (${st.bufferCapacity}): the simulation admits up to ${st.batchSize} units at this stage, so queued units can exceed the buffer entered here.`
+                        : isAr
+                        ? `مرحلة تجميع دفعات: السعة الفعلية = سعة البفر (${st.bufferCapacity})، لأن حجم الدفعة (${st.batchSize}) مش أكبر منها.`
+                        : `Batch-collecting stage: effective capacity = the buffer (${st.bufferCapacity}), because the batch size (${st.batchSize}) is not above it.`}
                     </span>
                   )}
                 </label>
