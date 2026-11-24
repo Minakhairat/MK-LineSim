@@ -339,15 +339,28 @@ test('Paired staffing intervention: a second Wiring machine adds output only wit
 //     Ideal work = 60x(1x22 + 2x22 + 1.5x43 + 3x21) = 11610 s over 27000 s: hand P = 43.00% (total 108 units).
 //     Good work = 60x(1x20 + 2x22 + 1.5x41 + 3x20) = 60 x 185.5 = 11130 s: Q = 95.87%, OEE = 41.22%.
 //     One mix and one arrival only; not a claim about other product counts, mixes or saturated lines.
-test('Four products with different cycles: weighted OEE equals the hand figure (one fixture)', () => {
+function fourProducts(arrival: number) {
   const p: any = createDesertAirCoolerProject();
   for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
   const mult = [1, 2, 1.5, 3], mix = [1, 1, 2, 1];
   p.products[0].mixWeight = mix[0]; p.products[0].cycleTimeMultiplier = mult[0];
   for (let i = 1; i < 4; i++) { const B = structuredClone(p.products[0]); B.id = 'p' + i; B.name = 'P' + i; B.code = 'P' + i; B.mixWeight = mix[i]; B.cycleTimeMultiplier = mult[i]; p.products.push(B); }
-  p.simulationConfig.arrivalIntervalSec = 240;
-  const r = run(p);
+  p.simulationConfig.arrivalIntervalSec = arrival;
+  return run(p);
+}
+test('Four products with different cycles: weighted OEE equals the hand figure (one fixture)', () => {
+  const r = fourProducts(240);
   assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[20, 2], [22, 0], [41, 2], [20, 1]]);
   near(r.kpis.performancePct, (11610 / 27000) * 100); near(r.kpis.qualityPct, (11130 / 11610) * 100); near(r.kpis.oeePct, (11130 / 27000) * 100);
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+});
+
+// (g) Same four products, arrival 30 s (saturated line). Recorded good + scrap: A 45+5, P1 44+5, P2 94+5, P3 44+5 (total 247).
+//     Ideal work 60 x (1x50 + 2x49 + 1.5x99 + 3x49) = 60 x 443.5 = 26610 s -> P 98.56%. Good work 60 x (45 + 88 + 141 + 132) = 60 x 406 = 24360 s
+//     -> Q 91.54%, OEE 90.22%. The Wiring stage limits this line; one mix and one arrival only.
+test('Four products on a saturated line: weighted OEE equals the hand figure (one fixture)', () => {
+  const r = fourProducts(30);
+  assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[45, 5], [44, 5], [94, 5], [44, 5]]);
+  near(r.kpis.performancePct, (26610 / 27000) * 100); near(r.kpis.qualityPct, (24360 / 26610) * 100); near(r.kpis.oeePct, (24360 / 27000) * 100);
   assert.equal(r.kpis.oeeMixedTimeWeighted, true);
 });
