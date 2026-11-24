@@ -760,7 +760,7 @@ export interface ScenarioRecord {
     workerCount: number;
     processingTimeScale: number; // 1.0 = 100%
     conveyorSpeedMps: number;
-    bufferCapacity: number;
+    bufferCapacity?: number; // undefined = keep each stage's own buffer; a number replaces every stage's buffer
     shiftDurationSec: number;
     enableBreakdowns: boolean;
     targetProduction: number;

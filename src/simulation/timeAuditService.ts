@@ -390,7 +390,76 @@ export function computeWorkerTravelAudit(
 /**
  * Centralized industrial engineering audit delegating stage capacity math to capacityEngine.ts.
  */
-export function auditProjectTiming(project: ProjectData, simClockSec?: number): ProjectTimingAudit {
+/**
+ * Steady-state release mix per product, mirroring how the DES dispatches units:
+ * - finite quotas (maxPlannedUnits and/or targetQuantity) -> each product's quota share
+ * - weighted_mix (default) -> mixWeight ratio
+ * - round_robin / fixed_sequence -> equal shares
+ * - product_priority -> only the highest-priority products, by mixWeight
+ * The mix over a whole run is an average; a quota that exhausts early shifts the mix over time.
+ */
+export function resolveProductMixWeights(project: ProjectData): number[] {
+  const prods = project.products ?? [];
+  const mixW = (p: ProductDefinition) => Math.max(0.01, Number(p.mixWeight ?? 1));
+  const targets = prods.map((p) => (Number(p.targetQuantity) > 0 ? Number(p.targetQuantity) : 0));
+  const sumTargets = targets.reduce((a, b) => a + b, 0);
+  const globalMax = Number(project.simulationConfig.maxPlannedUnits);
+  if (Number.isFinite(globalMax) && globalMax > 0 && sumTargets !== globalMax) {
+    return sumTargets > 0 ? targets : prods.map(mixW);
+  }
+  if (sumTargets > 0) return targets;
+  const rule = project.simulationConfig.dispatchingRule ?? 'weighted_mix';
+  if (rule === 'round_robin' || rule === 'fixed_sequence') return prods.map(() => 1);
+  if (rule === 'product_priority') {
+    const top = Math.max(...prods.map((p) => Number(p.priority ?? 1)));
+    return prods.map((p) => (Number(p.priority ?? 1) === top ? mixW(p) : 0));
+  }
+  return prods.map(mixW);
+}
+
+/**
+ * Returns a copy of the project whose stage/object processing times are scaled by the
+ * mix-weighted product factor (cycleTimeMultiplier and per-stage overrides), so analytical
+ * capacity matches what the DES executes. Weights follow resolveProductMixWeights.
+ * Returns the project unchanged when every factor is 1.
+ */
+export function applyProductMixTimingFactors(project: ProjectData): ProjectData {
+  const products = project.products ?? [];
+  if (products.length === 0) return project;
+  const weights = resolveProductMixWeights(project);
+  const wSum = weights.reduce((a, b) => a + b, 0);
+  if (!(wSum > 0)) return project;
+  const factors = new Map<string, number>();
+  for (const st of project.stages) {
+    const base = Number(st.processingTimeSec) || 0;
+    let f = 0;
+    products.forEach((p, i) => {
+      const mult = Math.max(0.05, Number(p.cycleTimeMultiplier ?? 1));
+      const ov = p.stageProcessingTimes?.[st.id];
+      const eff = ov !== undefined && Number.isFinite(ov) && base > 0 ? (Math.max(0, Number(ov)) * mult) / base : mult;
+      f += weights[i] * eff;
+    });
+    factors.set(st.id, f / wSum);
+  }
+  if ([...factors.values()].every((f) => Math.abs(f - 1) < 1e-12)) return project;
+  const out: ProjectData = structuredClone(project);
+  const objFactor = new Map<string, number>();
+  for (const st of out.stages) {
+    const f = factors.get(st.id) ?? 1;
+    st.processingTimeSec = (Number(st.processingTimeSec) || 0) * f;
+    for (const oid of st.assignedObjectIds) objFactor.set(oid, f);
+  }
+  for (const o of out.layoutObjects) {
+    const f = objFactor.get(o.id);
+    if (f !== undefined && o.operations && Number.isFinite(o.operations.processingTimeSec)) {
+      o.operations.processingTimeSec = o.operations.processingTimeSec * f;
+    }
+  }
+  return out;
+}
+
+export function auditProjectTiming(rawProject: ProjectData, simClockSec?: number): ProjectTimingAudit {
+  const project = applyProductMixTimingFactors(rawProject);
   const horizonSec = simClockSec ?? project.simulationConfig.durationSec;
   const shiftAudit = computeShiftWindowAudit(
     project.simulationConfig,
