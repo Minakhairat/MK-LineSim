@@ -1,3 +1,4 @@
+import { isStalledResult, stallLocationNames } from '../../utils/units';
 import React, { useState } from 'react';
 import {
   ChevronDown,
@@ -230,10 +231,16 @@ export const BottomSimPanel: React.FC = () => {
             <span>
               {t.labels.wip}: <strong className="text-neutral-950 dark:text-white">{simSnapshot.products.length}</strong>
             </span>
-            {kpis?.bottleneckStageName && (
+            {isStalledResult(simSnapshot.result) ? (
               <span className="hidden xl:inline text-amber-700 dark:text-amber-400">
-                {t.labels.bottleneck}: <strong>{kpis.bottleneckStageName}</strong>
+                {language === 'ar' ? 'موقع التعليق' : 'Stall location'}: <strong>{stallLocationNames(simSnapshot.result) || '—'}</strong>
               </span>
+            ) : (
+              kpis?.bottleneckStageName && (
+                <span className="hidden xl:inline text-amber-700 dark:text-amber-400">
+                  {t.labels.bottleneck}: <strong>{kpis.bottleneckStageName}</strong>
+                </span>
+              )
             )}
           </div>
           <button
