@@ -6378,6 +6378,12 @@ export class DiscreteEventSimulationEngine {
       wipSeries: this.wipSeries,
       recentEvents: this.eventLog.slice(-150),
       totalEventsExecuted: this.totalEventsExecuted,
+      stallWarnings:
+        this.status === 'completed'
+          ? this.auditInvariants().deadlocks.flatMap((d) =>
+              d.stageIds.map((stageId) => ({ stageId, heldUnits: d.entityIds.length }))
+            )
+          : undefined,
     };
   }
 }
