@@ -525,7 +525,7 @@ export const TRANSLATIONS = {
       },
       charts: {
         plannedVsActual: 'Planned vs Actual Cumulative Production',
-        stageCycleWait: 'Stage Cycle & Waiting Time (Bottleneck in Red)',
+        stageCycleWait: 'Stage Cycle & Waiting Time (Most-Loaded Stage in Red)',
         resourceUtil: 'Stage Resource Utilization Breakdown (%)',
         wipShift: 'Work-In-Process (WIP) Over Shift',
       },
@@ -1274,7 +1274,7 @@ export const TRANSLATIONS = {
       },
       charts: {
         plannedVsActual: 'الإنتاج التراكمي المخطط مقابل الفعلي',
-        stageCycleWait: 'زمن الدورة والانتظار لكل مرحلة (الاختناق بالأحمر)',
+        stageCycleWait: 'زمن الدورة والانتظار لكل مرحلة (الأكثر تحميلًا بالأحمر)',
         resourceUtil: 'توزيع استغلال الموارد لكل مرحلة (%)',
         wipShift: 'المنتجات تحت التشغيل (WIP) خلال الوردية',
       },
