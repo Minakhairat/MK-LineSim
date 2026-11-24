@@ -28,3 +28,29 @@ import { createDesertAirCoolerProject } from '../src/data/sampleProject';
     assert.equal(k.performanceAnomaly, true);
   });
 }
+
+import { oeeBasisUsesSkippedStage } from '../src/utils/oeeBasis';
+
+test('oeeBasisUsesSkippedStage: detects an auto route that skips the project slowest stage, even with Performance below 100%', () => {
+  const p: any = createDesertAirCoolerProject();
+  p.simulationConfig.arrivalIntervalSec = 60;
+  const A = p.products[0];
+  A.routingMode = 'auto';
+  A.routeStageIds = A.routeStageIds.filter((x: string) => x !== 'stg_3_wiring');
+  A.entryStageIds = [A.routeStageIds[0]];
+  const k = (new DiscreteEventSimulationEngine(p) as any).runToCompletion().kpis;
+  // Current behaviour: no anomaly flag and Performance below 100%, but the ideal cycle still comes from OP-30 (60 s).
+  assert.equal(k.performanceAnomaly, false);
+  assert.ok(k.performancePct < 100);
+  assert.equal(k.theoreticalBottleneckStageId, 'stg_3_wiring');
+  assert.equal(oeeBasisUsesSkippedStage(p.products, k.theoreticalBottleneckStageId), true);
+});
+
+test('oeeBasisUsesSkippedStage: false for full route, manual products, empty route, or no stage id', () => {
+  const full = [{ routingMode: 'auto', routeStageIds: ['a', 'b'] }];
+  assert.equal(oeeBasisUsesSkippedStage(full, 'b'), false);
+  assert.equal(oeeBasisUsesSkippedStage([{ routingMode: 'manual', routeStageIds: ['a'] }], 'b'), false);
+  assert.equal(oeeBasisUsesSkippedStage([{ routingMode: 'auto', routeStageIds: [] }], 'b'), false);
+  assert.equal(oeeBasisUsesSkippedStage(full, undefined), false);
+  assert.equal(oeeBasisUsesSkippedStage(full, 'z'), true);
+});
