@@ -364,3 +364,26 @@ test('Four products on a saturated line: weighted OEE equals the hand figure (on
   near(r.kpis.performancePct, (26610 / 27000) * 100); near(r.kpis.qualityPct, (24360 / 26610) * 100); near(r.kpis.oeePct, (24360 / 27000) * 100);
   assert.equal(r.kpis.oeeMixedTimeWeighted, true);
 });
+
+// (h) Manual routing with a batch stage. Default project, Packing collect_batch size 4 with buffer 7 (= k(b-1)+1 for 2 products), arrival 120 s,
+//     A auto x1, B x2; B manual in one run and auto in the other. Recorded good + scrap, both runs: A 100+8, B 104+3, no stall.
+//     Auto run (weighted): ideal work 60x108 + 120x107 = 19320 s -> P 71.56%.
+//     Manual run (count-based, flag absent): mix-average ideal 90 s x 215 units = 19350 s -> P 71.67%; the figure differs from the weighted one
+//     by 0.1 point here, and the manual run is not flagged as time-weighted. One fixture; the manual route is the shared graph.
+test('Manual routing with a batch stage: same counts, count-based figure and no weighted flag (one fixture)', () => {
+  const make = (manual: boolean) => {
+    const p: any = createDesertAirCoolerProject();
+    for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 4; s.batchMode = 'collect_batch'; s.bufferCapacity = 7; }
+    const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; B.cycleTimeMultiplier = 2;
+    if (manual) B.routingMode = 'manual';
+    p.products[0].mixWeight = 1; p.products.push(B); p.simulationConfig.arrivalIntervalSec = 120;
+    return run(p);
+  };
+  const auto = make(false), manual = make(true);
+  for (const r of [auto, manual]) {
+    assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[100, 8], [104, 3]]);
+    assert.equal(r.stallWarnings.length, 0);
+  }
+  assert.equal(auto.kpis.oeeMixedTimeWeighted, true); near(auto.kpis.performancePct, (19320 / 27000) * 100);
+  assert.equal(manual.kpis.oeeMixedTimeWeighted, undefined); near(manual.kpis.performancePct, (19350 / 27000) * 100);
+});
