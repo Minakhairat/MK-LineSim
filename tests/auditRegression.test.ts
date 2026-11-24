@@ -188,6 +188,7 @@ test('Manual-routing products are reported as untraced, never as an all-clear', 
   assert.ok(codes.includes('BATCH_BUFFER_MAY_STALL_UNTRACED'));
   assert.ok(!codes.includes('BATCH_BUFFER_MAY_STALL'));
 });
+
 {
   const mk = (buf: number) => {
     const p: any = createDesertAirCoolerProject();
@@ -203,5 +204,27 @@ test('Manual-routing products are reported as untraced, never as an all-clear', 
   test('reports the stalled stage in the result, and nothing when the buffer is enough', () => {
     assert.ok((mk(6).stallWarnings || []).some((w) => w.stageId === 'stg_7_packing'));
     assert.equal((mk(7).stallWarnings || []).length, 0);
+  });
+}
+
+{
+  const mkQ = (tA: number, tB: number, buf: number) => {
+    const p: any = createDesertAirCoolerProject();
+    p.stages.forEach((s: any) => { s.scrapRate = 0; s.reworkProbability = 0; });
+    p.products[0].targetQuantity = tA;
+    const B = structuredClone(p.products[0]); B.id = 'B1'; B.code = 'B1'; B.targetQuantity = tB;
+    p.products.push(B); p.routes.push({ ...p.routes[0], id: 'route_B1', productId: 'B1' });
+    p.stages.find((s: any) => s.id === 'stg_7_packing').bufferCapacity = buf;
+    p.simulationConfig.maxPlannedUnits = 0; p.simulationConfig.arrivalIntervalSec = 20;
+    p.simulationConfig.shifts[0].breaks = [];
+    return new DiscreteEventSimulationEngine(p).runToCompletion();
+  };
+  test('stall with quotas used up is flagged; leftover partial batches are not', () => {
+    const stalled = mkQ(6, 6, 6);
+    assert.equal(stalled.kpis.goodUnits, 0);
+    assert.ok((stalled.stallWarnings || []).length > 0);
+    for (const [a, b, buf] of [[7, 0, 8], [3, 1, 4], [3, 1, 20], [2, 2, 4], [6, 6, 20]]) {
+      assert.equal((mkQ(a, b, buf).stallWarnings || []).length, 0, `quota ${a}/${b} buf ${buf}`);
+    }
   });
 }
