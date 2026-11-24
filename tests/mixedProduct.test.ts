@@ -43,11 +43,10 @@ test('Two products with identical cycles: weighted and count-based Quality coinc
   assert.ok(total > 0 && good <= total);
 });
 
-test('Out of scope stays count-based and unflagged: single product, manual routing, repeated stage in a route', () => {
+test('Out of scope stays count-based and unflagged: single product, manual routing, manual routing', () => {
   const single: any = createDesertAirCoolerProject();
   assert.equal(run(single).kpis.oeeMixedTimeWeighted, undefined);
   assert.equal(run(fixture((p) => { p.products[1].routingMode = 'manual'; })).kpis.oeeMixedTimeWeighted, undefined);
-  assert.equal(run(fixture((p) => { p.products[1].routeStageIds = [...p.products[1].routeStageIds, p.products[1].routeStageIds[0]]; })).kpis.oeeMixedTimeWeighted, undefined);
 });
 
 // Live-like fixture (default project, second product x2, Packing single-item, arrival default). Recorded counts:
@@ -90,4 +89,25 @@ test('Partial route: each product ideal cycle comes from its own route stages', 
   near(r.kpis.performancePct, (idealAll / 27000) * 100);
   near(r.kpis.qualityPct, (idealGood / idealAll) * 100);
   near(r.kpis.oeePct, (idealGood / 27000) * 100);
+});
+
+// Repeated visit. Default project, Packing single-item, arrival 120 s, A full route, B visits Testing twice (route: stages 1-5, Testing again, 6-8).
+// Ideal cycle: A 60 s (wiring). B: Testing is visited twice, load 2 x 35 = 70 s, which exceeds wiring 60 s, so B ideal = 70 s.
+// Recorded counts: A 107 good + 4 scrap, B 98 good + 11 scrap (Testing completed 325 = A 111-ish + B twice), operating 27000 s.
+// Hand: ideal work = 60 x 111 + 70 x 109 = 14290 s; ideal good = 60 x 107 + 70 x 98 = 13280 s.
+// P = 14290/27000 = 52.93%, Q = 13280/14290 = 92.93%, OEE = 13280/27000 = 49.19%. The count-based basis gave OEE 45.56%.
+test('Repeated visit: a stage visited twice counts twice toward the product ideal cycle', () => {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B';
+  const r0 = B.routeStageIds; B.routeStageIds = [...r0.slice(0, 5), 'stg_4_testing', ...r0.slice(5)];
+  p.products[0].mixWeight = 1; B.mixWeight = 1; p.products.push(B);
+  p.simulationConfig.arrivalIntervalSec = 120;
+  const r = run(p);
+  const [A, Bq] = r.productAnalytics;
+  assert.deepEqual([A.completedGoodQty, A.scrappedQty, Bq.completedGoodQty, Bq.scrappedQty], [107, 4, 98, 11]);
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+  near(r.kpis.performancePct, (14290 / 27000) * 100);
+  near(r.kpis.qualityPct, (13280 / 14290) * 100);
+  near(r.kpis.oeePct, (13280 / 27000) * 100);
 });
