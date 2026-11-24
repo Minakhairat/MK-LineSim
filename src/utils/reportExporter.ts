@@ -435,7 +435,7 @@ export function exportKpiCanvasPdf(
     },
     {
       label: isAr ? 'متوسط زمن التسليم' : 'Avg Lead Time',
-      val: formatDuration(k.avgLeadTimeSec),
+      val: k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '—',
       sub: isAr ? `تشغيل: ${k.avgProcessingTimeSec.toFixed(0)}ث · انتظار: ${k.avgWaitingTimeSec.toFixed(0)}ث` : `Proc: ${k.avgProcessingTimeSec.toFixed(0)}s · Wait: ${k.avgWaitingTimeSec.toFixed(0)}s`,
     },
     {
@@ -670,7 +670,7 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
       sc.overrides.conveyorSpeedMps.toFixed(2),
       k ? `${k.goodUnits}` : isAr ? 'لم يعمل' : 'Not Run',
       k ? `${k.productionAttainmentPct.toFixed(1)}%` : '-',
-      k ? formatDuration(k.avgLeadTimeSec) : '-',
+      k && k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '-',
       k ? `${k.workerUtilizationPct.toFixed(1)}%` : '-',
       k?.bottleneckStageName || '-',
     ];
