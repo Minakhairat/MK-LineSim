@@ -1,5 +1,6 @@
 import { ProjectData, ValidationIssue } from '../types/project';
 import { doOrientedBoxesOverlap, getRotatedBounds } from '../utils/units';
+import { resolveStageBatchConfig } from '../engineering/capacityEngine';
 import { runEngineeringValidations } from '../engineering/validationEngine';
 
 function isFinitePositive(n: unknown): boolean {
@@ -389,6 +390,48 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
           targetType: 'stage',
         });
       }
+    }
+  }
+
+  // 4b. SKU-grouped batching: the batch holder counts toward buffer occupancy and a batch only
+  // forms from units of ONE product. With k products routed through the stage the holder can
+  // hold k*(batchSize-1) units with no complete batch; the buffer must exceed that or the stage
+  // can stall permanently (proven by simulation: stalls at buffer = k*(batch-1), flows at +1).
+  for (const stage of stages) {
+    const objs = stage.assignedObjectIds
+      .map((oid) => layoutObjects.find((o) => o.id === oid))
+      .filter((o): o is NonNullable<typeof o> => Boolean(o));
+    let cfg;
+    try {
+      cfg = resolveStageBatchConfig(stage, objs);
+    } catch {
+      continue;
+    }
+    if (!cfg || cfg.batchMode !== 'collect_batch' || !(cfg.batchSize > 1)) continue;
+    // Coverage: products with a fixed route are counted exactly. Products in manual (flowchart)
+    // routing are not traced, so they are counted as "possibly routed" and reported separately;
+    // the absence of this warning is NOT proof of safety for manual routes.
+    const fixedK = products.filter((p) => p.routingMode !== 'manual' && p.routeStageIds.includes(stage.id)).length;
+    const manualK = products.filter((p) => p.routingMode === 'manual').length;
+    const k = fixedK + manualK;
+    if (k < 2) continue;
+    const needed = k * (cfg.batchSize - 1) + 1;
+    const cap = Number(stage.bufferCapacity ?? 0);
+    if (Number.isFinite(cap) && cap < needed) {
+      const uncertain = manualK > 0;
+      issues.push({
+        id: `val_stg_batch_buffer_${stage.id}`,
+        severity: 'warning',
+        code: uncertain ? 'BATCH_BUFFER_MAY_STALL_UNTRACED' : 'BATCH_BUFFER_MAY_STALL',
+        message: uncertain
+          ? `Stage "${stage.name}" collects batches of ${cfg.batchSize} per product with buffer ${cap}. ${manualK} product(s) use manual flowchart routing, which this check does not trace, so up to ${k} products may reach it. If they do, mixed units can fill the buffer and stop the line permanently; a buffer of at least ${needed} is safe.`
+          : `Stage "${stage.name}" collects batches of ${cfg.batchSize} per product but its buffer is ${cap}. With ${k} products routed through it, mixed units can fill the buffer before any product reaches a full batch and the line can stop permanently. Use a buffer of at least ${needed}, or avoid mixing products here.`,
+        messageAr: uncertain
+          ? `المرحلة "${stage.name}" تجمّع دفعات من ${cfg.batchSize} لكل منتج وسعة المخزن ${cap}. ${manualK} منتج يستخدم توجيهاً يدوياً في مخطط التدفق ولا يتتبعه هذا الفحص، فقد يصل إليها حتى ${k} منتجات. إن حدث ذلك فقد يمتلئ المخزن بوحدات مختلطة ويتوقف الخط نهائياً؛ سعة ${needed} على الأقل آمنة.`
+          : `المرحلة "${stage.name}" تجمّع دفعات من ${cfg.batchSize} لكل منتج، لكن سعة المخزن ${cap}. مع ${k} منتجات تمر بها، قد يمتلئ المخزن بوحدات مختلطة قبل اكتمال دفعة لأي منتج فيتوقف الخط نهائياً. استخدم سعة ${needed} على الأقل أو لا تخلط المنتجات هنا.`,
+        targetId: stage.id,
+        targetType: 'stage',
+      });
     }
   }
 
