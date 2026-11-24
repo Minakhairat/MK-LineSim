@@ -727,6 +727,8 @@ export interface SimulationResult {
   wipSeries: WipTimePoint[];
   recentEvents: SimEvent[];
   totalEventsExecuted: number;
+  /** Post-run: batch stages left holding units that can never complete a batch. Set only for completed runs. */
+  stallWarnings?: Array<{ stageId: string; heldUnits: number }>;
 }
 
 export interface StageBatchSnapshot {
