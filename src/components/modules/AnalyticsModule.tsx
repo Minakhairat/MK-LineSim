@@ -402,6 +402,17 @@ export const AnalyticsModule: React.FC = () => {
               </div>
             </div>
           </div>
+          {k.performanceAnomaly && (
+            <div
+              role="alert"
+              data-testid="oee-anomaly-warning"
+              className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+            >
+              {language === 'ar'
+                ? 'تحذير: الأداء أعلى من ١٠٠٪، وده بيتعلّم كحالة شاذة. زمن الدورة المثالي في OEE الخط ممكن يتاخد من أبطأ مرحلة في المشروع حتى لو مفيش منتج بيعدّي عليها (مثلاً مرحلة متخطاة)، فالأداء وOEE هنا ممكن يبقوا مبالغ فيهم. ما تعتمدش عليهم للتشغيل ده قبل مراجعة أساس زمن الدورة المثالي.'
+                : 'Warning: Performance is above 100%, which the OEE check flags as an anomaly. Line OEE takes its ideal cycle from the slowest stage in the project, even when no product visits that stage (for example, a skipped stage), so OEE and Performance here may be overstated. Do not rely on them for this run until the ideal-cycle basis is checked.'}
+            </div>
+          )}
 
           <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
             <div>
