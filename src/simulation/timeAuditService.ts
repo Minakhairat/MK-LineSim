@@ -472,6 +472,49 @@ export function singleAutoProductRouteScope(project: ProjectData): Set<string> |
   return project.stages.some((st) => ids.has(st.id)) ? ids : null;
 }
 
+/**
+ * Scoped time-weighted OEE for several auto-routed products. Each product's ideal cycle is that product's own
+ * bottleneck cycle (project audited with that product alone). Ideal work = sum(ideal_i * units_i); Performance =
+ * ideal work / operating time; Quality = ideal work of good units / ideal work of all units. Returns null (no
+ * correction, caller keeps the count-based figures) outside the supported scope: fewer than two products, any manual
+ * routing, partial or repeated routes, or counts that do not add up to the engine totals.
+ * Sources (practitioner, not a standard): https://oeelab.com/oee-mixed-products
+ */
+export function mixedProductTimeWeightedOee(
+  project: ProjectData,
+  productAnalytics: ReadonlyArray<{ productId: string; completedGoodQty: number; scrappedQty: number; reworkUnits?: number }> | undefined,
+  totalUnits: number
+): { idealWorkSec: number; idealGoodWorkSec: number } | null {
+  const ps = project.products ?? [];
+  if (ps.length < 2 || !productAnalytics || productAnalytics.length !== ps.length) return null;
+  const allIds = project.stages.map((st) => st.id);
+  for (const p of ps) {
+    if (p.routingMode === 'manual') return null;
+    const r = p.routeStageIds;
+    if (Array.isArray(r) && r.length > 0) {
+      if (new Set(r).size !== r.length) return null;
+      if (r.length !== allIds.length || !allIds.every((id) => r.includes(id))) return null;
+    }
+  }
+  let counted = 0;
+  let idealWorkSec = 0;
+  let idealGoodWorkSec = 0;
+  for (const p of ps) {
+    const a = productAnalytics.find((x) => x.productId === p.id);
+    if (!a) return null;
+    const solo: ProjectData = structuredClone(project);
+    solo.products = [structuredClone(p)];
+    const ideal = auditProjectTiming(solo).bottleneckCycleSec;
+    if (!(ideal > 0)) return null;
+    const total = a.completedGoodQty + a.scrappedQty;
+    counted += total;
+    idealWorkSec += ideal * total;
+    idealGoodWorkSec += ideal * a.completedGoodQty;
+  }
+  if (Math.abs(counted - totalUnits) > 1e-6 || !(idealWorkSec > 0)) return null;
+  return { idealWorkSec, idealGoodWorkSec };
+}
+
 export function auditProjectTiming(rawProject: ProjectData, simClockSec?: number): ProjectTimingAudit {
   const project = applyProductMixTimingFactors(rawProject);
   const horizonSec = simClockSec ?? project.simulationConfig.durationSec;
@@ -1002,6 +1045,23 @@ export function buildAuditedSimulationKPIs(params: {
     });
   }
 
+  let mixedTimeWeighted = false;
+  {
+    const mw = mixedProductTimeWeightedOee(project, params.productAnalytics, actualProduction);
+    if (mw && lineOee.operatingTimeSec > 1e-6 && lineOee.scheduledProductionTimeSec > 1e-6) {
+      const perf = (mw.idealWorkSec / lineOee.operatingTimeSec) * 100;
+      const qual = (mw.idealGoodWorkSec / mw.idealWorkSec) * 100;
+      lineOee = {
+        ...lineOee,
+        rawPerformancePct: perf,
+        performancePct: perf,
+        qualityPct: qual,
+        oeePct: (lineOee.availabilityPct / 100) * (perf / 100) * (qual / 100) * 100,
+      };
+      mixedTimeWeighted = true;
+    }
+  }
+
   const lineEfficiencyPct =
     timingAudit.stages.some((s) => s.baseTaskTimeSec > 0)
       ? timingAudit.lineBalanceEfficiencyPct
@@ -1085,6 +1145,7 @@ export function buildAuditedSimulationKPIs(params: {
       ? { performanceAnomalyReason: lineOee.performanceAnomalyReason }
       : {}),
     qualityPct: lineOee.qualityPct,
+    ...(mixedTimeWeighted ? { oeeMixedTimeWeighted: true, unitYieldPct: actualProduction > 0 ? (goodUnits / actualProduction) * 100 : 0 } : {}),
     oeePct: lineOee.oeePct,
     linePropagatedDowntimeSec: lineOee.unplannedDowntimeSec,
     lineCalendarAvailabilityPct: lineOee.calendarAvailabilityPct,
