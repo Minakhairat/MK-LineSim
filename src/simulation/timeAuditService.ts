@@ -477,7 +477,7 @@ export function singleAutoProductRouteScope(project: ProjectData): Set<string> |
  * bottleneck cycle (project audited with that product alone). Ideal work = sum(ideal_i * units_i); Performance =
  * ideal work / operating time; Quality = ideal work of good units / ideal work of all units. Returns null (no
  * correction, caller keeps the count-based figures) outside the supported scope: fewer than two products, any manual
- * routing, repeated visits, unknown stage ids, or counts that do not add up to the engine totals.
+ * routing, unknown stage ids, or counts that do not add up to the engine totals.
  * Sources (practitioner, not a standard): https://oeelab.com/oee-mixed-products
  */
 export function mixedProductTimeWeightedOee(
@@ -492,9 +492,9 @@ export function mixedProductTimeWeightedOee(
     if (p.routingMode === 'manual') return null;
     const r = p.routeStageIds;
     if (Array.isArray(r) && r.length > 0) {
-      // Repeated visits stay out of scope. A partial route is in scope: that product's ideal cycle is the bottleneck of
-      // its own route stages (the single-product audit below already scopes to the route). An unknown stage id is not.
-      if (new Set(r).size !== r.length) return null;
+      // A partial route is in scope: that product's ideal cycle is the bottleneck of its own route stages (the
+      // single-product audit below already scopes to the route). A stage visited twice counts twice toward its load.
+      // An unknown stage id is out of scope.
       if (!r.every((id) => allIds.includes(id))) return null;
     }
   }
@@ -506,7 +506,19 @@ export function mixedProductTimeWeightedOee(
     if (!a) return null;
     const solo: ProjectData = structuredClone(project);
     solo.products = [structuredClone(p)];
-    const ideal = auditProjectTiming(solo).bottleneckCycleSec;
+    const soloAudit = auditProjectTiming(solo);
+    let ideal = soloAudit.bottleneckCycleSec;
+    const route = p.routeStageIds;
+    if (Array.isArray(route) && route.length > 0 && new Set(route).size !== route.length) {
+      // Repeated visits: the unit needs visits x stage cycle at each stage, so the ideal cycle is the largest such load.
+      const visits = new Map<string, number>();
+      for (const id of route) visits.set(id, (visits.get(id) ?? 0) + 1);
+      ideal = 0;
+      for (const st of soloAudit.stages) {
+        const v = visits.get(st.stageId) ?? 0;
+        if (v > 0 && st.effectiveUnitCycleSec > 0) ideal = Math.max(ideal, st.effectiveUnitCycleSec * v);
+      }
+    }
     if (!(ideal > 0)) return null;
     const total = a.completedGoodQty + a.scrappedQty;
     counted += total;
