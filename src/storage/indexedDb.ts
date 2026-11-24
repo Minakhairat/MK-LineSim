@@ -1,4 +1,5 @@
 import { EquipmentTemplate, ProjectData } from '../types/project';
+import { detectImportNotes } from '../utils/importNotes';
 
 const DB_NAME = 'mk_linesim_db';
 const DB_VERSION = 1;
@@ -374,6 +375,11 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
       };
     })(),
     lastSimulationResult: obj.lastSimulationResult as ProjectData['lastSimulationResult'],
+    ...(() => {
+      const prior = Array.isArray(obj.importNotes) ? (obj.importNotes as unknown[]).map(String) : [];
+      const merged = Array.from(new Set([...prior, ...detectImportNotes(obj)]));
+      return merged.length > 0 ? { importNotes: merged } : {};
+    })(),
     scenarios: Array.isArray(obj.scenarios) ? obj.scenarios : [],
   };
 }
