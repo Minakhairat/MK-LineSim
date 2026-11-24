@@ -403,15 +403,15 @@ export const AnalyticsModule: React.FC = () => {
               </div>
             </div>
           </div>
-          {!k.performanceAnomaly && oeeBasisUsesSkippedStage(project.products, k.theoreticalBottleneckStageId) && (
+          {oeeBasisUsesSkippedStage(project.products, k.theoreticalBottleneckStageId) && (
             <div
               role="note"
               data-testid="oee-basis-warning"
               className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
             >
               {language === 'ar'
-                ? 'تنبيه: في منتج مساره بيتخطى أبطأ مرحلة في المشروع. زمن الدورة المثالي في OEE والأداء بيتاخد من أبطأ مرحلة في المشروع كله حتى لو المنتج مش بيعدّي عليها، فالقيم دي ممكن تبقى مبالغ فيها حتى لو أقل من ١٠٠٪. ما تعتمدش عليها قبل مراجعة أساس زمن الدورة المثالي.'
-                : 'Note: a product route skips the slowest stage in the project. Line OEE and Performance take their ideal cycle from the slowest stage in the whole project, even when a product does not visit it, so these values may be overstated even when they are below 100%. Do not rely on them until the ideal-cycle basis is checked.'}
+                ? 'تنبيه: في منتج مساره بيتخطى أبطأ مرحلة في المشروع. OEE والأداء والاختناق النظري والإنتاجية النظرية وكفاءة الخط بتتحسب على كل مراحل المشروع مش على المسار ده، فممكن تبقى مبالغ فيها أو تشاور على مرحلة المسار بيتخطاها، حتى لو الأداء أقل من ١٠٠٪. في حالة العينة بس: مرحلة ٦٠ ث متخطاة وبعدها ٤٥ ث، الإنتاجية النظرية فضلت ٦٠/ساعة وحساب بسيط لمسار واحد (٣٦٠٠÷٤٥) يدّي ٨٠/ساعة، وده مش متحقق لتعدد المنتجات أو التوازي. الاختناق المقاس في بطاقة Bottleneck Stage جاي من التشغيل ومنفصل. ما تعتمدش على القيم دي قبل مراجعة الأساس.'
+                : 'Note: a product route skips the slowest stage in the project. Line OEE, Performance, theoretical bottleneck, theoretical throughput and line efficiency are computed over all project stages, not that route, so they may be overstated or name a stage the route skips, even when Performance is below 100%. Sample case only: with a 60 s stage skipped and a 45 s next-slowest stage, theoretical throughput stays at 60/h while simple single-route arithmetic (3600/45) gives 80/h, not validated for multi-product or parallel capacity. The measured Bottleneck Stage comes from the run and is separate. Do not rely on these values until the basis is checked.'}
             </div>
           )}
           {k.performanceAnomaly && (

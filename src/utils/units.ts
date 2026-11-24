@@ -190,6 +190,15 @@ export function toggleStageInProductRoute(
 ): { routingMode: 'auto' | 'manual'; routeStageIds: string[]; entryStageIds: string[] } {
   const isManual = prod.routingMode === 'manual';
   const active = prod.routeStageIds.includes(stageId);
+  // An auto product keeps at least one stage: an empty route is read as "all stages" by syncProductRoutes,
+  // so unticking the last box would silently turn into a full route. Leave the route unchanged instead.
+  if (!isManual && active && prod.routeStageIds.length <= 1) {
+    return {
+      routingMode: 'auto',
+      routeStageIds: [...prod.routeStageIds],
+      entryStageIds: prod.routeStageIds.length > 0 ? [prod.routeStageIds[0]] : [],
+    };
+  }
   const raw = active ? prod.routeStageIds.filter((x) => x !== stageId) : [...prod.routeStageIds, stageId];
   const next = isManual ? raw : stageIds.filter((id) => raw.includes(id));
   return {

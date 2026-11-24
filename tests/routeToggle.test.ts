@@ -58,3 +58,16 @@ test('Manual product keeps the earlier behaviour: route is rebuilt from the flow
   assert.equal(p.products[0].routingMode, 'manual');
   assert.deepEqual(p.products[0].routeStageIds, before);
 });
+
+test('auto product: unticking the last remaining stage leaves the route unchanged (no silent all-stages restore)', () => {
+  const p: any = createDesertAirCoolerProject();
+  const ids = p.stages.map((s: any) => s.id);
+  const prod = p.products[0];
+  prod.routingMode = 'auto';
+  prod.routeStageIds = ['stg_7_packing'];
+  prod.entryStageIds = ['stg_7_packing'];
+  applyToggle(p, 'stg_7_packing');
+  assert.equal(p.products[0].routingMode, 'auto');
+  assert.deepEqual(p.products[0].routeStageIds, ['stg_7_packing']);
+  assert.ok(ids.length > 1);
+});
