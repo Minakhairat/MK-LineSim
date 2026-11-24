@@ -333,3 +333,21 @@ test('Paired staffing intervention: a second Wiring machine adds output only wit
   assert.ok(both.stageAnalytics.find((x: any) => x.stageId === 'stg_2_motor').utilizationPct > 99);
   assert.equal(units(opsOnly), 294);
 });
+
+// (f) Four auto products, full routes, default project, Packing batch 1, arrival 240 s: cycle multipliers 1, 2, 1.5, 3, mix 1:1:2:1.
+//     Each product's ideal cycle is 60 s x multiplier (Electrical Wiring). Recorded good + scrap: A 20+2, P1 22+0, P2 41+2, P3 20+1.
+//     Ideal work = 60x(1x22 + 2x22 + 1.5x43 + 3x21) = 11610 s over 27000 s: hand P = 43.00% (total 148 units).
+//     Good work = 60x(1x20 + 2x22 + 1.5x41 + 3x20) = 60 x 185.5 = 11130 s: Q = 95.87%, OEE = 41.22%.
+//     One mix and one arrival only; not a claim about other product counts, mixes or saturated lines.
+test('Four products with different cycles: weighted OEE equals the hand figure (one fixture)', () => {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const mult = [1, 2, 1.5, 3], mix = [1, 1, 2, 1];
+  p.products[0].mixWeight = mix[0]; p.products[0].cycleTimeMultiplier = mult[0];
+  for (let i = 1; i < 4; i++) { const B = structuredClone(p.products[0]); B.id = 'p' + i; B.name = 'P' + i; B.code = 'P' + i; B.mixWeight = mix[i]; B.cycleTimeMultiplier = mult[i]; p.products.push(B); }
+  p.simulationConfig.arrivalIntervalSec = 240;
+  const r = run(p);
+  assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[20, 2], [22, 0], [41, 2], [20, 1]]);
+  near(r.kpis.performancePct, (11610 / 27000) * 100); near(r.kpis.qualityPct, (11130 / 11610) * 100); near(r.kpis.oeePct, (11130 / 27000) * 100);
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+});
