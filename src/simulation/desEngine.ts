@@ -2660,6 +2660,12 @@ export class DiscreteEventSimulationEngine {
     const entId = ev.entityId;
     const stageId = ev.stageId;
     if (!entId || !stageId) return;
+    if (ev.payload?.transitCounted) {
+      this.stageInTransitCounts.set(
+        stageId,
+        Math.max(0, (this.stageInTransitCounts.get(stageId) || 0) - 1)
+      );
+    }
     const ent = this.entities.get(entId);
     const stage = this.stagesMap.get(stageId);
     const buf = this.stageBuffers.get(stageId);
@@ -4299,8 +4305,10 @@ export class DiscreteEventSimulationEngine {
       this.validJobTokens.delete(token);
     }
     if (!ev.entityId || !ev.stageId) return;
-    const prevTransitCount = this.stageInTransitCounts.get(ev.stageId) || 0;
-    this.stageInTransitCounts.set(ev.stageId, Math.max(0, prevTransitCount - 1));
+    // The in-transit slot is released when the unit actually lands in the buffer
+    // (handleProductArrived), not here: otherwise the unit is counted nowhere between
+    // this event and its same-timestamp ProductArrived, and another admission can
+    // take the slot (buffer overflow beyond capacity).
     const transferConvId = ev.payload?.transferConveyorId as string | undefined;
     if (transferConvId) {
       const nextOcc = Math.max(0, (this.conveyorOccupancy.get(transferConvId) || 1) - 1);
@@ -4330,6 +4338,7 @@ export class DiscreteEventSimulationEngine {
       entityId: ev.entityId,
       stageId: ev.stageId,
       details: `${ev.entityId} arrived at ${this.stagesMap.get(ev.stageId)?.name || ev.stageId}`,
+      payload: { transitCounted: true },
     });
   }
 
@@ -5502,6 +5511,25 @@ export class DiscreteEventSimulationEngine {
     for (const startSid of waitGraph.keys()) {
       if (!visitedNodes.has(startSid)) {
         dfsDeadlock(startSid);
+      }
+    }
+
+    // Starved batch holder: a collect_batch stage whose holder plus buffer is full of units where
+    // no single product has a full batch, with nothing queued or in transit that could change that.
+    // Nothing can ever enter or leave, but this is not a wait-for cycle, so report it here.
+    for (const [sid, holder] of this.stageBatchHolders.entries()) {
+      const batchCfg = this.stageBatchConfigs.get(sid);
+      const stg = this.stagesMap.get(sid);
+      const q = this.stageBuffers.get(sid) || [];
+      if (!stg || !batchCfg || batchCfg.batchMode !== 'collect_batch' || !(batchCfg.batchSize > 1)) continue;
+      if (holder.length === 0 || q.length > 0 || (this.stageInTransitCounts.get(sid) || 0) > 0) continue;
+      const effCap = Math.max(Number(stg.bufferCapacity ?? 0), batchCfg.batchSize);
+      if (!Number.isFinite(effCap) || holder.length < effCap) continue;
+      const perProd = new Map<string, number>();
+      for (const h of holder) perProd.set(h.productId, (perProd.get(h.productId) || 0) + h.units);
+      if ([...perProd.values()].some((u) => u >= batchCfg.batchSize)) continue;
+      if (this.getActiveDispatchableProducts().length > 0 || this.calendarEngine.isPlantShiftActiveAt(now)) {
+        deadlocks.push({ stageIds: [sid], objectIds: [], entityIds: holder.map((h) => h.entityId) });
       }
     }
 
