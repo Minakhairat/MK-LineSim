@@ -228,3 +228,14 @@ test('Manual-routing products are reported as untraced, never as an all-clear', 
     }
   });
 }
+
+test('availability 0 with MTBF/MTTR set raises a reliability conflict warning; sample has none', async () => {
+  const { runEngineeringValidations } = await import('../src/engineering/validationEngine');
+  const base: any = createDesertAirCoolerProject();
+  assert.equal(runEngineeringValidations(base).filter((i) => i.code === 'CONFLICTING_RELIABILITY_PARAMS').length, 0);
+  const p: any = createDesertAirCoolerProject();
+  p.simulationConfig.enableBreakdowns = true;
+  const m = p.layoutObjects.find((o: any) => o.kind === 'machine' || o.kind === 'workstation');
+  m.operations.availability = 0; m.operations.mtbfSec = 3600; m.operations.mttrSec = 300;
+  assert.ok(runEngineeringValidations(p).some((i) => i.code === 'CONFLICTING_RELIABILITY_PARAMS' && i.targetId === m.id));
+});
