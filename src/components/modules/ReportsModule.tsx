@@ -8,6 +8,7 @@ import {
   exportScenariosCanvasPdf,
 } from '../../utils/reportExporter';
 import { downloadDataUrl, sanitizeFilename } from '../../utils/mediaCapture';
+import { isEventLogTruncated } from '../../utils/units';
 
 export const ReportsModule: React.FC = () => {
   const project = useAppStore((s) => s.project);
@@ -100,14 +101,28 @@ export const ReportsModule: React.FC = () => {
           `${e.seq},${e.timestamp.toFixed(3)},${e.type},${e.entityId || ''},${e.stageId || ''},${e.objectId || ''},${e.workerId || ''},"${e.details.replace(/"/g, '""')}"`
       )
       .join('\n');
+    const executed = result?.totalEventsExecuted;
+    const truncated = isEventLogTruncated(events.length, executed);
+    const footer = truncated
+      ? `\nTRUNCATED,,,,,,,"INCOMPLETE LOG: only the first ${events.length} of ${executed} executed events are recorded. Events after this point are missing. KPI totals are not affected."`
+      : '';
     // UTF-8 BOM ensures Microsoft Excel renders Arabic text without encoding corruption
-    const blob = new Blob(['\uFEFF' + header + rows], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['\uFEFF' + header + rows + footer], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${sanitizeFilename(project.name)}_sim_events.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    if (truncated) {
+      setToast(
+        isAr
+          ? `تحذير: السجل غير كامل. تم تصدير أول ${events.length} حدث فقط من ${executed} حدث نُفّذ.`
+          : `Warning: log incomplete. Exported only the first ${events.length} of ${executed} executed events.`,
+        'error'
+      );
+      return;
+    }
     setToast(
       isAr ? `تم تصدير ${events.length} حدث إلى ملف CSV (دعم Excel العربي)` : `Exported ${events.length} simulation events to CSV`,
       'success'
