@@ -111,3 +111,33 @@ test('Repeated visit: a stage visited twice counts twice toward the product idea
   near(r.kpis.qualityPct, (13280 / 14290) * 100);
   near(r.kpis.oeePct, (13280 / 27000) * 100);
 });
+
+// Independent lines: default project, Packing batch 1, arrival 120 s. A routes stages 1-4, B stages 5-8 (disjoint).
+// Hand-checked ideal cycles: A 60 s (Electrical Wiring), B 40 s. Recorded counts: A 108 good + 4 scrap, B 109 good + 2 scrap,
+// operating 27000 s. The two lines run at the same time, so ideal work is divided by 2 x 27000 s:
+// ideal 60 x 112 + 40 x 111 = 11160 s, good 60 x 108 + 40 x 109 = 10840 s. P = 20.67%, Q = 97.13%, OEE = 20.07%.
+// Without the division the figure would be 41.33% (and could reach 200%).
+function indepFixture(routeB?: (ids: string[]) => string[]) {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const ids: string[] = p.stages.map((s: any) => s.id);
+  const A = p.products[0];
+  const B = structuredClone(A); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; A.mixWeight = 1;
+  A.routeStageIds = ids.slice(0, 4); B.routeStageIds = routeB ? routeB(ids) : ids.slice(4);
+  p.products.push(B);
+  p.simulationConfig.arrivalIntervalSec = 120;
+  return p;
+}
+test('Independent lines (disjoint routes): ideal work is divided by the number of parallel lines', () => {
+  const r = run(indepFixture());
+  const [A, B] = r.productAnalytics;
+  assert.deepEqual([A.completedGoodQty, A.scrappedQty, B.completedGoodQty, B.scrappedQty], [108, 4, 109, 2]);
+  near(r.kpis.performancePct, (11160 / (27000 * 2)) * 100);
+  near(r.kpis.qualityPct, (10840 / 11160) * 100);
+  near(r.kpis.oeePct, (10840 / 54000) * 100);
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+});
+test('Partly overlapping routes (neither nested nor disjoint) get no weighted figure', () => {
+  const r = run(indepFixture((ids) => ids.slice(2, 6)));
+  assert.equal(r.kpis.oeeMixedTimeWeighted, undefined);
+});
