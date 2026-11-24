@@ -131,7 +131,9 @@ export function applyScenarioOverrides(
   // Adjust simulation duration, breakdowns, target
   cloned.simulationConfig.durationSec = Math.max(600, overrides.shiftDurationSec);
   cloned.simulationConfig.enableBreakdowns = overrides.enableBreakdowns;
-  cloned.simulationConfig.maxPlannedUnits = Math.max(1, overrides.targetProduction);
+  // 0 means unlimited (SimulationConfig.maxPlannedUnits); keep it instead of forcing 1 unit.
+  cloned.simulationConfig.maxPlannedUnits =
+    overrides.targetProduction > 0 ? Math.max(1, Math.round(overrides.targetProduction)) : 0;
   if (cloned.simulationConfig.shifts[0]) {
     cloned.simulationConfig.shifts[0].durationSec = cloned.simulationConfig.durationSec;
   }
