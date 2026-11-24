@@ -28,7 +28,9 @@ export const ScenariosModule: React.FC = () => {
   const [convSpeed, setConvSpeed] = useState(
     project.layoutObjects.find((o) => o.kind === 'conveyor')?.operations.speedMps || 0.08
   );
-  const [bufferCap, setBufferCap] = useState(project.stages[0]?.bufferCapacity || 5);
+  const [bufferCap, setBufferCap] = useState(project.stages[0]?.bufferCapacity ?? 5);
+  // Only an explicit edit of the buffer field overrides per-stage buffers; untouched = keep each stage's own.
+  const [bufferTouched, setBufferTouched] = useState(false);
   const [shiftSec, setShiftSec] = useState(project.simulationConfig.durationSec);
   const [enableBreakdowns, setEnableBreakdowns] = useState(project.simulationConfig.enableBreakdowns);
   const [targetProd, setTargetProd] = useState(project.simulationConfig.maxPlannedUnits);
@@ -43,7 +45,7 @@ export const ScenariosModule: React.FC = () => {
       workerCount,
       processingTimeScale: procScale,
       conveyorSpeedMps: convSpeed,
-      bufferCapacity: bufferCap,
+      bufferCapacity: bufferTouched ? bufferCap : undefined,
       shiftDurationSec: shiftSec,
       enableBreakdowns,
       targetProduction: targetProd,
@@ -55,7 +57,7 @@ export const ScenariosModule: React.FC = () => {
         const updatedScen: ScenarioRecord = {
           ...existing,
           name: cleanName,
-          description: `Workers=${workerCount}, CycleScale=${procScale}x, Belt=${convSpeed}m/s, Buffer=${bufferCap}`,
+          description: `Workers=${workerCount}, CycleScale=${procScale}x, Belt=${convSpeed}m/s, Buffer=${bufferTouched ? bufferCap : 'per-stage'}`,
           overrides,
         };
         updateScenario(editingScenarioId, {
@@ -72,7 +74,7 @@ export const ScenariosModule: React.FC = () => {
     const scen: ScenarioRecord = {
       id: uid('scen'),
       name: cleanName,
-      description: `Workers=${workerCount}, CycleScale=${procScale}x, Belt=${convSpeed}m/s, Buffer=${bufferCap}`,
+      description: `Workers=${workerCount}, CycleScale=${procScale}x, Belt=${convSpeed}m/s, Buffer=${bufferTouched ? bufferCap : 'per-stage'}`,
       createdAt: new Date().toISOString(),
       isBaseline: false,
       overrides,
@@ -213,9 +215,12 @@ export const ScenariosModule: React.FC = () => {
               <span className="text-[11px] text-neutral-500">{t.scenarios.bufferCap}</span>
               <input
                 type="number"
-                min={1}
+                min={0}
                 value={bufferCap}
-                onChange={(e) => setBufferCap(Number(e.target.value))}
+                onChange={(e) => {
+                  setBufferCap(Number(e.target.value));
+                  setBufferTouched(true);
+                }}
                 className="rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-2.5 py-1.5 font-mono-tabular"
               />
             </label>
@@ -347,7 +352,8 @@ export const ScenariosModule: React.FC = () => {
                             setWorkerCount(sc.overrides.workerCount);
                             setProcScale(sc.overrides.processingTimeScale);
                             setConvSpeed(sc.overrides.conveyorSpeedMps);
-                            setBufferCap(sc.overrides.bufferCapacity);
+                            setBufferCap(sc.overrides.bufferCapacity ?? project.stages[0]?.bufferCapacity ?? 5);
+                            setBufferTouched(sc.overrides.bufferCapacity !== undefined);
                             setShiftSec(sc.overrides.shiftDurationSec);
                             setEnableBreakdowns(sc.overrides.enableBreakdowns);
                             setTargetProd(sc.overrides.targetProduction);
