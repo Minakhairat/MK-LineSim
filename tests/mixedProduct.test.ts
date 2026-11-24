@@ -336,7 +336,7 @@ test('Paired staffing intervention: a second Wiring machine adds output only wit
 
 // (f) Four auto products, full routes, default project, Packing batch 1, arrival 240 s: cycle multipliers 1, 2, 1.5, 3, mix 1:1:2:1.
 //     Each product's ideal cycle is 60 s x multiplier (Electrical Wiring). Recorded good + scrap: A 20+2, P1 22+0, P2 41+2, P3 20+1.
-//     Ideal work = 60x(1x22 + 2x22 + 1.5x43 + 3x21) = 11610 s over 27000 s: hand P = 43.00% (total 148 units).
+//     Ideal work = 60x(1x22 + 2x22 + 1.5x43 + 3x21) = 11610 s over 27000 s: hand P = 43.00% (total 108 units).
 //     Good work = 60x(1x20 + 2x22 + 1.5x41 + 3x20) = 60 x 185.5 = 11130 s: Q = 95.87%, OEE = 41.22%.
 //     One mix and one arrival only; not a claim about other product counts, mixes or saturated lines.
 test('Four products with different cycles: weighted OEE equals the hand figure (one fixture)', () => {
