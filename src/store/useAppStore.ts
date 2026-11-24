@@ -1439,8 +1439,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         const ar: string[] = [];
         const en: string[] = [];
         if (batch.length > 0) {
-          ar.push(`تعليق في تجميع الدُفعات عند (${batch.join(', ')}): المخزن ممتلئ بوحدات مفيهاش دفعة كاملة من نفس المنتج ووحدات تانية واقفة وراه، فالإنتاج بيقف من نقطة معينة والنتيجة أقل من الحقيقي. زِد سعة المخزن أو غيّر حجم الدفعة أو خليط المنتجات.`);
-          en.push(`batch stall at (${batch.join(', ')}): the buffer is full of units with no complete batch of one product and other units are blocked behind it, so output stops from some point and this run understates production. Increase the buffer, or change the batch size or product mix.`);
+          ar.push(`تعليق في تجميع الدُفعات عند (${batch.join(', ')}): المخزن ممتلئ بوحدات مفيهاش دفعة كاملة من نفس المنتج ووحدات تانية واقفة وراه، فالإنتاج في النموذج بيقف من نقطة معينة. راجع افتراضات سعة المخزن وحجم الدفعة وخليط المنتجات.`);
+          en.push(`batch stall at (${batch.join(', ')}): the buffer is full of units with no complete batch of one product and other units are blocked behind it, so the modeled flow stops from some point. Review the buffer, batch size and product mix assumptions.`);
         }
         if (cyc.length > 0) {
           ar.push(`انسداد متبادل بين مراحل (${cyc.join(', ')}): وحدات منتظرة بعضها فالتشغيل واقف عندها.`);
