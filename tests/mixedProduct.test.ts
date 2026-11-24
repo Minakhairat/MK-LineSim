@@ -181,3 +181,35 @@ test('Batch starvation: buffer below k x (b - 1) + 1 is warned before the run an
   const ok = build(7); const r7 = run(ok);
   assert.equal(warned(ok), false); assert.equal(r7.kpis.goodUnits, 411); assert.equal(r7.stallWarnings?.length ?? 0, 0);
 });
+
+// Same rule, more products and unequal mix. Default project, Packing buffer varied, arrival 60 s. Recorded:
+// three products 1:1:1, batch 4: needed 3 x 3 + 1 = 10; buffer 9 stalls (0 good, stall held 9 = the buffer, so units held for a
+// batch count toward buffer occupancy), buffer 10 flows (414 good). Three products, batch 3: needed 3 x 2 + 1 = 7; buffer 6 stalls, 7 flows (414).
+// Two products mix 3:1, batch 4: needed 7; buffer 6 stalls (4 good before the stall), buffer 7 flows (410). The bound is a worst-case
+// sufficient buffer: an unequal mix can still stall below it (it did at 5 and 6 here) but never at or above it in these runs.
+test('Batch starvation bound k x (b - 1) + 1: three products and unequal mix', () => {
+  const build = (weights: number[], batch: number, cap: number) => {
+    const p: any = createDesertAirCoolerProject();
+    const pk = p.stages.find((s: any) => s.id === 'stg_7_packing'); pk.bufferCapacity = cap; pk.batchSize = batch;
+    p.products[0].mixWeight = weights[0];
+    for (let i = 1; i < weights.length; i++) {
+      const B = structuredClone(p.products[0]); B.id = 'p' + i; B.name = 'P' + i; B.code = 'P' + i; B.mixWeight = weights[i]; p.products.push(B);
+    }
+    p.simulationConfig.arrivalIntervalSec = 60;
+    return p;
+  };
+  const cases: Array<[number[], number, number, number, number]> = [
+    // weights, batch, buffer, expected good, expected stall count
+    [[1, 1, 1], 4, 9, 0, 1], [[1, 1, 1], 4, 10, 414, 0],
+    [[1, 1, 1], 3, 6, 0, 1], [[1, 1, 1], 3, 7, 414, 0],
+    [[3, 1], 4, 6, 4, 1], [[3, 1], 4, 7, 410, 0],
+  ];
+  for (const [w, b, cap, good, stalls] of cases) {
+    const p = build(w, b, cap); const r = run(p);
+    const warned = validateProject(p).some((i: any) => String(i.id).startsWith('val_stg_batch_buffer'));
+    assert.equal(r.kpis.goodUnits, good, `${w} b${b} cap${cap}`);
+    assert.equal(r.stallWarnings?.length ?? 0, stalls, `${w} b${b} cap${cap}`);
+    assert.equal(warned, stalls === 1, `${w} b${b} cap${cap}`);
+    if (stalls === 1) assert.equal(r.stallWarnings?.[0]?.heldUnits, cap);
+  }
+});
