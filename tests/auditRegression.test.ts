@@ -5,6 +5,13 @@ import { DiscreteEventSimulationEngine } from '../src/simulation/desEngine';
 import { applyScenarioOverrides } from '../src/simulation/workerClient';
 import { resolveProductMixWeights } from '../src/simulation/timeAuditService';
 import { validateProject } from '../src/simulation/validator';
+import {
+  formatBeltSpeed,
+  isStalledResult,
+  leadTimeText,
+  stallLocationNames,
+  uniformBufferReplacesStages,
+} from '../src/utils/units';
 
 function neutralOverrides(base: any) {
   return {
@@ -258,4 +265,72 @@ test('avgBatchSize reports units per batch at the batch stage even with scrap', 
     const r: any = new DiscreteEventSimulationEngine(p).runToCompletion();
     assert.ok(Math.abs(r.kpis.avgBatchSize - 4) < 0.05, `scrap ${sc}: ${r.kpis.avgBatchSize}`);
   }
+});
+
+function twoProductProject(): any {
+  const p: any = createDesertAirCoolerProject();
+  const b = structuredClone(p.products[0]);
+  b.id = 'B1';
+  b.code = 'B1';
+  p.products.push(b);
+  // Packing is the batch stage (batch of 4). Give it a buffer large enough for two products, as in the audit project.
+  p.stages.find((s: any) => s.name === 'Packing').bufferCapacity = 20;
+  return p;
+}
+
+const stallBase: any = {
+  workerCount: 10,
+  processingTimeScale: 1,
+  conveyorSpeedMps: 0.05,
+  shiftDurationSec: 28800,
+  enableBreakdowns: false,
+  targetProduction: 600,
+};
+
+function run(p: any, bufferCapacity?: number) {
+  const m = applyScenarioOverrides(structuredClone(p), { ...stallBase, bufferCapacity });
+  return new DiscreteEventSimulationEngine(m).runToCompletion() as any;
+}
+
+test('shipped baseline scenario keeps per-stage buffers (no uniform override)', () => {
+  const p: any = createDesertAirCoolerProject();
+  const baseline = p.scenarios.find((s: any) => s.isBaseline);
+  assert.equal(baseline.overrides.bufferCapacity, undefined);
+});
+
+test('uniform buffer override replaces per-stage buffers, and the helper detects it', () => {
+  const p = twoProductProject();
+  const packing = p.stages.find((s: any) => s.bufferCapacity === 20);
+  assert.ok(packing, 'sample has a stage with buffer 20');
+  assert.equal(uniformBufferReplacesStages(p.stages, undefined), false);
+  assert.equal(uniformBufferReplacesStages(p.stages, 4), true);
+  const m = applyScenarioOverrides(structuredClone(p), { ...stallBase, bufferCapacity: 4 });
+  assert.ok(m.stages.every((s: any) => s.bufferCapacity === 4));
+  const same = applyScenarioOverrides(structuredClone(p), { ...stallBase, bufferCapacity: undefined });
+  assert.equal(same.stages.find((s: any) => s.id === packing.id)!.bufferCapacity, 20);
+});
+
+test('two-product batch stage: uniform buffer 4 is flagged as a stall, per-stage buffers flow', () => {
+  const p = twoProductProject();
+  const stalled = run(p, 4);
+  assert.equal(isStalledResult(stalled), true);
+  assert.equal(stalled.kpis.goodUnits, 0);
+  assert.equal(stallLocationNames(stalled), 'Packing');
+  assert.equal(leadTimeText(stalled.kpis.avgLeadTimeSec), '—');
+  const ok = run(p, undefined);
+  assert.equal(isStalledResult(ok), false);
+  assert.ok(ok.kpis.goodUnits > 0);
+  assert.equal(stallLocationNames(ok), '');
+  assert.notEqual(leadTimeText(ok.kpis.avgLeadTimeSec), '—');
+});
+
+test('presentation helpers', () => {
+  assert.equal(leadTimeText(0), '—');
+  assert.equal(leadTimeText(0, '-'), '-');
+  assert.notEqual(leadTimeText(61), '—');
+  assert.equal(formatBeltSpeed(0.05), '0.05');
+  assert.equal(formatBeltSpeed(0.0500534), '0.0501');
+  assert.equal(formatBeltSpeed(0.0534), '0.0534');
+  assert.equal(isStalledResult(undefined), false);
+  assert.equal(isStalledResult({ stallWarnings: [] } as any), false);
 });
