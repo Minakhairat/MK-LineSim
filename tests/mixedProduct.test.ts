@@ -249,7 +249,7 @@ test('Batch stage admits up to max(buffer, batch size): buffer 1 to 4 identical 
 // (c) B visits Testing twice in a row (route ... Testing, Testing, Final ...), no other change. A ideal 60 s (wiring); B Testing load 2x35 = 70 s > 60, so 70 s.
 //     Recorded A 100 + 10, B 107 + 3 (Testing completed 330 = 110 + 2x110): ideal 60x110 + 70x110 = 14300 s, good 60x100 + 70x107 = 13490 s.
 //     P = 52.96%, Q = 94.34%, OEE = 49.96%.
-function parFixture(extra: 'wiring' | 'both', arrival = 120) {
+function parFixture(extra: 'wiring' | 'both' | 'none', arrival = 120) {
   const p: any = createDesertAirCoolerProject();
   for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
   const dup = (stageId: string, objId: string) => {
@@ -257,7 +257,7 @@ function parFixture(extra: 'wiring' | 'both', arrival = 120) {
     const o2 = structuredClone(o); o2.id = objId + 'b'; o2.name = o.name + ' 2'; o2.geometry.position.x += 3; o2.stageId = stageId;
     p.layoutObjects.push(o2); st.assignedObjectIds = [...st.assignedObjectIds, o2.id];
   };
-  dup('stg_3_wiring', 'obj_st_3');
+  if ((extra as string) !== 'none') dup('stg_3_wiring', 'obj_st_3');
   if (extra === 'both') dup('stg_2_motor', 'obj_st_2');
   const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; B.cycleTimeMultiplier = 2;
   p.products[0].mixWeight = 1; p.products.push(B); p.simulationConfig.arrivalIntervalSec = arrival;
@@ -302,4 +302,34 @@ test('Weighted OEE with a parallel machine when arrival no longer limits output 
   const motor = r.stageAnalytics.find((x: any) => x.stageId === 'stg_2_motor');
   assert.ok(motor.utilizationPct < 80);
   assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+});
+
+// (e) Paired staffing intervention on the fixture of (d) (arrival 30 s, A ideal x1, B x2; Wiring needs 2 operators per unit).
+//     Same arrival and seed, only the machine and operator counts change. Engine totals (good + scrap) and Performance:
+//     1 machine, 2 Wiring operators:        294 units (A 137+10, B 140+7), P 98.00% (ideal 60 s / 120 s; hand 60x147 + 120x147 = 26460 s).
+//     2 machines, 2 operators (as in d):    293 units, P 73.17%: no output gain, the Wiring operators stay about 99% busy.
+//     2 machines, 4 operators:              386 units (A 184+10, B 179+13), P 96.33% (hand 45x194 + 90x192 = 26010 s), OEE 90.33%
+//                                           (hand good 45x184 + 90x179 = 24390 s). Motor utilization 99.7%: the limit moved to Motor.
+//     1 machine, 4 operators (extra two assigned to the same station): 294 units, the extra operators 0% busy: no gain.
+//     One arrival and one staffing pattern; it shows output followed Wiring operators in this fixture, not a general rule.
+function staffed(machine: boolean, extraOps: boolean) {
+  const p: any = parFixture(machine ? 'wiring' : 'none' as any, 30);
+  if (extraOps) {
+    for (const w of p.workers.filter((x: any) => /Wiring/.test(x.name) && !/extra/.test(x.name))) {
+      const w2 = structuredClone(w); w2.id = w.id + 'x'; w2.name = w.name + ' extra'; w2.label = w.label + 'x';
+      if (machine) w2.assignedStationId = 'obj_st_3b';
+      p.workers.push(w2);
+    }
+  }
+  return p;
+}
+test('Paired staffing intervention: a second Wiring machine adds output only with its own operators (one fixture)', () => {
+  const units = (r: any) => r.productAnalytics.reduce((a: number, x: any) => a + x.completedGoodQty + x.scrappedQty, 0);
+  const base = run(staffed(false, false)); const machineOnly = run(staffed(true, false)); const both = run(staffed(true, true)); const opsOnly = run(staffed(false, true));
+  assert.equal(units(base), 294); near(base.kpis.performancePct, (26460 / 27000) * 100);
+  assert.equal(units(machineOnly), 293); near(machineOnly.kpis.performancePct, (19755 / 27000) * 100);
+  assert.deepEqual(both.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[184, 10], [179, 13]]);
+  near(both.kpis.performancePct, (26010 / 27000) * 100); near(both.kpis.oeePct, (24390 / 27000) * 100);
+  assert.ok(both.stageAnalytics.find((x: any) => x.stageId === 'stg_2_motor').utilizationPct > 99);
+  assert.equal(units(opsOnly), 294);
 });
