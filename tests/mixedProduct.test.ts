@@ -43,11 +43,11 @@ test('Two products with identical cycles: weighted and count-based Quality coinc
   assert.ok(total > 0 && good <= total);
 });
 
-test('Out of scope stays count-based and unflagged: single product, manual routing, partial route', () => {
+test('Out of scope stays count-based and unflagged: single product, manual routing, repeated stage in a route', () => {
   const single: any = createDesertAirCoolerProject();
   assert.equal(run(single).kpis.oeeMixedTimeWeighted, undefined);
   assert.equal(run(fixture((p) => { p.products[1].routingMode = 'manual'; })).kpis.oeeMixedTimeWeighted, undefined);
-  assert.equal(run(fixture((p) => { p.products[1].routeStageIds = p.products[1].routeStageIds.slice(0, 4); })).kpis.oeeMixedTimeWeighted, undefined);
+  assert.equal(run(fixture((p) => { p.products[1].routeStageIds = [...p.products[1].routeStageIds, p.products[1].routeStageIds[0]]; })).kpis.oeeMixedTimeWeighted, undefined);
 });
 
 // Live-like fixture (default project, second product x2, Packing single-item, arrival default). Recorded counts:
@@ -66,4 +66,28 @@ test('Weighted case below 100% Performance carries no stale anomaly flag', () =>
   near(r.kpis.unitYieldPct, (277 / 294) * 100);
   assert.equal(r.kpis.performanceAnomaly, false);
   assert.equal(r.kpis.performanceAnomalyReason, undefined);
+});
+
+// Partial route. Default project, Packing single-item, arrival 120 s, A full route, B skips stage 3 (wiring, 60 s, the slowest).
+// Ideal cycle = bottleneck of the product's own route: A 60 s (wiring), B 45 s (motor). Recorded counts of this run:
+// A 105 good + 6 scrap, B 108 good + 2 scrap (stage 3 completed 110 units: only A's 111 minus one still in process), operating 27000 s.
+// Hand: ideal work = 60 x 111 + 45 x 110 = 11610 s; ideal good = 60 x 105 + 45 x 108 = 11160 s.
+// P = 11610/27000 = 43.00%, Q = 11160/11610 = 96.12%, OEE = 11160/27000 = 41.33%. The count-based basis gave P 49.11% and OEE 47.33%.
+test('Partial route: each product ideal cycle comes from its own route stages', () => {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B';
+  B.routeStageIds = B.routeStageIds.filter((id: string) => id !== 'stg_3_wiring');
+  p.products[0].mixWeight = 1; B.mixWeight = 1;
+  p.products.push(B);
+  p.simulationConfig.arrivalIntervalSec = 120;
+  const r = run(p);
+  const [A, Bq] = r.productAnalytics;
+  assert.deepEqual([A.completedGoodQty, A.scrappedQty, Bq.completedGoodQty, Bq.scrappedQty], [105, 6, 108, 2]);
+  const idealAll = 60 * 111 + 45 * 110;
+  const idealGood = 60 * 105 + 45 * 108;
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+  near(r.kpis.performancePct, (idealAll / 27000) * 100);
+  near(r.kpis.qualityPct, (idealGood / idealAll) * 100);
+  near(r.kpis.oeePct, (idealGood / 27000) * 100);
 });
