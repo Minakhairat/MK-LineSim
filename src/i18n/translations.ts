@@ -431,7 +431,7 @@ export const TRANSLATIONS = {
       scrapPct: 'Scrap (%)',
       station: 'Station / Conveyor',
       unassigned: 'Unassigned',
-      setupSec: 'Setup (s, once per run)',
+      setupSec: 'Setup (s, once/run)',
       loadSec: 'Load (s)',
       unloadSec: 'Unload (s)',
       reworkPct: 'Rework (%)',
