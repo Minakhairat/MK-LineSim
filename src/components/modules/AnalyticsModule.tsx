@@ -99,7 +99,7 @@ export const AnalyticsModule: React.FC = () => {
                 label: isAr ? 'متوسط زمن الدورة (ث)' : 'Measured Avg Cycle Time (s)',
                 data: result.stageAnalytics.map((s) => Number(s.avgCycleTimeSec.toFixed(1))),
                 backgroundColor: result.stageAnalytics.map((s) =>
-                  s.isBottleneck ? '#DC2626' : '#1E293B'
+                  s.isBottleneck && !(result.stallWarnings && result.stallWarnings.length > 0) ? '#DC2626' : '#1E293B'
                 ),
               },
               {
@@ -216,6 +216,13 @@ export const AnalyticsModule: React.FC = () => {
     };
   }, [result, theme, isAr]);
 
+  const stallIdSet = new Set((result?.stallWarnings || []).map((w) => w.stageId));
+  const stalledRun = stallIdSet.size > 0;
+  const stallLocationNames = (result?.stageAnalytics || [])
+    .filter((s) => stallIdSet.has(s.stageId))
+    .map((s) => s.stageName)
+    .join(', ');
+
   if (!result) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
@@ -310,8 +317,8 @@ export const AnalyticsModule: React.FC = () => {
                 : `Avg Cycle: ${k.avgCycleTimeSec.toFixed(1)}s · Takt (Est): ${k.theoreticalTaktTimeSec.toFixed(1)}s`,
             },
             {
-              label: t.analytics.cards.bottleneck,
-              val: k.bottleneckStageName || 'N/A',
+              label: stalledRun ? (isAr ? 'موقع التعليق' : 'Stall Location') : t.analytics.cards.bottleneck,
+              val: stalledRun ? stallLocationNames || 'N/A' : k.bottleneckStageName || 'N/A',
               sub: isAr
                 ? `كفاءة الخط: ${k.lineEfficiencyPct.toFixed(1)}% · متوسط WIP: ${k.avgWip.toFixed(1)}`
                 : `Line Eff: ${k.lineEfficiencyPct.toFixed(1)}% · Avg WIP: ${k.avgWip.toFixed(1)}`,
@@ -506,9 +513,14 @@ export const AnalyticsModule: React.FC = () => {
                 >
                   <td className="px-4 py-2 font-sans font-medium text-neutral-900 dark:text-neutral-100">
                     {sa.stageName}
-                    {sa.isBottleneck && (
+                    {sa.isBottleneck && !stalledRun && (
                       <span className="ms-2 text-[10px] font-semibold text-red-600">
                         {t.labels.bottleneck}
+                      </span>
+                    )}
+                    {stalledRun && stallIdSet.has(sa.stageId) && (
+                      <span className="ms-2 text-[10px] font-semibold text-amber-700">
+                        {isAr ? 'نقطة التعليق' : 'Stall point'}
                       </span>
                     )}
                   </td>
