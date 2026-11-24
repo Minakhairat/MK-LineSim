@@ -803,6 +803,7 @@ export interface ProjectData {
   workers: WorkerDefinition[];
   simulationConfig: SimulationConfig;
   lastSimulationResult?: SimulationResult;
+  importNotes?: string[]; // assumptions made when an older or incomplete file was opened; cleared by the user
   scenarios: ScenarioRecord[];
 }
 

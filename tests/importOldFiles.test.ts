@@ -33,3 +33,19 @@ test('An explicit empty shifts array is kept as given (not replaced)', () => {
   old.simulationConfig.shifts = [];
   assert.equal(migrateProjectSchema(old).simulationConfig.shifts.length, 0);
 });
+
+test('Import records what was assumed (importNotes) so the UI can show it', () => {
+  const full = migrateProjectSchema(clone());
+  assert.equal(full.importNotes, undefined); // a complete file produces no notes
+  const old = clone();
+  delete old.simulationConfig.shifts;
+  old.products.forEach((p: any) => { delete p.routeStageIds; });
+  old.lastSimulationResult = { kpis: { goodUnits: 9999 } };
+  const m: any = migrateProjectSchema(old);
+  assert.deepEqual(m.importNotes, ['shifts_defaulted', 'routes_defaulted', 'stored_results_kept']);
+  const noCfg = clone();
+  delete noCfg.simulationConfig;
+  assert.deepEqual((migrateProjectSchema(noCfg) as any).importNotes, ['sim_config_defaulted']);
+  // notes survive a second migration (reload from storage) without duplicating
+  assert.deepEqual((migrateProjectSchema(m) as any).importNotes, m.importNotes);
+});

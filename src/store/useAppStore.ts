@@ -140,6 +140,7 @@ interface AppState {
   renameProjectById: (id: string, name: string, factoryName: string) => Promise<void>;
   deleteProjectById: (id: string) => Promise<void>;
   importProjectJson: (rawText: string) => Promise<boolean>;
+  dismissImportNotes: () => void;
   exportProjectCad: (format: CadExportFormat) => boolean;
 
   // Mutators with undo history
@@ -658,12 +659,29 @@ export const useAppStore = create<AppState>((set, get) => ({
         simEngine: engine,
         simSnapshot: engine.getSnapshot(),
       }));
-      get().setToast(`Imported project "${migrated.name}"`, 'success');
+      const hasNotes = (migrated.importNotes?.length ?? 0) > 0;
+      get().setToast(
+        hasNotes
+          ? get().language === 'ar'
+            ? `اتفتح المشروع "${migrated.name}" بافتراضات: راجع الملاحظة في التحليلات قبل ما تعتمد على النتائج`
+            : `Imported project "${migrated.name}" with assumptions: see the note in Analytics before relying on results`
+          : `Imported project "${migrated.name}"`,
+        hasNotes ? 'info' : 'success'
+      );
       return true;
     } catch (err) {
       get().setToast(err instanceof Error ? err.message : 'Invalid project JSON file', 'error');
       return false;
     }
+  },
+
+  dismissImportNotes: () => {
+    const next = { ...get().project };
+    delete next.importNotes;
+    set({ project: next });
+    saveProjectToDb(next).catch(() => {
+      /* keep the in-memory change */
+    });
   },
 
   exportProjectCad: (format) => {
