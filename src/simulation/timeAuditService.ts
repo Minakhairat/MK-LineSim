@@ -477,7 +477,7 @@ export function singleAutoProductRouteScope(project: ProjectData): Set<string> |
  * bottleneck cycle (project audited with that product alone). Ideal work = sum(ideal_i * units_i); Performance =
  * ideal work / operating time; Quality = ideal work of good units / ideal work of all units. Returns null (no
  * correction, caller keeps the count-based figures) outside the supported scope: fewer than two products, any manual
- * routing, partial or repeated routes, or counts that do not add up to the engine totals.
+ * routing, repeated visits, unknown stage ids, or counts that do not add up to the engine totals.
  * Sources (practitioner, not a standard): https://oeelab.com/oee-mixed-products
  */
 export function mixedProductTimeWeightedOee(
@@ -492,8 +492,10 @@ export function mixedProductTimeWeightedOee(
     if (p.routingMode === 'manual') return null;
     const r = p.routeStageIds;
     if (Array.isArray(r) && r.length > 0) {
+      // Repeated visits stay out of scope. A partial route is in scope: that product's ideal cycle is the bottleneck of
+      // its own route stages (the single-product audit below already scopes to the route). An unknown stage id is not.
       if (new Set(r).size !== r.length) return null;
-      if (r.length !== allIds.length || !allIds.every((id) => r.includes(id))) return null;
+      if (!r.every((id) => allIds.includes(id))) return null;
     }
   }
   let counted = 0;
