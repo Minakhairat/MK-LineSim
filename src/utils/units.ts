@@ -155,3 +155,25 @@ export function uniformBufferReplacesStages(stages: StageLike[], bufferCapacity:
 export function formatBeltSpeed(v: number): string {
   return Number(v.toFixed(4)) === Number(v.toFixed(2)) ? v.toFixed(2) : String(Number(v.toFixed(4)));
 }
+
+/** True when the engine executed more events than the log holds (the log keeps only the first entries). */
+export function isEventLogTruncated(loggedCount: number, executedCount: number | undefined | null): boolean {
+  return typeof executedCount === 'number' && Number.isFinite(executedCount) && executedCount > loggedCount;
+}
+
+/**
+ * Text for the OEE summary line. With no output, P and Q are undefined: show the
+ * engine's OEE value (0 because no good units) without a product of dashes.
+ */
+export function oeeSummaryText(
+  k: { oeePct?: number; availabilityPct?: number; performancePct?: number; qualityPct?: number; actualProduction?: number },
+  isAr: boolean
+): string {
+  const oee = (k.oeePct ?? 0).toFixed(1);
+  if ((k.actualProduction ?? 0) <= 0) {
+    return isAr
+      ? `${oee}% (لا إنتاج: الأداء P والجودة Q غير معرّفين)`
+      : `${oee}% (no output: Performance P and Quality Q are undefined)`;
+  }
+  return `${oee}% = A ${(k.availabilityPct ?? 0).toFixed(1)}% × P ${(k.performancePct ?? 0).toFixed(1)}% × Q ${(k.qualityPct ?? 100).toFixed(1)}%`;
+}
