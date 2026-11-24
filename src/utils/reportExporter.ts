@@ -672,7 +672,7 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
       k ? `${k.productionAttainmentPct.toFixed(1)}%` : '-',
       k && k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '-',
       k ? `${k.workerUtilizationPct.toFixed(1)}%` : '-',
-      k?.bottleneckStageName || '-',
+      stallFlag ? (isAr ? 'غير محدد (تعليق)' : 'n/a (stall)') : k?.bottleneckStageName || '-',
     ];
 
     let cx = isAr ? w - 48 : 48;
