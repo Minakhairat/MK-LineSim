@@ -16,6 +16,7 @@ import {
 import { Maximize2, Minimize2, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { formatDuration } from '../../utils/units';
+import { oeeBasisUsesSkippedStage } from '../../utils/oeeBasis';
 import { getT } from '../../i18n/translations';
 
 Chart.register(
@@ -402,6 +403,17 @@ export const AnalyticsModule: React.FC = () => {
               </div>
             </div>
           </div>
+          {!k.performanceAnomaly && oeeBasisUsesSkippedStage(project.products, k.theoreticalBottleneckStageId) && (
+            <div
+              role="note"
+              data-testid="oee-basis-warning"
+              className="mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+            >
+              {language === 'ar'
+                ? 'تنبيه: في منتج مساره بيتخطى أبطأ مرحلة في المشروع. زمن الدورة المثالي في OEE والأداء بيتاخد من أبطأ مرحلة في المشروع كله حتى لو المنتج مش بيعدّي عليها، فالقيم دي ممكن تبقى مبالغ فيها حتى لو أقل من ١٠٠٪. ما تعتمدش عليها قبل مراجعة أساس زمن الدورة المثالي.'
+                : 'Note: a product route skips the slowest stage in the project. Line OEE and Performance take their ideal cycle from the slowest stage in the whole project, even when a product does not visit it, so these values may be overstated even when they are below 100%. Do not rely on them until the ideal-cycle basis is checked.'}
+            </div>
+          )}
           {k.performanceAnomaly && (
             <div
               role="alert"
