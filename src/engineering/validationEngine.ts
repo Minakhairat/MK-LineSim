@@ -234,7 +234,7 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
       simulationConfig.enableBreakdowns &&
       (obj.kind === 'machine' || obj.kind === 'workstation') &&
       Number.isFinite(avail) &&
-      avail > 0 &&
+      avail >= 0 &&
       avail < 0.9999 &&
       obj.operations.mtbfSec !== undefined &&
       obj.operations.mtbfSec > 0 &&

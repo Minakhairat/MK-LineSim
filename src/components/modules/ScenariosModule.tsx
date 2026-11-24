@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Copy, Maximize2, Minimize2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { applyScenarioOverrides, runSimulationInWorker } from '../../simulation/workerClient';
+import { validateProject } from '../../simulation/validator';
 import { ScenarioRecord } from '../../types/project';
 import { formatDuration, uid } from '../../utils/units';
 import { getT } from '../../i18n/translations';
@@ -87,8 +88,28 @@ export const ScenariosModule: React.FC = () => {
     setRunningId(scen.id);
     try {
       const modifiedProject = applyScenarioOverrides(project, scen.overrides);
+      const scenarioErrors = validateProject(modifiedProject).filter((i) => i.severity === 'error');
+      if (scenarioErrors.length > 0) {
+        const first = scenarioErrors[0];
+        setToast(
+          isAr
+            ? `خطأ في التحقق: ${first.messageAr || first.message}`
+            : `Validation error: ${first.message}`,
+          'error'
+        );
+        return;
+      }
       const res = await runSimulationInWorker(modifiedProject);
       updateScenarioResult(scen.id, res);
+      if (res.stallWarnings && res.stallWarnings.length > 0) {
+        setToast(
+          isAr
+            ? `تحذير: السيناريو "${scen.name}" انتهى بتعليق في النموذج (دفعات أو انسداد). راجع افتراضات المخزن وحجم الدفعة وخليط المنتجات.`
+            : `Warning: scenario "${scen.name}" ended with a stall in the modeled flow (batch or blocking). Review the buffer, batch size and product mix assumptions.`,
+          'error'
+        );
+        return;
+      }
       setToast(
         isAr
           ? `تم تشغيل "${scen.name}": ${res.kpis.goodUnits} وحدة سليمة`
