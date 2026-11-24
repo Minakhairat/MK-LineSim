@@ -675,6 +675,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  dismissImportNotes: () => {
+    const next = { ...get().project };
+    delete next.importNotes;
+    set({ project: next });
+    saveProjectToDb(next).catch(() => {
+      /* keep the in-memory change */
+    });
+  },
+
   exportProjectCad: (format) => {
     const { project, language, setToast } = get();
     const isAr = language === 'ar';
