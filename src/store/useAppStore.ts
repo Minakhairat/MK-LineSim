@@ -1277,6 +1277,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { simEngine } = get();
     if (!simEngine) return;
     if (simEngine.status === 'completed') return;
+    {
+      const gateState = get();
+      const gateErrors = validateProject(gateState.project).filter((i) => i.severity === 'error');
+      if (gateErrors.length > 0) {
+        const gmsg =
+          gateState.language === 'ar' ? gateErrors[0].messageAr || gateErrors[0].message : gateErrors[0].message;
+        gateState.setToast(
+          gateState.language === 'ar' ? `لا يمكن تشغيل المحاكاة: ${gmsg}` : `Cannot run simulation: ${gmsg}`,
+          'error'
+        );
+        return;
+      }
+    }
     simEngine.status = 'running';
     set({ simSnapshot: { ...simEngine.getSnapshot(), status: 'running' } });
   },
@@ -1306,6 +1319,19 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   stepSimulationEvent: () => {
     let { simEngine, project } = get();
+    {
+      const gateState = get();
+      const gateErrors = validateProject(gateState.project).filter((i) => i.severity === 'error');
+      if (gateErrors.length > 0) {
+        const gmsg =
+          gateState.language === 'ar' ? gateErrors[0].messageAr || gateErrors[0].message : gateErrors[0].message;
+        gateState.setToast(
+          gateState.language === 'ar' ? `لا يمكن تشغيل المحاكاة: ${gmsg}` : `Cannot run simulation: ${gmsg}`,
+          'error'
+        );
+        return;
+      }
+    }
     if (!simEngine) {
       simEngine = new DiscreteEventSimulationEngine(project);
     }
