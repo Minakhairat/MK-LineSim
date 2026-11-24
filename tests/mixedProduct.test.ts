@@ -213,3 +213,29 @@ test('Batch starvation bound k x (b - 1) + 1: three products and unequal mix', (
     if (stalls === 1) assert.equal(r.stallWarnings?.[0]?.heldUnits, cap);
   }
 });
+
+// Capacity semantics at a batch-collecting stage (pre-existing behaviour, recorded, not changed). The engine admits units to a
+// collect_batch stage up to max(buffer capacity, batch size), so a batch can always form (desEngine nextStagingAllowance =
+// batchSize; canAdmitToStageBuffer). Single product, Packing batch 4, arrival 60 s: buffer 1, 2, 3 and 4 give identical runs
+// (412 good, no stall) and a recorded maximum queue of 3 units, which is above the nominal buffer of 1 and 2. With two products and
+// buffer 3 (below the batch size) the stall holds 4 units: the effective capacity is 4, not 3. So the buffer setting alone does not
+// bound the units held at a batch stage; the validator bound k x (b - 1) + 1 is above the batch size whenever k >= 2.
+test('Batch stage admits up to max(buffer, batch size): buffer 1 to 4 identical for one product, held 4 at buffer 3 for two', () => {
+  for (const cap of [1, 2, 3, 4]) {
+    const p: any = createDesertAirCoolerProject();
+    const pk = p.stages.find((s: any) => s.id === 'stg_7_packing'); pk.bufferCapacity = cap; pk.batchSize = 4;
+    p.simulationConfig.arrivalIntervalSec = 60;
+    const r = run(p);
+    const sa = r.stageAnalytics.find((x: any) => x.stageId === 'stg_7_packing');
+    assert.equal(r.kpis.goodUnits, 412, `cap ${cap}`);
+    assert.equal(r.stallWarnings?.length ?? 0, 0, `cap ${cap}`);
+    assert.equal(sa.maxQueueLength, 3, `cap ${cap}`);
+  }
+  const p: any = createDesertAirCoolerProject();
+  const pk = p.stages.find((s: any) => s.id === 'stg_7_packing'); pk.bufferCapacity = 3; pk.batchSize = 4;
+  const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; p.products[0].mixWeight = 1; p.products.push(B);
+  p.simulationConfig.arrivalIntervalSec = 60;
+  const r = run(p);
+  assert.equal(r.kpis.goodUnits, 0);
+  assert.equal(r.stallWarnings?.[0]?.heldUnits, 4);
+});
