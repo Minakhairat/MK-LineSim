@@ -497,7 +497,11 @@ export const AnalyticsModule: React.FC = () => {
           </div>
           <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4">
             <h3 className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 mb-3">
-              {t.analytics.charts.stageCycleWait}
+              {stalledRun
+                ? isAr
+                  ? 'زمن الدورة والانتظار لكل مرحلة (تعليق: لا يوجد اختناق مُحدد)'
+                  : 'Stage Cycle & Waiting Time (stalled run: no bottleneck marked)'
+                : t.analytics.charts.stageCycleWait}
             </h3>
             <div className="h-56">
               <canvas ref={stageCanvasRef} />
