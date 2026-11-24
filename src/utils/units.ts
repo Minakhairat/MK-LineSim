@@ -120,3 +120,38 @@ export function doOrientedBoxesOverlap(
 
   return true;
 }
+
+// ---- Stall / no-output presentation helpers ----
+import type { SimulationResult } from '../types/project';
+
+type StageLike = { id?: string; bufferCapacity: number };
+
+/** True when the post-run check flagged a stall in the modeled flow. */
+export function isStalledResult(result?: Pick<SimulationResult, 'stallWarnings'> | null): boolean {
+  return !!(result && result.stallWarnings && result.stallWarnings.length > 0);
+}
+
+/** Names of the stages where the modeled flow stops. A location only, not a capacity diagnosis. */
+export function stallLocationNames(result?: Pick<SimulationResult, 'stallWarnings' | 'stageAnalytics'> | null): string {
+  if (!result || !isStalledResult(result)) return '';
+  const ids = new Set((result.stallWarnings || []).map((w) => w.stageId));
+  return result.stageAnalytics
+    .filter((s) => ids.has(s.stageId))
+    .map((s) => s.stageName)
+    .join(', ');
+}
+
+/** A lead time of exactly 0 means no unit finished. Show a dash instead of "0s". */
+export function leadTimeText(avgLeadTimeSec: number, dash = '—'): string {
+  return avgLeadTimeSec > 0 ? formatDuration(avgLeadTimeSec) : dash;
+}
+
+/** True when one uniform buffer value would replace at least one stage's own buffer capacity. */
+export function uniformBufferReplacesStages(stages: StageLike[], bufferCapacity: number | undefined): boolean {
+  return bufferCapacity !== undefined && !stages.every((s) => s.bufferCapacity === bufferCapacity);
+}
+
+/** Belt speed with at least 2 decimals, and up to 4 when the stored value needs them. */
+export function formatBeltSpeed(v: number): string {
+  return Number(v.toFixed(4)) === Number(v.toFixed(2)) ? v.toFixed(2) : String(Number(v.toFixed(4)));
+}

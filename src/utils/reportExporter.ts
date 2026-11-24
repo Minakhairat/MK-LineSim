@@ -1,3 +1,4 @@
+import { formatBeltSpeed, leadTimeText } from './units';
 import { jsPDF } from 'jspdf';
 import { ProjectData, SimulationResult } from '../types/project';
 import { formatDuration } from './units';
@@ -439,7 +440,7 @@ export function exportKpiCanvasPdf(
     },
     {
       label: isAr ? 'متوسط زمن التسليم' : 'Avg Lead Time',
-      val: k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '—',
+      val: leadTimeText(k.avgLeadTimeSec),
       sub: isAr ? `تشغيل: ${k.avgProcessingTimeSec.toFixed(0)}ث · انتظار: ${k.avgWaitingTimeSec.toFixed(0)}ث` : `Proc: ${k.avgProcessingTimeSec.toFixed(0)}s · Wait: ${k.avgWaitingTimeSec.toFixed(0)}s`,
     },
     {
@@ -624,9 +625,6 @@ export function exportKpiCanvasPdf(
   appendCanvasPagesToPdf(pages, opts, `${sanitizeFilename(project.name)}_kpi_report.pdf`);
 }
 
-// Show the stored belt speed exactly (at least 2 decimals, up to 4) so 0.0534 is never displayed as 0.05.
-const fmtSpeed = (v: number) => (Number(v.toFixed(4)) === Number(v.toFixed(2)) ? v.toFixed(2) : String(Number(v.toFixed(4))));
-
 export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOptions): void {
   const { isAr } = opts;
   const { canvas, ctx, w, h } = createReportCanvas(opts.orientation);
@@ -675,10 +673,10 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
     const vals = [
       stallFlag ? `${sc.name} ${isAr ? '[تعليق مرصود]' : '[stall flagged]'}` : sc.name,
       `${sc.overrides.workerCount}`,
-      fmtSpeed(sc.overrides.conveyorSpeedMps),
+      formatBeltSpeed(sc.overrides.conveyorSpeedMps),
       k ? `${k.goodUnits}` : isAr ? 'لم يعمل' : 'Not Run',
       k ? `${k.productionAttainmentPct.toFixed(1)}%` : '-',
-      k && k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '-',
+      k ? leadTimeText(k.avgLeadTimeSec, '-') : '-',
       k ? `${k.workerUtilizationPct.toFixed(1)}%` : '-',
       stallFlag ? (isAr ? 'غير محدد (تعليق)' : 'n/a (stall)') : k?.bottleneckStageName || '-',
     ];

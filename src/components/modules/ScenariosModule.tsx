@@ -1,3 +1,4 @@
+import { formatBeltSpeed, leadTimeText, uniformBufferReplacesStages } from '../../utils/units';
 import React, { useState } from 'react';
 import { Copy, Maximize2, Minimize2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
@@ -255,7 +256,7 @@ export const ScenariosModule: React.FC = () => {
                 }}
                 className="rounded border border-neutral-300 dark:border-neutral-700 bg-transparent px-2.5 py-1.5 font-mono-tabular"
               />
-              {bufferTouched && !project.stages.every((s) => s.bufferCapacity === bufferCap) && (
+              {bufferTouched && uniformBufferReplacesStages(project.stages, bufferCap) && (
                 <span className="text-[10px] leading-tight text-amber-700 dark:text-amber-400">
                   {isAr
                     ? `تنبيه: هذه القيمة تُطبَّق على كل المراحل وتستبدل سعات المخزن الخاصة بكل مرحلة (${Math.min(...project.stages.map((s) => s.bufferCapacity))}–${Math.max(...project.stages.map((s) => s.bufferCapacity))}). اتركها بدون تعديل للإبقاء على القيم الأصلية.`
@@ -358,7 +359,7 @@ export const ScenariosModule: React.FC = () => {
                     <td className="px-4 py-2.5 font-sans font-medium text-neutral-900 dark:text-neutral-100">
                       {sc.name}
                       {sc.overrides.bufferCapacity !== undefined &&
-                        !project.stages.every((s) => s.bufferCapacity === sc.overrides.bufferCapacity) && (
+                        uniformBufferReplacesStages(project.stages, sc.overrides.bufferCapacity) && (
                           <span
                             className="ms-2 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800"
                             title={isAr ? 'سعة مخزن موحدة تستبدل قيم المراحل الأصلية' : 'One buffer value replaces each stage\'s own buffer capacity'}
@@ -376,12 +377,12 @@ export const ScenariosModule: React.FC = () => {
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-end">{sc.overrides.workerCount}</td>
-                    <td className="px-3 py-2.5 text-end">{Number(sc.overrides.conveyorSpeedMps.toFixed(4)) === Number(sc.overrides.conveyorSpeedMps.toFixed(2)) ? sc.overrides.conveyorSpeedMps.toFixed(2) : String(Number(sc.overrides.conveyorSpeedMps.toFixed(4)))}</td>
+                    <td className="px-3 py-2.5 text-end">{formatBeltSpeed(sc.overrides.conveyorSpeedMps)}</td>
                     <td className="px-3 py-2.5 text-end font-semibold">{k ? k.goodUnits : '—'}</td>
                     <td className="px-3 py-2.5 text-end">
                       {k ? `${k.productionAttainmentPct.toFixed(1)}%` : '—'}
                     </td>
-                    <td className="px-3 py-2.5 text-end">{k && k.avgLeadTimeSec > 0 ? formatDuration(k.avgLeadTimeSec) : '—'}</td>
+                    <td className="px-3 py-2.5 text-end">{k ? leadTimeText(k.avgLeadTimeSec) : '—'}</td>
                     <td className="px-3 py-2.5 text-end">{k ? k.avgWip.toFixed(1) : '—'}</td>
                     <td className="px-3 py-2.5 text-end">
                       {k ? `${k.workerUtilizationPct.toFixed(1)}%` : '—'}
