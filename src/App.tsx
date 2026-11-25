@@ -930,7 +930,7 @@ export default function App() {
         <footer className="pb-safe flex flex-wrap min-h-9 shrink-0 items-center justify-between gap-2 sm:gap-3 border-t-2 border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 px-2.5 sm:px-4 py-1 text-[10px] sm:text-xs">
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
             <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-red-600 shrink-0" />
-            <span className="font-semibold text-neutral-900 dark:text-white leading-snug truncate max-w-[58vw] sm:max-w-none">
+            <span className="font-semibold text-neutral-900 dark:text-white leading-snug break-words max-w-[58vw] sm:max-w-none">
               {t.copyright}
             </span>
           </div>
