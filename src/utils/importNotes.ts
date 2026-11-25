@@ -132,7 +132,14 @@ export function isGeneratedInputCode(code: string): boolean {
   return code.startsWith('autowired_');
 }
 
-export type ResultProvenance = { codes: ImportNoteCode[]; unknown: boolean };
+export type ResultProvenance = {
+  codes: ImportNoteCode[];
+  unknown: boolean;
+  /** Machines where the run used MTBF/MTTR instead of a conflicting stated availability. */
+  reliability?: ReliabilityConflictRow[];
+  /** The result carries no reliability stamp (computed before it existed): unknown, not clean. */
+  reliabilityUnknown?: boolean;
+};
 
 // Stamps a freshly computed result with the generated inputs that the project had at run time.
 export function stampGeneratedInputs<R extends { generatedInputs?: string[]; reliabilityConflicts?: ReliabilityConflictRow[] }>(
@@ -165,15 +172,37 @@ export function reliabilityConflictText(rows: ReliabilityConflictRow[], isAr: bo
 }
 
 // What a saved result says about its own inputs. No stamp means the result predates stamping: unknown, not clean.
-export function resultProvenance(result: { generatedInputs?: string[] } | undefined | null): ResultProvenance {
+export function resultProvenance(
+  result: { generatedInputs?: string[]; reliabilityConflicts?: ReliabilityConflictRow[] } | undefined | null
+): ResultProvenance {
   if (!result) return { codes: [], unknown: false };
-  if (!Array.isArray(result.generatedInputs)) return { codes: [], unknown: true };
-  return { codes: result.generatedInputs.filter(isGeneratedInputCode) as ImportNoteCode[], unknown: false };
+  const reliabilityUnknown = !Array.isArray(result.reliabilityConflicts);
+  const reliability = Array.isArray(result.reliabilityConflicts) ? result.reliabilityConflicts : [];
+  if (!Array.isArray(result.generatedInputs)) return { codes: [], unknown: true, reliability, reliabilityUnknown };
+  return {
+    codes: result.generatedInputs.filter(isGeneratedInputCode) as ImportNoteCode[],
+    unknown: false,
+    reliability,
+    reliabilityUnknown,
+  };
 }
 
 export function unionProvenance(list: ResultProvenance[]): ResultProvenance {
   const codes = Array.from(new Set(list.flatMap((p) => p.codes))) as ImportNoteCode[];
-  return { codes, unknown: list.some((p) => p.unknown) };
+  const byName = new Map<string, ReliabilityConflictRow>();
+  for (const p of list) for (const r of p.reliability ?? []) if (!byName.has(r.name)) byName.set(r.name, r);
+  return {
+    codes,
+    unknown: list.some((p) => p.unknown),
+    reliability: Array.from(byName.values()),
+    reliabilityUnknown: list.some((p) => p.reliabilityUnknown),
+  };
+}
+
+export function reliabilityUnknownText(isAr: boolean): string {
+  return isAr
+    ? 'مش مسجّل إذا كانت نتايج محفوظة استخدمت MTBF/MTTR بدل توفر مكتوب مختلف (اتحسبت قبل ما التسجيل ده يتضاف). مش معناه إنها سليمة. شغّل من جديد عشان تاخد إجابة مسجّلة.'
+    : 'It was not recorded whether these saved results used MTBF/MTTR instead of a conflicting stated availability (they were computed before this was recorded). That does not mean they are clean. Re-run to get a recorded answer.';
 }
 
 export function unknownProvenanceText(isAr: boolean): string {
