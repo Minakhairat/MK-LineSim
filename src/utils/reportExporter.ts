@@ -1,4 +1,4 @@
-import { generatedInputCodes, ResultProvenance, resultProvenance, unionProvenance, unknownProvenanceText } from './importNotes';
+import { generatedInputCodes, reliabilityConflictText, reliabilityUnknownText, ResultProvenance, resultProvenance, unionProvenance, unknownProvenanceText } from './importNotes';
 import { mostLoadedUtilText } from './bottleneckLabel';
 import { formatBeltSpeed, leadTimeText, scenarioWorkerCountUnreliable, scenarioWorkerMismatchNotice } from './units';
 import { jsPDF } from 'jspdf';
@@ -110,7 +110,8 @@ function drawReportChrome(
   const prov = provenance ?? { codes: generatedInputCodes(project), unknown: false };
   const gen = prov.codes;
   let used = 184;
-  if (gen.length > 0 || prov.unknown || workerMismatchRows) {
+  const relRows = prov.reliability ?? [];
+  if (gen.length > 0 || prov.unknown || workerMismatchRows || relRows.length > 0 || prov.reliabilityUnknown) {
     const names: Record<string, [string, string]> = {
       autowired_product: ['product (Standard Product, PRD-100)', 'منتج (Standard Product, PRD-100)'],
       autowired_stages: ['production stages', 'مراحل إنتاج'],
@@ -139,7 +140,9 @@ function drawReportChrome(
         : 'Input provenance of these saved results is unknown (computed before it was recorded). Re-run the simulation.'
       : '';
     const wkLine = workerMismatchRows ? scenarioWorkerMismatchNotice(isAr) : '';
-    const words = [genLine, unkLine, wkLine].filter(Boolean).join(' ').split(/\s+/);
+    const relLine = relRows.length > 0 ? (perRow ? (isAr ? 'الصفوف الموسومة بس: ' : 'Marked rows only: ') : '') + reliabilityConflictText(relRows, isAr) : '';
+    const relUnkLine = prov.reliabilityUnknown ? reliabilityUnknownText(isAr) : '';
+    const words = [genLine, unkLine, wkLine, relLine, relUnkLine].filter(Boolean).join(' ').split(/\s+/);
     const wrapped: string[] = [];
     let curLine = '';
     for (const wd of words) {
@@ -718,7 +721,7 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
     : ['Scenario', 'Workers', 'Belt m/s', 'Good', 'Attain %', 'Lead Time', 'Worker %', 'Bottleneck'];
 
   const rowProv = project.scenarios.map((sc) => resultProvenance(sc.result));
-  const anyTag = rowProv.some((r) => r.unknown || r.codes.length > 0) || project.scenarios.some((sc) => scenarioWorkerCountUnreliable(sc));
+  const anyTag = rowProv.some((r) => r.unknown || r.codes.length > 0 || (r.reliability?.length ?? 0) > 0 || r.reliabilityUnknown) || project.scenarios.some((sc) => scenarioWorkerCountUnreliable(sc));
   const rowH = anyTag ? 60 : 48;
   ctx.fillStyle = '#0f172a';
   ctx.fillRect(48, startY, tableW, rowH);
@@ -798,7 +801,12 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
         const wkTag = scenarioWorkerCountUnreliable(project.scenarios[idx])
           ? (isAr ? '[عدد العمال مش زي المشغَّل]' : '[workers not as run]')
           : '';
-        const tag = [provTag, wkTag].filter(Boolean).join(' ');
+        const relTag = (rp.reliability?.length ?? 0) > 0
+          ? (isAr ? '[استُخدم MTBF/MTTR]' : '[MTBF/MTTR used]')
+          : rp.reliabilityUnknown
+            ? (isAr ? '[التوفر غير مسجّل]' : '[reliability unknown]')
+            : '';
+        const tag = [provTag, wkTag, relTag].filter(Boolean).join(' ');
         const off = tag ? (lines.length === 1 ? -9 : -15) : 0;
         if (lines.length === 1) ctx.fillText(lines[0], x, ry + rowH / 2 + off, maxW);
         else lines.forEach((ln, li) => ctx.fillText(ln, x, ry + rowH / 2 + off + (li === 0 ? -9 : 9), maxW));

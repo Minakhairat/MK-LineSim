@@ -1,5 +1,5 @@
 import { formatBeltSpeed, leadTimeText, uniformBufferReplacesStages, isValidScenarioWorkerCount, scenarioWorkerCountUnreliable, scenarioWorkerMismatchNotice } from '../../utils/units';
-import { GeneratedInputsStrip } from '../ImportNotesBanner';
+import { GeneratedInputsStrip, ReliabilityConflictStrip } from '../ImportNotesBanner';
 import { resultProvenance, unionProvenance } from '../../utils/importNotes';
 import React, { useState } from 'react';
 import { Copy, Maximize2, Minimize2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
@@ -353,6 +353,10 @@ export const ScenariosModule: React.FC = () => {
           provenance={unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result)))}
           perRow
         />
+        <ReliabilityConflictStrip
+          provenance={unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result)))}
+          perRow
+        />
         {project.scenarios.some((sc) => scenarioWorkerCountUnreliable(sc)) && (
           <div
             role="note"
@@ -410,6 +414,21 @@ export const ScenariosModule: React.FC = () => {
                             : isAr ? 'مدخلات مولّدة تلقائياً' : 'Generated inputs'}
                         </span>
                       )}
+                      {(rowProv.reliability?.length ?? 0) > 0 || rowProv.reliabilityUnknown ? (
+                        <span
+                          data-testid="row-reliability"
+                          className="ms-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+                          title={
+                            (rowProv.reliability?.length ?? 0) > 0
+                              ? isAr ? 'التشغيل استخدم MTBF/MTTR بدل التوفر المكتوب لمعدة أو أكتر.' : 'The run used MTBF/MTTR instead of the stated availability for one or more machines.'
+                              : isAr ? 'مش مسجّل إذا كان التشغيل استخدم MTBF/MTTR بدل توفر مكتوب مختلف.' : 'It was not recorded whether the run used MTBF/MTTR instead of a conflicting stated availability.'
+                          }
+                        >
+                          {(rowProv.reliability?.length ?? 0) > 0
+                            ? isAr ? 'استُخدم MTBF/MTTR' : 'MTBF/MTTR used'
+                            : isAr ? 'التوفر غير مسجّل' : 'Reliability unknown'}
+                        </span>
+                      ) : null}
                       {scenarioWorkerCountUnreliable(sc) && (
                         <span
                           data-testid="row-workers-unreliable"
