@@ -435,3 +435,24 @@ test('Batch size 6 with 2 products: buffer rule holds at 10 and 11, manual routi
     near(ok.r.kpis.performancePct, ((manual ? 26190 : 26040) / 27000) * 100);
   }
 });
+
+// (k) Saturated line (arrival 30 s, Packing batch 1), A x1 and B x2, B auto vs manual. Counts are the same in both runs:
+//     A 137+10, B 140+7 (294 units). Auto weighted: ideal 60x147 + 120x147 = 26460 s -> P 98.00%, Q = (60x137 + 120x140)/26460 = 94.56%, OEE 92.67%.
+//     Manual (count-based, no weighted flag): P = 90 s x 294 / 27000 = 98.00%, Q = unit yield 277/294 = 94.22%, OEE = 98.00% x 94.22% = 92.33%.
+//     The two Quality figures differ by 0.34 point because the weighted one counts heavier units more; one fixture.
+test('Saturated line, auto vs manual routing: same counts, weighted vs count-based Quality (one fixture)', () => {
+  const make = (manual: boolean) => {
+    const p: any = createDesertAirCoolerProject();
+    for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+    const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; B.cycleTimeMultiplier = 2;
+    if (manual) B.routingMode = 'manual';
+    p.products[0].mixWeight = 1; p.products.push(B); p.simulationConfig.arrivalIntervalSec = 30;
+    return run(p);
+  };
+  const auto = make(false), manual = make(true);
+  for (const r of [auto, manual]) assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[137, 10], [140, 7]]);
+  assert.equal(auto.kpis.oeeMixedTimeWeighted, true);
+  near(auto.kpis.performancePct, (26460 / 27000) * 100); near(auto.kpis.qualityPct, ((60 * 137 + 120 * 140) / 26460) * 100); near(auto.kpis.oeePct, ((60 * 137 + 120 * 140) / 27000) * 100);
+  assert.equal(manual.kpis.oeeMixedTimeWeighted, undefined);
+  near(manual.kpis.performancePct, (90 * 294 / 27000) * 100); near(manual.kpis.qualityPct, (277 / 294) * 100); near(manual.kpis.oeePct, (90 * 294 / 27000) * (277 / 294) * 100);
+});
