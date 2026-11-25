@@ -262,7 +262,7 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
   // a missing planned-units value (0 means unlimited), shift duration or arrival interval would change results.
   if (obj.simulationConfig && typeof obj.simulationConfig === 'object') {
     const cfg = obj.simulationConfig as Record<string, unknown>;
-    const bad = ['durationSec', 'arrivalIntervalSec', 'maxPlannedUnits'].filter(
+    const bad = ['durationSec', 'arrivalIntervalSec', 'maxPlannedUnits', 'randomSeed'].filter(
       (k) => typeof cfg[k] !== 'number' || !Number.isFinite(cfg[k] as number)
     );
     if (bad.length > 0) {
