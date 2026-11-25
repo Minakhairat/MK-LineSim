@@ -1,4 +1,4 @@
-import { generatedInputCodes } from './importNotes';
+import { generatedInputCodes, ResultProvenance, resultProvenance, unionProvenance, unknownProvenanceText } from './importNotes';
 import { mostLoadedUtilText } from './bottleneckLabel';
 import { formatBeltSpeed, leadTimeText } from './units';
 import { jsPDF } from 'jspdf';
@@ -40,7 +40,8 @@ function drawReportChrome(
   title: string,
   isAr: boolean,
   pageNum = 1,
-  totalPages = 1
+  totalPages = 1,
+  provenance?: ResultProvenance
 ): number {
   ctx.save();
   // Dark slate header bar
@@ -104,9 +105,10 @@ function drawReportChrome(
   );
 
   // Generated-input provenance: shown on every export so results never look fully user-supplied.
-  const gen = generatedInputCodes(project);
+  const prov = provenance ?? { codes: generatedInputCodes(project), unknown: false };
+  const gen = prov.codes;
   let used = 184;
-  if (gen.length > 0) {
+  if (gen.length > 0 || prov.unknown) {
     const names: Record<string, [string, string]> = {
       autowired_product: ['product (Standard Product, PRD-100)', 'منتج (Standard Product, PRD-100)'],
       autowired_stages: ['production stages', 'مراحل إنتاج'],
@@ -119,14 +121,17 @@ function drawReportChrome(
     ctx.fillStyle = '#991b1b';
     ctx.font = `700 16px ${FONT_STACK}`;
     ctx.textAlign = isAr ? 'right' : 'left';
-    ctx.fillText(
-      isAr
+    const genLine = gen.length > 0
+      ? isAr
         ? `مدخلات اتعملت تلقائياً وليست من بيانات المستخدم: ${list}. النتائج مبنية عليها.`
-        : `Generated inputs, not user data: ${list}. These results are based on them.`,
-      titleX,
-      177,
-      w - 96
-    );
+        : `Generated inputs, not user data: ${list}. These results are based on them.`
+      : '';
+    const unkLine = prov.unknown
+      ? isAr
+        ? 'مصدر مدخلات النتائج المحفوظة غير معروف (قبل تسجيل المصدر). شغّل المحاكاة من جديد.'
+        : 'Input provenance of these saved results is unknown (computed before it was recorded). Re-run the simulation.'
+      : '';
+    ctx.fillText([genLine, unkLine].filter(Boolean).join(' '), titleX, 177, w - 96);
     used = 184 + 40;
   }
 
@@ -436,7 +441,7 @@ export function exportKpiCanvasPdf(
     : isAr
       ? 'تقرير مؤشرات الأداء وتحليل الاختناقات (KPI)'
       : 'Simulation KPI & Bottleneck Report';
-  let y = drawReportChrome(p1.ctx, p1.w, p1.h, project, title, isAr, 1, totalPages);
+  let y = drawReportChrome(p1.ctx, p1.w, p1.h, project, title, isAr, 1, totalPages, resultProvenance(result));
 
   const ctx = p1.ctx;
   ctx.save();
@@ -657,7 +662,7 @@ export function exportKpiCanvasPdf(
   let pageIdx = 2;
   while (offset < rows.length) {
     const pN = createReportCanvas(opts.orientation);
-    const startY = drawReportChrome(pN.ctx, pN.w, pN.h, project, title, isAr, pageIdx, totalPages);
+    const startY = drawReportChrome(pN.ctx, pN.w, pN.h, project, title, isAr, pageIdx, totalPages, resultProvenance(result));
     drawStageTableSlice(pN.ctx, pN.w, startY + 12, rows.slice(offset, offset + nextPageRowsCap));
     pages.push(pN.canvas);
     offset += nextPageRowsCap;
@@ -671,7 +676,10 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
   const { isAr } = opts;
   const { canvas, ctx, w, h } = createReportCanvas(opts.orientation);
   const title = isAr ? 'تقرير مقارنة السيناريوهات التشغيلية' : 'What-If Scenario Comparison Report';
-  const startY = drawReportChrome(ctx, w, h, project, title, isAr, 1, 1);
+  const startY = drawReportChrome(
+    ctx, w, h, project, title, isAr, 1, 1,
+    unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result)))
+  );
 
   ctx.save();
   ctx.direction = isAr ? 'rtl' : 'ltr';
