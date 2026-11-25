@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createDesertAirCoolerProject } from '../src/data/sampleProject';
 import { DiscreteEventSimulationEngine } from '../src/simulation/desEngine';
 import { migrateProjectSchema } from '../src/storage/indexedDb';
+import { autoWireProjectForSimulation } from '../src/simulation/autoWire';
+import { detectAutoWireNotes } from '../src/utils/importNotes';
 
 const run = (p: any) => (new DiscreteEventSimulationEngine(p) as any).runToCompletion();
 const clone = () => JSON.parse(JSON.stringify(createDesertAirCoolerProject()));
@@ -67,4 +69,37 @@ test('Import rejects a simulationConfig missing planned units, shift duration or
   const none = clone();
   delete none.simulationConfig;
   assert.doesNotThrow(() => migrateProjectSchema(none));
+});
+
+test('Import rejects explicit null or non-numeric product priority, mixWeight and cycleTimeMultiplier, but a missing key still defaults to 1', () => {
+  for (const key of ['priority', 'mixWeight', 'cycleTimeMultiplier']) {
+    for (const bad of [null, '', 'abc', NaN]) {
+      const p = clone();
+      p.products[0][key] = bad;
+      assert.throws(() => migrateProjectSchema(p), new RegExp(key));
+    }
+    const missing = clone();
+    delete missing.products[0][key];
+    assert.equal((migrateProjectSchema(missing) as any).products[0][key], 1);
+    const zero = clone();
+    zero.products[0][key] = 0;
+    assert.equal((migrateProjectSchema(zero) as any).products[0][key], 0); // explicit 0 stays 0 (the validator judges it)
+    const str = clone();
+    str.products[0][key] = '2';
+    assert.equal((migrateProjectSchema(str) as any).products[0][key], 2);
+  }
+});
+
+test('Auto-wire disclosure notes are detected for generated product, stages, routes and workers, and not for a complete project', () => {
+  const full = clone();
+  assert.deepEqual(detectAutoWireNotes(full, autoWireProjectForSimulation(full).updated), []);
+  const noProd = clone();
+  noProd.products = [];
+  const wired = autoWireProjectForSimulation(noProd).updated;
+  assert.deepEqual(detectAutoWireNotes(noProd, wired), ['autowired_product']);
+  assert.equal(wired.products[0].name, 'Standard Product');
+  const noStages = clone();
+  noStages.stages = [];
+  noStages.products.forEach((p: any) => { p.routeStageIds = []; });
+  assert.ok(detectAutoWireNotes(noStages, autoWireProjectForSimulation(noStages).updated).includes('autowired_stages'));
 });
