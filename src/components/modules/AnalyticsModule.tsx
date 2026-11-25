@@ -16,6 +16,7 @@ import {
 import { Maximize2, Minimize2, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { GeneratedInputsStrip, ImportNotesBanner } from '../ImportNotesBanner';
+import { generatedInputCodes, resultProvenance } from '../../utils/importNotes';
 import { formatDuration } from '../../utils/units';
 import { oeeBasisUsesSkippedStage } from '../../utils/oeeBasis';
 import { mostLoadedUtilText } from '../../utils/bottleneckLabel';
@@ -301,7 +302,11 @@ export const AnalyticsModule: React.FC = () => {
         </div>
 
         <ImportNotesBanner />
-        <GeneratedInputsStrip />
+        <GeneratedInputsStrip provenance={
+            simSnapshot.result && !simSnapshot.result.generatedInputs
+              ? { codes: generatedInputCodes(project), unknown: false } // live in-progress result of the current project
+              : resultProvenance(result)
+          } />
 
         {/* Structured KPI Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

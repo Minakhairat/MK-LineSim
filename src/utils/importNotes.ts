@@ -117,3 +117,28 @@ export function generatedInputCodes(project: Wirable): ImportNoteCode[] {
 export function isGeneratedInputCode(code: string): boolean {
   return code.startsWith('autowired_');
 }
+
+export type ResultProvenance = { codes: ImportNoteCode[]; unknown: boolean };
+
+// Stamps a freshly computed result with the generated inputs that the project had at run time.
+export function stampGeneratedInputs<R extends { generatedInputs?: string[] }>(result: R, project: Wirable): R {
+  return { ...result, generatedInputs: generatedInputCodes(project) };
+}
+
+// What a saved result says about its own inputs. No stamp means the result predates stamping: unknown, not clean.
+export function resultProvenance(result: { generatedInputs?: string[] } | undefined | null): ResultProvenance {
+  if (!result) return { codes: [], unknown: false };
+  if (!Array.isArray(result.generatedInputs)) return { codes: [], unknown: true };
+  return { codes: result.generatedInputs.filter(isGeneratedInputCode) as ImportNoteCode[], unknown: false };
+}
+
+export function unionProvenance(list: ResultProvenance[]): ResultProvenance {
+  const codes = Array.from(new Set(list.flatMap((p) => p.codes))) as ImportNoteCode[];
+  return { codes, unknown: list.some((p) => p.unknown) };
+}
+
+export function unknownProvenanceText(isAr: boolean): string {
+  return isAr
+    ? 'مصدر المدخلات لنتيجة محفوظة من قبل تسجيل المصدر غير معروف. ماتفترضش إنها اتشغلت على مدخلاتك. شغّل المحاكاة من جديد.'
+    : 'These saved results were computed before input provenance was recorded, so it is unknown whether they used generated inputs. Do not assume they used your own inputs. Re-run the simulation.';
+}
