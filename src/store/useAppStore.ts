@@ -1567,7 +1567,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateScenarioResult: (scenId, result) =>
     get().commitProjectEdit((draft) => {
       const sc = draft.scenarios.find((s) => s.id === scenId);
-      if (sc) sc.result = stampGeneratedInputs(result, draft);
+      // The scenario run uses its own breakdown switch, not the project's, so the reliability stamp must follow it.
+      if (sc) {
+        sc.result = stampGeneratedInputs(result, {
+          products: draft.products,
+          stages: draft.stages,
+          workers: draft.workers,
+          importNotes: draft.importNotes,
+          layoutObjects: draft.layoutObjects,
+          simulationConfig: { enableBreakdowns: sc.overrides.enableBreakdowns },
+        });
+      }
     }, true),
 
   deleteScenario: (scenId) =>
