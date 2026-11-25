@@ -307,7 +307,7 @@ export const AnalyticsModule: React.FC = () => {
               ? { codes: generatedInputCodes(project), unknown: false } // live in-progress result of the current project
               : resultProvenance(result)
           } />
-        <ReliabilityConflictStrip rows={simSnapshot.result && !simSnapshot.result.generatedInputs ? undefined : (result?.reliabilityConflicts ?? [])} />
+        <ReliabilityConflictStrip provenance={simSnapshot.result && !simSnapshot.result.generatedInputs ? undefined : resultProvenance(result)} />
 
         {/* Structured KPI Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
