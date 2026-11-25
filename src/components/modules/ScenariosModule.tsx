@@ -335,6 +335,7 @@ export const ScenariosModule: React.FC = () => {
 
         <GeneratedInputsStrip
           provenance={unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result)))}
+          perRow
         />
 
         {/* Comparison Table */}
@@ -357,6 +358,7 @@ export const ScenariosModule: React.FC = () => {
             <tbody>
               {project.scenarios.map((sc) => {
                 const k = sc.result?.kpis;
+                const rowProv = resultProvenance(sc.result);
                 return (
                   <tr
                     key={sc.id}
@@ -373,6 +375,16 @@ export const ScenariosModule: React.FC = () => {
                             {isAr ? `مخزن موحد ${sc.overrides.bufferCapacity}` : `Uniform buffer ${sc.overrides.bufferCapacity}`}
                           </span>
                         )}
+                      {(rowProv.unknown || rowProv.codes.length > 0) && (
+                        <span
+                          data-testid="row-provenance"
+                          className="ms-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800"
+                        >
+                          {rowProv.unknown
+                            ? isAr ? 'مصدر المدخلات غير معروف' : 'Provenance unknown'
+                            : isAr ? 'مدخلات مولّدة تلقائياً' : 'Generated inputs'}
+                        </span>
+                      )}
                       {sc.result?.stallWarnings && sc.result.stallWarnings.length > 0 && (
                         <span
                           className="ms-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"

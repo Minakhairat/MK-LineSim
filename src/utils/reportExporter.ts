@@ -41,7 +41,8 @@ function drawReportChrome(
   isAr: boolean,
   pageNum = 1,
   totalPages = 1,
-  provenance?: ResultProvenance
+  provenance?: ResultProvenance,
+  perRow?: boolean
 ): number {
   ctx.save();
   // Dark slate header bar
@@ -121,12 +122,20 @@ function drawReportChrome(
     ctx.fillStyle = '#991b1b';
     ctx.font = `700 16px ${FONT_STACK}`;
     ctx.textAlign = isAr ? 'right' : 'left';
-    const genLine = gen.length > 0
+    const genLine = gen.length > 0 && perRow
+      ? isAr
+        ? `الصفوف الموسومة فقط مبنية على مدخلات اتعملت تلقائياً: ${list}. الصفوف غير الموسومة لها نتيجة مسجّل إنها على مدخلاتك.`
+        : `Only the rows marked below used generated inputs (not user data): ${list}. Unmarked rows with results are stamped as not using them.`
+      : gen.length > 0
       ? isAr
         ? `مدخلات اتعملت تلقائياً وليست من بيانات المستخدم: ${list}. النتائج مبنية عليها.`
         : `Generated inputs, not user data: ${list}. These results are based on them.`
       : '';
-    const unkLine = prov.unknown
+    const unkLine = prov.unknown && perRow
+      ? isAr
+        ? 'الصفوف الموسومة "مصدر غير معروف" نتيجتها محفوظة قبل تسجيل المصدر. شغّلها من جديد.'
+        : 'Rows marked "provenance unknown" were saved before provenance was recorded. Re-run them.'
+      : prov.unknown
       ? isAr
         ? 'مصدر مدخلات النتائج المحفوظة غير معروف (قبل تسجيل المصدر). شغّل المحاكاة من جديد.'
         : 'Input provenance of these saved results is unknown (computed before it was recorded). Re-run the simulation.'
@@ -678,7 +687,8 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
   const title = isAr ? 'تقرير مقارنة السيناريوهات التشغيلية' : 'What-If Scenario Comparison Report';
   const startY = drawReportChrome(
     ctx, w, h, project, title, isAr, 1, 1,
-    unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result)))
+    unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result))),
+    true
   );
 
   ctx.save();
@@ -689,7 +699,9 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
     ? ['السيناريو', 'العمال', 'السير م/ث', 'سليم', 'التحقق%', 'زمن التسليم', 'استغلال%', 'الاختناق']
     : ['Scenario', 'Workers', 'Belt m/s', 'Good', 'Attain %', 'Lead Time', 'Worker %', 'Bottleneck'];
 
-  const rowH = 48;
+  const rowProv = project.scenarios.map((sc) => resultProvenance(sc.result));
+  const anyTag = rowProv.some((r) => r.unknown || r.codes.length > 0);
+  const rowH = anyTag ? 60 : 48;
   ctx.fillStyle = '#0f172a';
   ctx.fillRect(48, startY, tableW, rowH);
   ctx.fillStyle = '#ffffff';
@@ -759,8 +771,20 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
           lines.length = 1;
           lines.push(`${last}\u2026`);
         }
-        if (lines.length === 1) ctx.fillText(lines[0], x, ry + rowH / 2, maxW);
-        else lines.forEach((ln, li) => ctx.fillText(ln, x, ry + rowH / 2 + (li === 0 ? -9 : 9), maxW));
+        const rp = rowProv[idx];
+        const tag = rp.unknown
+          ? (isAr ? '[مصدر المدخلات غير معروف]' : '[provenance unknown]')
+          : rp.codes.length > 0
+            ? (isAr ? '[مدخلات مولّدة تلقائياً]' : '[generated inputs]')
+            : '';
+        const off = tag ? (lines.length === 1 ? -9 : -15) : 0;
+        if (lines.length === 1) ctx.fillText(lines[0], x, ry + rowH / 2 + off, maxW);
+        else lines.forEach((ln, li) => ctx.fillText(ln, x, ry + rowH / 2 + off + (li === 0 ? -9 : 9), maxW));
+        if (tag) {
+          ctx.fillStyle = '#b91c1c';
+          ctx.font = `700 11px ${FONT_STACK}`;
+          ctx.fillText(tag, x, ry + rowH - 9, maxW);
+        }
       } else {
         ctx.fillText(v, x, ry + rowH / 2, colW - 10);
       }
