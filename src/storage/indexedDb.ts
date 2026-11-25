@@ -318,6 +318,17 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
     products: Array.isArray(obj.products)
       ? obj.products.map((p) => {
           const rec = p as Record<string, unknown>;
+          // A missing key keeps the legacy default (1). An explicit null, blank or non-numeric value is rejected, not coerced to 0.
+          for (const key of ['priority', 'mixWeight', 'cycleTimeMultiplier']) {
+            const v = rec[key];
+            if (v === undefined) continue;
+            const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+            if (!Number.isFinite(n)) {
+              throw new Error(
+                `Invalid project JSON: product "${String(rec.name ?? rec.id ?? '?')}" has a non-numeric value for ${key}. Fix the value or remove the field, then import again.`
+              );
+            }
+          }
           return {
             ...rec,
             priority: rec.priority !== undefined ? Number(rec.priority) : 1,
