@@ -165,7 +165,14 @@ export function reliabilityConflictRows(objects: LayoutObject[], enableBreakdown
 }
 
 export function reliabilityConflictText(rows: ReliabilityConflictRow[], isAr: boolean): string {
-  const list = rows.map((r) => `${r.name} (${r.availabilityPct.toFixed(1)}% → ${r.derivedPct.toFixed(1)}%)`).join(isAr ? '، ' : ', ');
+  // Words, not an arrow: an arrow inside right-to-left text points the wrong way on screen.
+  const list = rows
+    .map((r) =>
+      isAr
+        ? `${r.name} (مكتوب ${r.availabilityPct.toFixed(1)}%، مستخدم ${r.derivedPct.toFixed(1)}%)`
+        : `${r.name} (stated ${r.availabilityPct.toFixed(1)}%, used ${r.derivedPct.toFixed(1)}%)`
+    )
+    .join(isAr ? '، ' : ', ');
   return isAr
     ? `في المعدات دي نسبة التوفر المكتوبة بتختلف عن MTBF/(MTBF+MTTR)، والمحاكاة استخدمت القيمة المحسوبة من MTBF وMTTR مش النسبة المكتوبة: ${list}. وحّد القيمتين ثم شغّل من جديد.`
     : `For these machines the stated availability differs from MTBF/(MTBF+MTTR), and the run used the value derived from MTBF and MTTR, not the stated availability: ${list}. Make the two consistent and run again.`;
