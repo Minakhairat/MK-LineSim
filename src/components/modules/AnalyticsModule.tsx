@@ -15,7 +15,7 @@ import {
 } from 'chart.js';
 import { Maximize2, Minimize2, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import { ImportNotesBanner } from '../ImportNotesBanner';
+import { GeneratedInputsStrip, ImportNotesBanner } from '../ImportNotesBanner';
 import { formatDuration } from '../../utils/units';
 import { oeeBasisUsesSkippedStage } from '../../utils/oeeBasis';
 import { mostLoadedUtilText } from '../../utils/bottleneckLabel';
@@ -231,6 +231,7 @@ export const AnalyticsModule: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center">
         <ImportNotesBanner />
+        <GeneratedInputsStrip />
         <h3 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
           {t.analytics.noResultsTitle}
         </h3>
@@ -300,6 +301,7 @@ export const AnalyticsModule: React.FC = () => {
         </div>
 
         <ImportNotesBanner />
+        <GeneratedInputsStrip />
 
         {/* Structured KPI Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
