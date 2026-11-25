@@ -417,3 +417,24 @@ test('reliability precedence is stamped on a result only for machines whose avai
   assert.deepEqual((stampGeneratedInputs({}, p) as any).reliabilityConflicts.filter((r: any) => r.name === m.name), []);
   assert.equal((stampGeneratedInputs({}, { products: [], stages: [], workers: [] }) as any).reliabilityConflicts, undefined);
 });
+
+import { resultProvenance, unionProvenance } from '../src/utils/importNotes';
+
+test('result provenance: missing reliability stamp is unknown, an empty stamp is clean, rows come from the result not current inputs', () => {
+  const rows = [{ name: 'OP-10', availabilityPct: 0, derivedPct: 85.7 }];
+  const old: any = { generatedInputs: [] };
+  assert.equal(resultProvenance(old).reliabilityUnknown, true);
+  const clean: any = { generatedInputs: [], reliabilityConflicts: [] };
+  assert.equal(resultProvenance(clean).reliabilityUnknown, false);
+  assert.deepEqual(resultProvenance(clean).reliability, []);
+  const hit: any = { generatedInputs: [], reliabilityConflicts: rows };
+  assert.deepEqual(resultProvenance(hit).reliability, rows);
+  const u = unionProvenance([resultProvenance(hit), resultProvenance(old), resultProvenance(clean)]);
+  assert.equal(u.reliabilityUnknown, true);
+  assert.equal(u.reliability?.length, 1);
+  assert.equal(resultProvenance(undefined).reliabilityUnknown, undefined);
+  // no stamp at all (neither generatedInputs nor reliability): both unknown
+  const none = resultProvenance({} as any);
+  assert.equal(none.unknown, true);
+  assert.equal(none.reliabilityUnknown, true);
+});
