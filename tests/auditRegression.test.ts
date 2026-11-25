@@ -388,3 +388,32 @@ test('Scenario worker count: only whole numbers of 1 or more are valid, and old 
   assert.equal(scenarioWorkerCountUnreliable({ overrides: { workerCount: 0 } }), false); // no result yet, nothing to rely on
   assert.equal(scenarioWorkerCountUnreliable({ isBaseline: true, overrides: { workerCount: 0 }, result: res }), false);
 });
+
+import { reliabilityConflictRows, stampGeneratedInputs } from '../src/utils/importNotes';
+
+test('reliability precedence is stamped on a result only for machines whose availability conflicts with MTBF/MTTR', () => {
+  const p: any = createDesertAirCoolerProject();
+  const machines = p.layoutObjects.filter((o: any) => o.kind === 'machine' || o.kind === 'workstation');
+  const m = machines[0];
+  m.operations.availability = 0;
+  m.operations.mtbfSec = 3600;
+  m.operations.mttrSec = 600;
+  p.simulationConfig.enableBreakdowns = true;
+  const rows = reliabilityConflictRows(p.layoutObjects, true);
+  const mine = rows.filter((r) => r.name === m.name);
+  assert.equal(mine.length, 1);
+  assert.equal(mine[0].availabilityPct, 0);
+  assert.ok(Math.abs(mine[0].derivedPct - 85.714) < 0.01);
+  // breakdowns off: the run does not use MTBF/MTTR, so nothing is claimed
+  assert.equal(reliabilityConflictRows(p.layoutObjects, false).length, 0);
+  // a consistent machine is not listed
+  m.operations.availability = 3600 / 4200;
+  assert.equal(reliabilityConflictRows(p.layoutObjects, true).filter((r) => r.name === m.name).length, 0);
+  // stamping: a project with the conflict carries it, a project without it carries an empty list, wiring-only input carries nothing
+  m.operations.availability = 0;
+  const stamped: any = stampGeneratedInputs({}, p);
+  assert.ok(stamped.reliabilityConflicts.some((r: any) => r.name === m.name));
+  m.operations.availability = 3600 / 4200;
+  assert.deepEqual((stampGeneratedInputs({}, p) as any).reliabilityConflicts.filter((r: any) => r.name === m.name), []);
+  assert.equal((stampGeneratedInputs({}, { products: [], stages: [], workers: [] }) as any).reliabilityConflicts, undefined);
+});
