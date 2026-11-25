@@ -60,22 +60,49 @@ export function addLimitsCaptionToPng(img: CanvasImageSource & { width: number; 
   return c.toDataURL('image/png');
 }
 
-/** PNG downloads carry the statement. If the image cannot be decoded, the original is saved unchanged (unstamped). */
+export const PNG_STAMP_FAILED_EN =
+  'PNG was NOT saved: the experimental-version statement could not be added to the image. Please try again.';
+export const PNG_STAMP_FAILED_AR =
+  'لم يتم حفظ صورة PNG: تعذرت إضافة بيان النسخة التجريبية إلى الصورة. حاول مرة أخرى.';
+
+export interface PngStampDeps {
+  loadImage: (dataUrl: string) => Promise<CanvasImageSource & { width: number; height: number }>;
+  stamp: (img: CanvasImageSource & { width: number; height: number }) => string;
+  save: (dataUrl: string, filename: string) => void;
+  fail: (message: string) => void;
+}
+
+/** A PNG is saved only with the statement on it. If stamping fails, nothing is saved and the user is told. */
+export async function downloadStampedPng(dataUrl: string, filename: string, deps: PngStampDeps): Promise<boolean> {
+  try {
+    const img = await deps.loadImage(dataUrl);
+    deps.save(deps.stamp(img), filename);
+    return true;
+  } catch {
+    deps.fail(PNG_STAMP_FAILED_EN + '\n' + PNG_STAMP_FAILED_AR);
+    return false;
+  }
+}
+
+const browserPngDeps: PngStampDeps = {
+  loadImage: (dataUrl) =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('decode'));
+      img.src = dataUrl;
+    }),
+  stamp: addLimitsCaptionToPng,
+  save: saveDataUrl,
+  fail: (m) => window.alert(m),
+};
+
 export function downloadDataUrl(dataUrl: string, filename: string): void {
   if (!/^data:image\/png/i.test(dataUrl)) {
     saveDataUrl(dataUrl, filename);
     return;
   }
-  const img = new Image();
-  img.onload = () => {
-    try {
-      saveDataUrl(addLimitsCaptionToPng(img), filename);
-    } catch {
-      saveDataUrl(dataUrl, filename);
-    }
-  };
-  img.onerror = () => saveDataUrl(dataUrl, filename);
-  img.src = dataUrl;
+  void downloadStampedPng(dataUrl, filename, browserPngDeps);
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
