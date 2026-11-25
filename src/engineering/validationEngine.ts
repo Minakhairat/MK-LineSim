@@ -3,6 +3,36 @@ import { validateSimulationCalendars } from '../simulation/resourceCalendar';
 import { evaluateConveyorPhysics } from './conveyorPhysics';
 
 /**
+ * Availability that disagrees with MTBF/(MTBF+MTTR). When both MTBF and MTTR are above 0 the failure model
+ * takes them as given and the stated availability is not used, so the run follows the derived value.
+ * Returns null when there is no such disagreement (or breakdowns are off).
+ */
+export function reliabilityConflict(
+  obj: LayoutObject,
+  enableBreakdowns: boolean
+): { availability: number; inherentAvailability: number } | null {
+  const avail = obj.operations.availability;
+  const mtbf = obj.operations.mtbfSec;
+  const mttr = obj.operations.mttrSec;
+  if (
+    !enableBreakdowns ||
+    (obj.kind !== 'machine' && obj.kind !== 'workstation') ||
+    avail === undefined ||
+    !Number.isFinite(avail) ||
+    avail < 0 ||
+    avail >= 0.9999 ||
+    mtbf === undefined ||
+    !(mtbf > 0) ||
+    mttr === undefined ||
+    !(mttr > 0)
+  ) {
+    return null;
+  }
+  const inherentAvailability = mtbf / (mtbf + mttr);
+  return Math.abs(avail - inherentAvailability) > 0.02 ? { availability: avail, inherentAvailability } : null;
+}
+
+/**
  * Shared Engineering Validation Engine.
  * Validates calendars (overlapping shifts/breaks, bounds, planned maintenance),
  * physical conveyor-to-product fit (length & width), and failure/capacity configs.
@@ -230,21 +260,10 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
         targetType: 'object',
       });
     }
-    if (
-      simulationConfig.enableBreakdowns &&
-      (obj.kind === 'machine' || obj.kind === 'workstation') &&
-      Number.isFinite(avail) &&
-      avail >= 0 &&
-      avail < 0.9999 &&
-      obj.operations.mtbfSec !== undefined &&
-      obj.operations.mtbfSec > 0 &&
-      obj.operations.mttrSec !== undefined &&
-      obj.operations.mttrSec > 0
-    ) {
-      const inherentAvail =
-        obj.operations.mtbfSec / (obj.operations.mtbfSec + obj.operations.mttrSec);
-      if (Math.abs(avail - inherentAvail) > 0.02) {
-        issues.push({
+    const relConflict = reliabilityConflict(obj, simulationConfig.enableBreakdowns);
+    if (relConflict) {
+      const { availability: avail, inherentAvailability: inherentAvail } = relConflict;
+      issues.push({
           id: `val_rel_conflict_${obj.id}`,
           severity: 'warning',
           code: 'CONFLICTING_RELIABILITY_PARAMS',
@@ -256,7 +275,6 @@ export function runEngineeringValidations(project: ProjectData): ValidationIssue
           targetId: obj.id,
           targetType: 'object',
         });
-      }
     }
     if (obj.operations.repairModel === 'lognormal') {
       const meanMttr = obj.operations.mttrSec ?? 0;
