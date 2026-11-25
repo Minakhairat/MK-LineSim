@@ -1,5 +1,11 @@
 import { useAppStore } from '../store/useAppStore';
-import { generatedInputCodes, importNoteText, isGeneratedInputCode } from '../utils/importNotes';
+import {
+  ResultProvenance,
+  generatedInputCodes,
+  importNoteText,
+  isGeneratedInputCode,
+  unknownProvenanceText,
+} from '../utils/importNotes';
 
 export function ImportNotesBanner() {
   const allNotes = useAppStore((s) => s.project.importNotes);
@@ -34,11 +40,14 @@ export function ImportNotesBanner() {
 }
 
 // Not dismissable: a run that used generated inputs must always say so next to its results.
-export function GeneratedInputsStrip() {
+// With `provenance` the notice comes from the result's own stamp, so it outlives deleting the generated items.
+// Without it (no result yet) it follows the project's current flags.
+export function GeneratedInputsStrip({ provenance }: { provenance?: ResultProvenance }) {
   const project = useAppStore((s) => s.project);
   const language = useAppStore((s) => s.language);
-  const codes = generatedInputCodes(project);
-  if (codes.length === 0) return null;
+  const codes = provenance ? provenance.codes : generatedInputCodes(project);
+  const unknown = provenance?.unknown ?? false;
+  if (codes.length === 0 && !unknown) return null;
   const isAr = language === 'ar';
   return (
     <div
@@ -46,21 +55,26 @@ export function GeneratedInputsStrip() {
       data-testid="generated-inputs"
       className="w-full max-w-3xl text-start rounded border border-red-300 bg-red-50 px-3 py-2 text-[11px] leading-relaxed text-red-900"
     >
-      <div className="font-semibold">
-        {isAr
-          ? 'النتائج دي مبنية على مدخلات اتعملت تلقائياً مش من بياناتك'
-          : 'These results use inputs that were generated automatically, not entered by you'}
-      </div>
-      <ul className="list-disc ps-4 mt-1">
-        {codes.map((c) => (
-          <li key={c}>{importNoteText(c, isAr)}</li>
-        ))}
-      </ul>
-      <div className="mt-1">
-        {isAr
-          ? 'الملاحظة دي بتفضل لحد ما العناصر المولّدة تتحذف أو تتبدل.'
-          : 'This notice stays until the generated items are deleted or replaced.'}
-      </div>
+      {codes.length > 0 && (
+        <>
+          <div className="font-semibold">
+            {isAr
+              ? 'النتائج دي مبنية على مدخلات اتعملت تلقائياً مش من بياناتك'
+              : 'These results use inputs that were generated automatically, not entered by you'}
+          </div>
+          <ul className="list-disc ps-4 mt-1">
+            {codes.map((c) => (
+              <li key={c}>{importNoteText(c, isAr)}</li>
+            ))}
+          </ul>
+          <div className="mt-1">
+            {isAr
+              ? 'الملاحظة دي مربوطة بالنتيجة نفسها، وبتفضل حتى لو المدخلات المولّدة اتحذفت. شغّل من جديد على مدخلاتك الحقيقية عشان نتيجة جديدة.'
+              : 'This notice belongs to the result itself and stays even if the generated items are deleted. Re-run on your real inputs for a new result.'}
+          </div>
+        </>
+      )}
+      {unknown && <div className="font-semibold mt-1">{unknownProvenanceText(isAr)}</div>}
     </div>
   );
 }
