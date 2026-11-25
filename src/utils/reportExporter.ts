@@ -1,3 +1,4 @@
+import { generatedInputCodes } from './importNotes';
 import { mostLoadedUtilText } from './bottleneckLabel';
 import { formatBeltSpeed, leadTimeText } from './units';
 import { jsPDF } from 'jspdf';
@@ -102,8 +103,35 @@ function drawReportChrome(
     h - 26
   );
 
+  // Generated-input provenance: shown on every export so results never look fully user-supplied.
+  const gen = generatedInputCodes(project);
+  let used = 184;
+  if (gen.length > 0) {
+    const names: Record<string, [string, string]> = {
+      autowired_product: ['product (Standard Product, PRD-100)', 'منتج (Standard Product, PRD-100)'],
+      autowired_stages: ['production stages', 'مراحل إنتاج'],
+      autowired_routes: ['product routes', 'مسارات المنتجات'],
+      autowired_workers: ['workers', 'عمال'],
+    };
+    const list = gen.map((c) => (names[c] ? names[c][isAr ? 1 : 0] : c)).join(', ');
+    ctx.fillStyle = '#fef2f2';
+    ctx.fillRect(0, 157, w, 40);
+    ctx.fillStyle = '#991b1b';
+    ctx.font = `700 16px ${FONT_STACK}`;
+    ctx.textAlign = isAr ? 'right' : 'left';
+    ctx.fillText(
+      isAr
+        ? `مدخلات اتعملت تلقائياً وليست من بيانات المستخدم: ${list}. النتائج مبنية عليها.`
+        : `Generated inputs, not user data: ${list}. These results are based on them.`,
+      titleX,
+      177,
+      w - 96
+    );
+    used = 184 + 40;
+  }
+
   ctx.restore();
-  return 184;
+  return used;
 }
 
 function appendCanvasPagesToPdf(
