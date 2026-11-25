@@ -393,7 +393,8 @@ test('Manual routing with a batch stage: same counts, count-based figure and no 
 //     A 60+1, B 59+0 (about 120 units in total, against 223 with equal calendars; why A's line also loses output was not traced).
 //     Ideal cycles A 60 s, B 40 s: ideal work 60x61 + 40x59 = 6020 s, good 60x60 + 40x59 = 5960 s. Line times 27000 + 14400 = 41400 s.
 //     P = 6020/41400 = 14.54%, Q = 99.00%, OEE = 5960/41400 = 14.40%. Before this change the figure used one operating time of 14400 s for both lines
-//     (P 20.90%, OEE 20.69%). One fixture; the divisor uses the mean scheduled time of each line's stages and the plant availability scale.
+//     (P 20.90%, OEE 20.69%). The project validator reports OVERLAPPING_SHIFTS as an error for this fixture, so the app refuses to run it: this is an
+//     engine-level check only, not a case a user can run in the app. One fixture; the divisor uses the mean scheduled time of each line's stages and the plant availability scale.
 test('Independent lines on different calendars: each line scheduled time is the divisor (one fixture)', () => {
   const p: any = createDesertAirCoolerProject();
   for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
