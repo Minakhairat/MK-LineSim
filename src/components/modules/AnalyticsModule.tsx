@@ -373,7 +373,7 @@ export const AnalyticsModule: React.FC = () => {
               className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3.5"
             >
               <div className="text-[11px] font-medium text-neutral-500">{item.label}</div>
-              <div className="mt-1 text-lg font-semibold font-mono-tabular text-neutral-900 dark:text-neutral-100 truncate">
+              <div className="mt-1 text-lg font-semibold font-mono-tabular text-neutral-900 dark:text-neutral-100 break-words leading-tight">
                 {item.val}
               </div>
               <div className="mt-1 text-[11px] font-mono-tabular text-neutral-500 break-words">{item.sub}</div>
