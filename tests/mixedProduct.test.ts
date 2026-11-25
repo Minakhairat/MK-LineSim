@@ -456,3 +456,27 @@ test('Saturated line, auto vs manual routing: same counts, weighted vs count-bas
   assert.equal(manual.kpis.oeeMixedTimeWeighted, undefined);
   near(manual.kpis.performancePct, (90 * 294 / 27000) * 100); near(manual.kpis.qualityPct, (277 / 294) * 100); near(manual.kpis.oeePct, (90 * 294 / 27000) * (277 / 294) * 100);
 });
+
+// (l) App-runnable manual routing with 3 products and a batch stage (the fixture passes validateProject, so it also runs in the app).
+//     Default project, Packing collect_batch size 6, buffer 16 (k(b-1)+1 for 3 products), arrival 120 s, A auto x1, B x2, C x1.5; B and C manual with entry stage
+//     stg_1_base in the manual run. Recorded in both runs: 198 good + 8 scrap, 33 batches, no stall.
+//     Manual run (count-based, no weighted flag): mix-average ideal 90 s x 206 units = 18540 s of 27000 s -> P 68.67%, Q 198/206 = 96.12%, A 100%, OEE 66.0%.
+//     Auto run (weighted, flagged): P 68.89%, Q 95.81%, OEE 66.0%. The two bases differ by 0.2 point in P and 0.3 point in Q here. One fixture, not a validated definition.
+test('Manual routing, 3 products, batch 6 with a valid entry stage: validator passes, count basis, no weighted flag (one fixture)', () => {
+  const make = (manual: boolean) => {
+    const p: any = createDesertAirCoolerProject();
+    for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 6; s.batchMode = 'collect_batch'; s.bufferCapacity = 16; }
+    const mk = (id: string, m: number) => { const B = structuredClone(p.products[0]); B.id = id; B.name = id; B.code = id; B.mixWeight = 1; B.cycleTimeMultiplier = m;
+      if (manual) { B.routingMode = 'manual'; B.entryStageIds = ['stg_1_base']; } return B; };
+    p.products[0].mixWeight = 1; p.products.push(mk('B', 2), mk('C', 1.5)); p.simulationConfig.arrivalIntervalSec = 120;
+    return p;
+  };
+  const pa = make(false), pm = make(true);
+  assert.equal(validateProject(pm).filter((i: any) => i.severity === 'error').length, 0);
+  const auto = run(pa), manual = run(pm);
+  for (const r of [auto, manual]) { assert.equal(r.kpis.goodUnits, 198); assert.equal(r.kpis.defectiveUnits, 8); assert.equal((r.stallWarnings || []).length, 0); }
+  assert.equal(auto.kpis.oeeMixedTimeWeighted, true);
+  assert.equal(manual.kpis.oeeMixedTimeWeighted, undefined);
+  near(manual.kpis.performancePct, (18540 / 27000) * 100); near(manual.kpis.qualityPct, (198 / 206) * 100);
+  near(auto.kpis.performancePct, 68.8889, 0.01); near(auto.kpis.qualityPct, 95.8065, 0.01);
+});
