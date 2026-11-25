@@ -103,8 +103,8 @@ export function GeneratedInputsStrip({ provenance, perRow }: { provenance?: Resu
         <div className="font-semibold mt-1">
           {perRow
             ? isAr
-              ? 'الصفوف الموسومة "مصدر غير معروف" نتيجتها محفوظة قبل تسجيل المصدر. ماتفترضش إنها على مدخلاتك. شغّلها من جديد.'
-              : 'Rows marked "provenance unknown" were saved before provenance was recorded. Do not assume they used your own inputs. Re-run them.'
+              ? 'الصفوف الموسومة "مصدر غير معروف" نتيجتها محفوظة قبل تسجيل المصدر. ماتفترضش إنها على مدخلاتك. صحّح الأول أي عدد عمال موسوم، وبعدين شغّلها من جديد.'
+              : 'Rows marked "provenance unknown" were saved before provenance was recorded. Do not assume they used your own inputs. After correcting any flagged worker counts, re-run them.'
             : unknownProvenanceText(isAr)}
         </div>
       )}
