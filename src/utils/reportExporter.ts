@@ -42,7 +42,8 @@ function drawReportChrome(
   pageNum = 1,
   totalPages = 1,
   provenance?: ResultProvenance,
-  perRow?: boolean
+  perRow?: boolean,
+  workerMismatchRows?: boolean
 ): number {
   ctx.save();
   // Dark slate header bar
@@ -109,7 +110,7 @@ function drawReportChrome(
   const prov = provenance ?? { codes: generatedInputCodes(project), unknown: false };
   const gen = prov.codes;
   let used = 184;
-  if (gen.length > 0 || prov.unknown) {
+  if (gen.length > 0 || prov.unknown || workerMismatchRows) {
     const names: Record<string, [string, string]> = {
       autowired_product: ['product (Standard Product, PRD-100)', 'منتج (Standard Product, PRD-100)'],
       autowired_stages: ['production stages', 'مراحل إنتاج'],
@@ -137,7 +138,12 @@ function drawReportChrome(
         ? 'مصدر مدخلات النتائج المحفوظة غير معروف (قبل تسجيل المصدر). شغّل المحاكاة من جديد.'
         : 'Input provenance of these saved results is unknown (computed before it was recorded). Re-run the simulation.'
       : '';
-    const words = [genLine, unkLine].filter(Boolean).join(' ').split(/\s+/);
+    const wkLine = workerMismatchRows
+      ? isAr
+        ? 'الصفوف الموسومة "عدد العمال مش زي المشغَّل" محفوظ فيها عدد عمال مش رقم صحيح ١ أو أكتر، والمحرك شغّل بعدد تاني غير الظاهر في عمود العمال. ما تعتمدش عليها وشغّلها من جديد.'
+        : 'Rows marked "workers not as run" have a saved worker count that is not a whole number of 1 or more, so the engine ran a different count than the Workers column shows. Do not rely on them; re-run.'
+      : '';
+    const words = [genLine, unkLine, wkLine].filter(Boolean).join(' ').split(/\s+/);
     const wrapped: string[] = [];
     let curLine = '';
     for (const wd of words) {
@@ -703,7 +709,8 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
   const startY = drawReportChrome(
     ctx, w, h, project, title, isAr, 1, 1,
     unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result))),
-    true
+    true,
+    project.scenarios.some((sc) => scenarioWorkerCountUnreliable(sc))
   );
 
   ctx.save();
