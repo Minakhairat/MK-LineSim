@@ -726,6 +726,8 @@ export interface SimulationKPIs {
 }
 
 export interface SimulationResult {
+  /** Generated-input codes that were in the project when this result was computed. Absent on results from before stamping: provenance unknown, never assumed clean. */
+  generatedInputs?: string[];
   completedAtWallTime: string;
   simTimeSec: number;
   kpis: SimulationKPIs;
