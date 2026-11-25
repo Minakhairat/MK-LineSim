@@ -80,3 +80,22 @@ test('Performance definition states total units and net operating time', () => {
   assert.ok(performanceDefinitionText(false, false).includes('net operating time'));
   assert.ok(performanceDefinitionText(true, true).includes('إجمالي الوحدات'));
 });
+
+import { performanceDefinitionMeta, performanceBasisFor } from '../src/utils/importNotes';
+test('JSON performance definitions: single, manual planned mix, auto time-weighted, no production, no results', () => {
+  const k = (o: any) => ({ kpis: { actualProduction: 100, ...o } });
+  assert.equal(performanceBasisFor(k({}) as any, 1), 'single_product');
+  assert.equal(performanceBasisFor(k({}) as any, 2), 'multi_product_planned_mix');
+  assert.equal(performanceBasisFor(k({ oeeMixedTimeWeighted: true }) as any, 2), 'multi_product_time_weighted');
+  assert.equal(performanceBasisFor({ kpis: { actualProduction: 0 } } as any, 2), 'no_production');
+  const auto = performanceDefinitionMeta({ products: [{}, {}], lastSimulationResult: k({ oeeMixedTimeWeighted: true }) as any });
+  assert.equal(auto.length, 1);
+  assert.ok(!auto[0].definition!.includes('planned product mix'));
+  assert.ok(auto[0].definition!.includes('time-weighted'));
+  const man = performanceDefinitionMeta({ products: [{}, {}], lastSimulationResult: k({}) as any });
+  assert.ok(man[0].definition!.includes('planned product mix, not the mix actually completed'));
+  assert.deepEqual(performanceDefinitionMeta({ products: [{}] }), []);
+  const parsed = JSON.parse(projectJsonText({ products: [{}, {}], lastSimulationResult: k({}) as any }));
+  assert.equal(parsed.exportNotice.performanceDefinitions[0].basis, 'multi_product_planned_mix');
+  assert.equal(parsed.lastSimulationResult.kpis.actualProduction, 100);
+});
