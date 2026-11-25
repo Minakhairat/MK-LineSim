@@ -65,3 +65,18 @@ test('Performance definition text names the planned mix only when there is more 
   assert.ok(performanceDefinitionText(true, true).includes('المزيج المخطط'));
   assert.ok(performanceDefinitionText(true, false).includes('100'));
 });
+
+import { eventsCsvNoticeText } from '../src/utils/importNotes';
+test('Companion CSV notice file carries the approved limits in both languages and the result notices', () => {
+  const t = eventsCsvNoticeText({ codes: [], unknown: true }, 'x_sim_events.csv');
+  assert.ok(t.includes(BETA_LIMITS_EN) && t.includes(BETA_LIMITS_AR));
+  assert.ok(t.includes('x_sim_events.csv'));
+  assert.ok(t.includes('Result notices (English):'));
+  const clean = eventsCsvNoticeText({ codes: [], unknown: false, reliability: [], reliabilityUnknown: false }, 'y.csv');
+  assert.ok(!clean.includes('Result notices'));
+});
+test('Performance definition states total units and net operating time', () => {
+  assert.ok(performanceDefinitionText(false, false).includes('total units (good and scrap)'));
+  assert.ok(performanceDefinitionText(false, false).includes('net operating time'));
+  assert.ok(performanceDefinitionText(true, true).includes('إجمالي الوحدات'));
+});
