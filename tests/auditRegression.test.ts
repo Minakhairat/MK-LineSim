@@ -358,3 +358,20 @@ test('Event log truncation: engine caps the log at 25,000 entries and the helper
   assert.equal(logged, Math.min(25000, r.totalEventsExecuted));
   assert.equal(isEventLogTruncated(logged, r.totalEventsExecuted), r.totalEventsExecuted > 25000);
 });
+
+test('A hidden layout object that a stage uses is still checked for bad dimensions', () => {
+  const p: any = createDesertAirCoolerProject();
+  const oid = p.stages[0].assignedObjectIds[0];
+  const o = p.layoutObjects.find((x: any) => x.id === oid);
+  o.geometry.dimensions.length = 0;
+  o.rendering.visible = false;
+  const codes = validateProject(p).filter((i: any) => i.severity === 'error').map((i: any) => i.code);
+  assert.ok(codes.includes('INVALID_DIMENSIONS'));
+  const q: any = createDesertAirCoolerProject();
+  const unused = q.layoutObjects.find((x: any) => !q.stages.some((s: any) => s.assignedObjectIds.includes(x.id) || s.conveyorObjectId === x.id));
+  if (unused) {
+    unused.geometry.dimensions.length = 0;
+    unused.rendering.visible = false;
+    assert.equal(validateProject(q).filter((i: any) => i.severity === 'error').length, 0);
+  }
+});
