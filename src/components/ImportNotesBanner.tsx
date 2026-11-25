@@ -14,7 +14,7 @@ export function ImportNotesBanner() {
       className="w-full max-w-3xl text-start rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
     >
       <div className="font-semibold">
-        {isAr ? 'افتراضات حصلت عند فتح الملف، راجعها قبل ما تعتمد على النتائج' : 'Assumptions made when this file was opened. Review them before relying on results'}
+        {isAr ? 'افتراضات أو مدخلات اتعملت تلقائياً (عند فتح الملف أو التشغيل)، راجعها قبل ما تعتمد على النتائج' : 'Assumptions or generated inputs (made when the file was opened or on Run). Review them before relying on results'}
       </div>
       <ul className="list-disc ps-4 mt-1">
         {notes.map((c) => (
