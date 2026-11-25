@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { detectAutoWireNotes } from '../utils/importNotes';
+import { detectAutoWireNotes, markGeneratedInputs } from '../utils/importNotes';
 import {
   AppLanguage,
   AppTheme,
@@ -1272,9 +1272,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const wireNotes = detectAutoWireNotes(project, wired);
         commitProjectEdit((draft) => {
           Object.assign(draft, wired);
-          if (wireNotes.length > 0) {
-            draft.importNotes = Array.from(new Set([...(draft.importNotes ?? []), ...wireNotes]));
-          }
+          markGeneratedInputs(draft, project);
         });
         if (wireNotes.length > 0) {
           setToast(
@@ -1460,9 +1458,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const wireNotes = detectAutoWireNotes(project, wired);
         commitProjectEdit((draft) => {
           Object.assign(draft, wired);
-          if (wireNotes.length > 0) {
-            draft.importNotes = Array.from(new Set([...(draft.importNotes ?? []), ...wireNotes]));
-          }
+          markGeneratedInputs(draft, project);
         });
         if (wireNotes.length > 0) {
           setToast(
