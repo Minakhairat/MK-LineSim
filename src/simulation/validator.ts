@@ -41,9 +41,17 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
 
   const allObjectIds = new Set(layoutObjects.map((o) => o.id));
   const activeObjects = layoutObjects.filter((o) => o.rendering.visible);
+  // A hidden object that a stage still uses is simulated, so it gets the same
+  // dimension, bounds and reliability checks as a visible one.
+  const stageUsedIds = new Set<string>();
+  for (const st of stages) {
+    for (const oid of st.assignedObjectIds || []) stageUsedIds.add(oid);
+    if (st.conveyorObjectId) stageUsedIds.add(st.conveyorObjectId);
+  }
+  const checkedObjects = layoutObjects.filter((o) => o.rendering.visible || stageUsedIds.has(o.id));
 
   // 2. Layout object boundaries, dimensions & operational checks
-  for (const obj of activeObjects) {
+  for (const obj of checkedObjects) {
     const { length, width, height } = obj.geometry.dimensions;
     const { x, y, z } = obj.geometry.position;
     if (
