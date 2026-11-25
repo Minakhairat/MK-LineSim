@@ -207,3 +207,21 @@ export function toggleStageInProductRoute(
     entryStageIds: next.length > 0 ? [next[0]] : [],
   };
 }
+
+/** A scenario worker count the engine runs as entered: a whole number of at least 1. */
+export function isValidScenarioWorkerCount(n: unknown): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1;
+}
+
+/**
+ * True for a saved scenario that has a result but whose worker count is not a valid one (for example 0 saved before
+ * the worker-count check existed). The engine clamps such a value, so the Workers column does not match what ran.
+ * Baseline rows are not judged here.
+ */
+export function scenarioWorkerCountUnreliable(sc: {
+  isBaseline?: boolean;
+  overrides: { workerCount?: unknown };
+  result?: unknown;
+}): boolean {
+  return !sc.isBaseline && !!sc.result && !isValidScenarioWorkerCount(sc.overrides.workerCount);
+}

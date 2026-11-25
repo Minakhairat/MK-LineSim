@@ -1,6 +1,6 @@
 import { generatedInputCodes, ResultProvenance, resultProvenance, unionProvenance, unknownProvenanceText } from './importNotes';
 import { mostLoadedUtilText } from './bottleneckLabel';
-import { formatBeltSpeed, leadTimeText } from './units';
+import { formatBeltSpeed, leadTimeText, scenarioWorkerCountUnreliable } from './units';
 import { jsPDF } from 'jspdf';
 import { ProjectData, SimulationResult } from '../types/project';
 import { formatDuration } from './units';
@@ -715,7 +715,7 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
     : ['Scenario', 'Workers', 'Belt m/s', 'Good', 'Attain %', 'Lead Time', 'Worker %', 'Bottleneck'];
 
   const rowProv = project.scenarios.map((sc) => resultProvenance(sc.result));
-  const anyTag = rowProv.some((r) => r.unknown || r.codes.length > 0);
+  const anyTag = rowProv.some((r) => r.unknown || r.codes.length > 0) || project.scenarios.some((sc) => scenarioWorkerCountUnreliable(sc));
   const rowH = anyTag ? 60 : 48;
   ctx.fillStyle = '#0f172a';
   ctx.fillRect(48, startY, tableW, rowH);
@@ -787,11 +787,15 @@ export function exportScenariosCanvasPdf(project: ProjectData, opts: PdfExportOp
           lines.push(`${last}\u2026`);
         }
         const rp = rowProv[idx];
-        const tag = rp.unknown
+        const provTag = rp.unknown
           ? (isAr ? '[مصدر المدخلات غير معروف]' : '[provenance unknown]')
           : rp.codes.length > 0
             ? (isAr ? '[مدخلات مولّدة تلقائياً]' : '[generated inputs]')
             : '';
+        const wkTag = scenarioWorkerCountUnreliable(project.scenarios[idx])
+          ? (isAr ? '[عدد العمال مش زي المشغَّل]' : '[workers not as run]')
+          : '';
+        const tag = [provTag, wkTag].filter(Boolean).join(' ');
         const off = tag ? (lines.length === 1 ? -9 : -15) : 0;
         if (lines.length === 1) ctx.fillText(lines[0], x, ry + rowH / 2 + off, maxW);
         else lines.forEach((ln, li) => ctx.fillText(ln, x, ry + rowH / 2 + off + (li === 0 ? -9 : 9), maxW));

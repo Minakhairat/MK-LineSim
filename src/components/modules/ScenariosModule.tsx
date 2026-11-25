@@ -1,4 +1,4 @@
-import { formatBeltSpeed, leadTimeText, uniformBufferReplacesStages } from '../../utils/units';
+import { formatBeltSpeed, leadTimeText, uniformBufferReplacesStages, isValidScenarioWorkerCount, scenarioWorkerCountUnreliable } from '../../utils/units';
 import { GeneratedInputsStrip } from '../ImportNotesBanner';
 import { resultProvenance, unionProvenance } from '../../utils/importNotes';
 import React, { useState } from 'react';
@@ -44,7 +44,7 @@ export const ScenariosModule: React.FC = () => {
   // The Workers field declares a minimum of 1 and the engine clamps lower values to 1, so a 0 or a fraction would
   // run with a different worker count than the row shows. Refuse it instead of running with a changed input.
   const rejectBadWorkerCount = (n: unknown): boolean => {
-    if (typeof n === 'number' && Number.isInteger(n) && n >= 1) return false;
+    if (isValidScenarioWorkerCount(n)) return false;
     setToast(
       isAr
         ? 'عدد العمال لازم يكون رقم صحيح ١ أو أكتر. السيناريو ما اتشغّلش.'
@@ -399,6 +399,15 @@ export const ScenariosModule: React.FC = () => {
                           {rowProv.unknown
                             ? isAr ? 'مصدر المدخلات غير معروف' : 'Provenance unknown'
                             : isAr ? 'مدخلات مولّدة تلقائياً' : 'Generated inputs'}
+                        </span>
+                      )}
+                      {scenarioWorkerCountUnreliable(sc) && (
+                        <span
+                          data-testid="row-workers-unreliable"
+                          className="ms-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800"
+                          title={isAr ? 'عدد العمال المحفوظ مش رقم صحيح ١ أو أكتر، والمحرك شغّل بعدد تاني غير المكتوب. ما تعتمدش على الصف ده.' : 'The saved worker count is not a whole number of 1 or more, so the engine ran a different count than the one shown. Do not rely on this row.'}
+                        >
+                          {isAr ? 'عدد العمال مش زي المشغَّل' : 'Workers not as run'}
                         </span>
                       )}
                       {sc.result?.stallWarnings && sc.result.stallWarnings.length > 0 && (
