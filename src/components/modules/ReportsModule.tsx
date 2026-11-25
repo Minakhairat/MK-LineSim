@@ -134,14 +134,16 @@ export const ReportsModule: React.FC = () => {
     if (truncated) {
       setToast(
         isAr
-          ? `تحذير: السجل غير كامل. تم تصدير أول ${events.length} حدث فقط من ${executed} حدث نُفّذ.`
-          : `Warning: log incomplete. Exported only the first ${events.length} of ${executed} executed events.`,
+          ? `تحذير: السجل غير كامل. تم تصدير أول ${events.length} حدث فقط من ${executed} حدث نُفّذ. التنبيهات في آخر الملف وفي ملف NOTICE.txt.`
+          : `Warning: log incomplete. Exported only the first ${events.length} of ${executed} executed events. Notices are at the end of the file and in the NOTICE.txt file.`,
         'error'
       );
       return;
     }
     setToast(
-      isAr ? `تم تصدير ${events.length} حدث إلى ملف CSV (دعم Excel العربي)` : `Exported ${events.length} simulation events to CSV`,
+      isAr
+        ? `تم تصدير ${events.length} حدث إلى ملف CSV (دعم Excel العربي). نزل معاه ملف NOTICE.txt؛ لو المتصفح منعه، نفس التنبيه في آخر ملف CSV.`
+        : `Exported ${events.length} simulation events to CSV. A NOTICE.txt file downloads with it; if your browser blocked it, the same notice is at the end of the CSV.`,
       'success'
     );
   };
