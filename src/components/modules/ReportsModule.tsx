@@ -10,7 +10,7 @@ import {
 import { downloadDataUrl, sanitizeFilename } from '../../utils/mediaCapture';
 import { isEventLogTruncated } from '../../utils/units';
 import { betaLimitsText } from '../../utils/betaLimits';
-import { exportDisclosureLines, projectJsonText, resultProvenance } from '../../utils/importNotes';
+import { eventsCsvNoticeText, exportDisclosureLines, projectJsonText, resultProvenance } from '../../utils/importNotes';
 
 export const ReportsModule: React.FC = () => {
   const project = useAppStore((s) => s.project);
@@ -120,6 +120,17 @@ export const ReportsModule: React.FC = () => {
     a.download = `${sanitizeFilename(project.name)}_sim_events.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    // Companion notice file so the limits are seen without opening the end of a large CSV. Some browsers ask before a second download.
+    const csvName = `${sanitizeFilename(project.name)}_sim_events.csv`;
+    const nb = new Blob(['\uFEFF' + eventsCsvNoticeText(resultProvenance(result), csvName)], { type: 'text/plain;charset=utf-8;' });
+    const nurl = URL.createObjectURL(nb);
+    const na = document.createElement('a');
+    na.href = nurl;
+    na.download = `${sanitizeFilename(project.name)}_sim_events_NOTICE.txt`;
+    setTimeout(() => {
+      na.click();
+      URL.revokeObjectURL(nurl);
+    }, 400);
     if (truncated) {
       setToast(
         isAr
