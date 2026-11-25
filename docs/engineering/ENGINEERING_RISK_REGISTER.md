@@ -73,3 +73,20 @@
 | **VER-04** | `Verified behavior` | `/src/simulation/failureModels.ts` | Deterministic Mulberry32 PRNG, Weibull scale conversion via Lanczos `gammaFn`, Method-of-Moments lognormal repair sampling, and `availability = 0` down-state retention verified. |
 | **VER-05** | `Verified behavior` | `/src/simulation/validator.ts`, `/src/utils/units.ts` | Integer validation for discrete counts, continuous float acceptance, and 2D OBB SAT non-axis-aligned collision verified in `engineeringAuditVerification.test.ts`. |
 | **VER-06** | `Verified behavior` | `/package-lock.json`, `/.github/workflows/deploy.yml` | Phase 0.2–0.2.3 consolidated onto `npm`, verified canonical `package-lock.json` (`339,534` B, `lockfileVersion: 3`, `652` entries matching `package.json`, SHA-256 `a38a71a4...`), verified `npm ci --legacy-peer-deps`, `npm run lint`, `npm test` (`57/57`), and `npm run build` locally, confirmed `bun.lock` absence in the latest inspected exported archive, and verified GitHub Actions Run `#17` (`a36d723`, `main`, `Success`, `47s`). Does not validate `RISK-02`–`RISK-18` engineering/simulation defects. |
+
+### 2.5 Disclosure changes for the experimental beta (25 Nov 2026, PRs 102-113)
+
+These changes add warnings and notices. They do not change any engine formula. No risk above is closed by them.
+
+| PR | Change | Evidence | Not covered |
+| --- | --- | --- | --- |
+| 102 | Validator warning when product target quantities do not match the planned mix (PRODUCT_TARGET_MIX_MISMATCH) | Unit test; seen live in English and Arabic at 1280 | Not checked at 390 |
+| 103 | MTBF/MTTR priority note uses words instead of an arrow, so it reads correctly in Arabic (RTL) | Seen live in Arabic at 1280 and 390 | Other Arabic notes not all viewed |
+| 104 | Approved limits statement from one source (src/utils/betaLimits.ts): strip in the app, band on every PDF page, NOTICE rows in CSV, exportNotice in project JSON | Live on the sample project: screen, 4 PDFs, CSV, JSON; Arabic CSV and 2 PDFs | Mobile downloads; second download blocked by the browser |
+| 105-107 | Performance definition caption (single product, planned-mix, time-weighted, no production), CSV companion NOTICE.txt, per-case definition metadata in JSON | Live in 3 fixtures; hand-checked arithmetic on one fixture | The above-100% warning was not reproduced live (no fixture found after the single-product skipped-stage fix) |
+| 108 | KPI card values and footer wrap instead of truncating at 390 | Seen live at 390, English and Arabic | Other widths |
+| 109, 113 | Manual browser scripts against the deployed site (sample project; two imported projects: reliability conflict, stalled two-product run) | Sample script passed twice and failed 4 asserts on a mutated copy; imported script passed 6 of 6 once | No failing-mutation check on the imported script; English desktop only |
+| 110 | Notice in DXF (999 comments), STEP header, OBJ comments, STL header marker plus companion NOTICE.txt | Downloaded live; DXF, STL and OBJ read by Python parsers with plausible units and bounds | STEP only checked as text; no real CAD software tried |
+| 111, 112 | Caption strip below every PNG; if the caption cannot be added, nothing is saved and the user is told | Photo PNG seen live; failure path covered by a unit test only | 3D PNG needs a live 3D canvas, not downloaded live; failure alert not triggered live |
+
+Open by design: the manual-Performance formula question (planned versus realised mix) is held for the owner. RISK-09 (unequal-capacity parallel machines) has not been probed.
