@@ -40,7 +40,8 @@ import {
   deleteCustomEquipmentFromDb,
   deleteProjectFromDb,
   getLastActiveProjectId,
-  loadAllProjectsFromDb,
+  loadAllProjectsWithSkippedFromDb,
+  type SkippedStoredProject,
   loadCustomEquipmentFromDb,
   migrateProjectSchema,
   saveCustomEquipmentToDb,
@@ -72,6 +73,8 @@ interface AppState {
   initialized: boolean;
   project: ProjectData;
   projectsList: ProjectData[];
+  /** Stored projects that could not be opened. Their records stay in storage untouched. */
+  skippedStoredProjects: SkippedStoredProject[];
   customEquipment: EquipmentTemplate[];
   undoStack: ProjectData[];
   redoStack: ProjectData[];
@@ -231,6 +234,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   initialized: false,
   project: initialProject,
   projectsList: [initialProject],
+  skippedStoredProjects: [],
   customEquipment: [],
   undoStack: [],
   redoStack: [],
@@ -278,13 +282,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   bootstrap: async () => {
     try {
-      const [savedProjects, customEq, lastId] = await Promise.all([
-        loadAllProjectsFromDb(),
+      const [loaded, customEq, lastId] = await Promise.all([
+        loadAllProjectsWithSkippedFromDb(),
         loadCustomEquipmentFromDb(),
       getLastActiveProjectId(),
       ]);
 
       let activeProj: ProjectData;
+      const savedProjects = loaded.projects;
       let list = savedProjects;
 
       if (list.length === 0) {
@@ -300,12 +305,21 @@ export const useAppStore = create<AppState>((set, get) => ({
         initialized: true,
         project: activeProj,
         projectsList: list,
+        skippedStoredProjects: loaded.skipped,
         customEquipment: customEq,
         validationIssues: validateProject(activeProj),
         simEngine: engine,
         simSnapshot: engine.getSnapshot(),
         simAllEvents: [],
       });
+      if (loaded.skipped.length > 0) {
+        get().setToast(
+          get().language === 'ar'
+            ? `تعذر فتح ${loaded.skipped.length} مشروع محفوظ. الملفات الأصلية لم تُحذف: افتح صفحة المشاريع لتصديرها وتصحيحها.`
+            : `${loaded.skipped.length} stored project(s) could not be opened. Nothing was deleted: open Projects to export the original file and fix it.`,
+          'info'
+        );
+      }
     } catch (err) {
       const fallback = createDesertAirCoolerProject();
       const engine = new DiscreteEventSimulationEngine(fallback);
