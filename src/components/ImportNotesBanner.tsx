@@ -42,6 +42,13 @@ export function ImportNotesBanner() {
 // Not dismissable: a run that used generated inputs must always say so next to its results.
 // With `provenance` the notice comes from the result's own stamp, so it outlives deleting the generated items.
 // Without it (no result yet) it follows the project's current flags.
+const autoNames: Record<string, [string, string]> = {
+  autowired_product: ['product (Standard Product, PRD-100)', 'منتج (Standard Product, PRD-100)'],
+  autowired_stages: ['production stages', 'مراحل إنتاج'],
+  autowired_routes: ['product routes', 'مسارات المنتجات'],
+  autowired_workers: ['workers', 'عمال'],
+};
+
 export function GeneratedInputsStrip({ provenance, perRow }: { provenance?: ResultProvenance; perRow?: boolean }) {
   const project = useAppStore((s) => s.project);
   const language = useAppStore((s) => s.language);
@@ -67,12 +74,22 @@ export function GeneratedInputsStrip({ provenance, perRow }: { provenance?: Resu
                 : 'These results use inputs that were generated automatically, not entered by you'}
           </div>
           <ul className="list-disc ps-4 mt-1">
-            {codes.map((c) => (
-              <li key={c}>{importNoteText(c, isAr)}</li>
-            ))}
+            {perRow ? (
+              <li>
+                {isAr
+                  ? 'اتعملت بواسطة Run auto-wire: ' + codes.map((c) => autoNames[c]?.[1] ?? c).join('، ') + '. دي مش بياناتك.'
+                  : 'Created by Run auto-wire: ' + codes.map((c) => autoNames[c]?.[0] ?? c).join(', ') + '. These are not your data.'}
+              </li>
+            ) : (
+              codes.map((c) => <li key={c}>{importNoteText(c, isAr)}</li>)
+            )}
           </ul>
           <div className="mt-1">
-            {isAr
+            {perRow
+              ? isAr
+                ? 'كل صف موسوم بيحتفظ بملاحظته حتى لو المدخلات المولّدة اتحذفت. شغّل الصفوف الموسومة من جديد على مدخلاتك الحقيقية.'
+                : 'Each marked row keeps its own notice even if the generated items are deleted. Re-run the marked rows on your real inputs.'
+              : isAr
               ? 'الملاحظة دي مربوطة بالنتيجة نفسها، وبتفضل حتى لو المدخلات المولّدة اتحذفت. شغّل من جديد على مدخلاتك الحقيقية عشان نتيجة جديدة.'
               : 'This notice belongs to the result itself and stays even if the generated items are deleted. Re-run on your real inputs for a new result.'}
           </div>
