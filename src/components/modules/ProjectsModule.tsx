@@ -8,6 +8,7 @@ import { getT } from '../../i18n/translations';
 export const ProjectsModule: React.FC = () => {
   const project = useAppStore((s) => s.project);
   const projectsList = useAppStore((s) => s.projectsList);
+  const skippedStoredProjects = useAppStore((s) => s.skippedStoredProjects);
   const language = useAppStore((s) => s.language);
   const createNewProject = useAppStore((s) => s.createNewProject);
   const openProjectById = useAppStore((s) => s.openProjectById);
@@ -42,6 +43,19 @@ export const ProjectsModule: React.FC = () => {
     a.click();
     URL.revokeObjectURL(url);
     setToast(isAr ? 'تم تصدير ملف المشروع JSON' : 'Exported project JSON', 'success');
+  };
+
+  const handleExportSkipped = (idx: number) => {
+    const sp = skippedStoredProjects[idx];
+    if (!sp) return;
+    const blob = new Blob([JSON.stringify(sp.raw, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(sp.id || sp.name).toLowerCase().replace(/[^a-z0-9]+/g, '_')}_original_stored.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setToast(isAr ? 'تم تصدير الملف الأصلي المحفوظ' : 'Exported the original stored project JSON', 'success');
   };
 
   const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -142,6 +156,37 @@ export const ProjectsModule: React.FC = () => {
           />
         </div>
       </section>
+
+      {skippedStoredProjects.length > 0 && (
+        <section
+          data-testid="skipped-stored-projects"
+          className="flex flex-col gap-2 rounded border border-amber-400 bg-amber-50 p-3 text-amber-900 dark:bg-amber-950 dark:text-amber-100"
+        >
+          <h3 className="text-xs font-semibold">
+            {isAr
+              ? `${skippedStoredProjects.length} مشروع محفوظ تعذر فتحه`
+              : `${skippedStoredProjects.length} stored project(s) could not be opened`}
+          </h3>
+          <p className="text-[11px]">
+            {isAr
+              ? 'لم يُحذف أي شيء. صدّر الملف الأصلي، أضف القيم الناقصة، ثم استورده من جديد.'
+              : 'Nothing was deleted. Export the original file, add the missing values, then import it again.'}
+          </p>
+          {skippedStoredProjects.map((sp, idx) => (
+            <div key={`${sp.id}_${idx}`} className="flex flex-col gap-1 border-t border-amber-300 pt-2">
+              <span className="font-medium">{sp.name}</span>
+              <span className="text-[11px]">{sp.reason}</span>
+              <button
+                onClick={() => handleExportSkipped(idx)}
+                className="flex items-center justify-center gap-1.5 self-start rounded border border-amber-500 px-2.5 py-1 text-[11px] font-medium hover:bg-amber-100 dark:hover:bg-amber-900"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{isAr ? 'تصدير الملف الأصلي' : 'Export original JSON'}</span>
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
 
       {/* Create New Project */}
       <section className="flex flex-col gap-2 border-b border-neutral-200 dark:border-neutral-800 pb-4">
