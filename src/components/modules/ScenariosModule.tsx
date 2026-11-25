@@ -1,4 +1,4 @@
-import { formatBeltSpeed, leadTimeText, uniformBufferReplacesStages, isValidScenarioWorkerCount, scenarioWorkerCountUnreliable } from '../../utils/units';
+import { formatBeltSpeed, leadTimeText, uniformBufferReplacesStages, isValidScenarioWorkerCount, scenarioWorkerCountUnreliable, scenarioWorkerMismatchNotice } from '../../utils/units';
 import { GeneratedInputsStrip } from '../ImportNotesBanner';
 import { resultProvenance, unionProvenance } from '../../utils/importNotes';
 import React, { useState } from 'react';
@@ -353,6 +353,15 @@ export const ScenariosModule: React.FC = () => {
           provenance={unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result)))}
           perRow
         />
+        {project.scenarios.some((sc) => scenarioWorkerCountUnreliable(sc)) && (
+          <div
+            role="note"
+            data-testid="workers-not-as-run-note"
+            className="w-full max-w-3xl text-start rounded border border-red-300 bg-red-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-red-900"
+          >
+            {scenarioWorkerMismatchNotice(isAr)}
+          </div>
+        )}
 
         {/* Comparison Table */}
         <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-x-auto">
