@@ -438,3 +438,20 @@ test('result provenance: missing reliability stamp is unknown, an empty stamp is
   assert.equal(none.unknown, true);
   assert.equal(none.reliabilityUnknown, true);
 });
+
+test('bottleneck ranking still finds the loaded stage when its times sit only on the machine (stage fields 0)', () => {
+  const mk = (zero: boolean): any => {
+    const p: any = createDesertAirCoolerProject();
+    p.stages.forEach((s: any) => { s.scrapRate = 0; s.reworkProbability = 0; });
+    if (zero) {
+      const s = p.stages.find((x: any) => x.name.includes('Wiring'));
+      s.processingTimeSec = 0; s.loadingTimeSec = 0; s.unloadingTimeSec = 0;
+    }
+    return new DiscreteEventSimulationEngine(p).runToCompletion();
+  };
+  const a = mk(false);
+  const b = mk(true);
+  assert.equal(a.kpis.bottleneckStageName, 'Electrical Wiring');
+  assert.equal(b.kpis.goodUnits, a.kpis.goodUnits); // the run itself is unchanged
+  assert.equal(b.kpis.bottleneckStageName, a.kpis.bottleneckStageName);
+});

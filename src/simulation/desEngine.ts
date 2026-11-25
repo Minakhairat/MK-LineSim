@@ -5922,8 +5922,12 @@ export class DiscreteEventSimulationEngine {
             8 *
             Math.min(1, (utilPct + setupPct) / 100)
           : 0;
-      const stTaskTime =
-        (st.processingTimeSec || 0) + (st.loadingTimeSec || 0) + (st.unloadingTimeSec || 0);
+      // Times may live only on the assigned machines (stage fields left at 0). The engine runs those, so the
+      // bottleneck ranking must count the effective cycle the stage really has, not only the stage fields.
+      const stTaskTime = Math.max(
+        (st.processingTimeSec || 0) + (st.loadingTimeSec || 0) + (st.unloadingTimeSec || 0),
+        stageProfile.effectiveUnitCycleSec > 0 ? stageProfile.effectiveUnitCycleSec : 0
+      );
       const effectiveQueueSignal = blkPct < 20 ? Math.min(25, avgQueue * 0.5) : 0;
       const bottleneckScore =
         stTaskTime > 0
