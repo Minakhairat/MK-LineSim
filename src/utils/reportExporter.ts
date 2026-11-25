@@ -132,8 +132,8 @@ function drawReportChrome(
       : '';
     const unkLine = prov.unknown && perRow
       ? isAr
-        ? 'الصفوف الموسومة "مصدر غير معروف" نتيجتها محفوظة قبل تسجيل المصدر. شغّلها من جديد.'
-        : 'Rows marked "provenance unknown" were saved before provenance was recorded. Re-run them.'
+        ? 'الصفوف الموسومة "مصدر غير معروف" نتيجتها محفوظة قبل تسجيل المصدر. صحّح الأول أي عدد عمال موسوم، وبعدين شغّلها من جديد.'
+        : 'Rows marked "provenance unknown" were saved before provenance was recorded. After correcting any flagged worker counts, re-run them.'
       : prov.unknown
       ? isAr
         ? 'مصدر مدخلات النتائج المحفوظة غير معروف (قبل تسجيل المصدر). شغّل المحاكاة من جديد.'

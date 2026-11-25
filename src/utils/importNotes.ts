@@ -201,8 +201,8 @@ export function unionProvenance(list: ResultProvenance[]): ResultProvenance {
 
 export function reliabilityUnknownText(isAr: boolean): string {
   return isAr
-    ? 'مش مسجّل إذا كانت نتايج محفوظة استخدمت MTBF/MTTR بدل توفر مكتوب مختلف (اتحسبت قبل ما التسجيل ده يتضاف). مش معناه إنها سليمة. شغّل من جديد عشان تاخد إجابة مسجّلة.'
-    : 'It was not recorded whether these saved results used MTBF/MTTR instead of a conflicting stated availability (they were computed before this was recorded). That does not mean they are clean. Re-run to get a recorded answer.';
+    ? 'مش مسجّل إذا كانت نتايج محفوظة استخدمت MTBF/MTTR بدل توفر مكتوب مختلف (اتحسبت قبل ما التسجيل ده يتضاف). مش معناه إنها سليمة. صحّح الأول أي عدد عمال موسوم، وبعدين شغّل من جديد عشان تاخد إجابة مسجّلة.'
+    : 'It was not recorded whether these saved results used MTBF/MTTR instead of a conflicting stated availability (they were computed before this was recorded). That does not mean they are clean. After correcting any flagged worker counts, re-run to get a recorded answer.';
 }
 
 export function unknownProvenanceText(isAr: boolean): string {
