@@ -1,4 +1,5 @@
 import { leadTimeText, oeeSummaryText } from '../../utils/units';
+import { performanceDefinitionText } from '../../utils/oeeBasis';
 import React, { useEffect, useRef } from 'react';
 import {
   Chart,
@@ -420,6 +421,11 @@ export const AnalyticsModule: React.FC = () => {
               </div>
             </div>
           </div>
+          {!k.oeeMixedTimeWeighted && (k.actualProduction ?? 0) > 0 && (
+            <div data-testid="performance-definition" className="mt-2 text-[11px] leading-relaxed text-neutral-500 dark:text-neutral-400">
+              {performanceDefinitionText(language === 'ar', project.products.length > 1)}
+            </div>
+          )}
           {!k.oeeMixedTimeWeighted && oeeBasisUsesSkippedStage(project.products, k.theoreticalBottleneckStageId) && (
             <div
               role="note"

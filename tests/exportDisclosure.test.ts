@@ -57,3 +57,11 @@ test('Limits statement is the owner-approved wording, and the JSON export carrie
   assert.equal(parsed.exportNotice.limits, BETA_LIMITS_EN);
   assert.equal(parsed.exportNotice.limitsAr, BETA_LIMITS_AR);
 });
+
+import { performanceDefinitionText } from '../src/utils/oeeBasis';
+test('Performance definition text names the planned mix only when there is more than one product, and says it can exceed 100%', () => {
+  assert.ok(performanceDefinitionText(false, true).includes('planned product mix, not the mix actually completed'));
+  assert.ok(!performanceDefinitionText(false, false).includes('planned product mix'));
+  assert.ok(performanceDefinitionText(true, true).includes('المزيج المخطط'));
+  assert.ok(performanceDefinitionText(true, false).includes('100'));
+});
