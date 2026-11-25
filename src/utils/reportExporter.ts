@@ -1,4 +1,5 @@
 import { generatedInputCodes, reliabilityConflictText, reliabilityUnknownText, ResultProvenance, resultProvenance, unionProvenance, unknownProvenanceText } from './importNotes';
+import { betaLimitsText } from './betaLimits';
 import { mostLoadedUtilText } from './bottleneckLabel';
 import { formatBeltSpeed, leadTimeText, scenarioWorkerCountUnreliable, scenarioWorkerMismatchNotice } from './units';
 import { jsPDF } from 'jspdf';
@@ -106,10 +107,32 @@ function drawReportChrome(
     h - 26
   );
 
+  // Experimental-version limits statement on every page of every report.
+  ctx.font = `700 15px ${FONT_STACK}`;
+  const limWords = betaLimitsText(isAr).split(/\s+/);
+  const limLines: string[] = [];
+  let limCur = '';
+  for (const wd of limWords) {
+    const t = limCur ? `${limCur} ${wd}` : wd;
+    if (limCur && ctx.measureText(t).width > w - 96) {
+      limLines.push(limCur);
+      limCur = wd;
+    } else limCur = t;
+  }
+  if (limCur) limLines.push(limCur);
+  const limH = 12 + limLines.length * 21;
+  ctx.fillStyle = '#fffbeb';
+  ctx.fillRect(0, 157, w, limH);
+  ctx.fillStyle = '#92400e';
+  ctx.textAlign = isAr ? 'right' : 'left';
+  ctx.textBaseline = 'alphabetic';
+  limLines.forEach((ln, li) => ctx.fillText(ln, titleX, 157 + 20 + li * 21, w - 96));
+  const base = 157 + limH;
+
   // Generated-input provenance: shown on every export so results never look fully user-supplied.
   const prov = provenance ?? { codes: generatedInputCodes(project), unknown: false };
   const gen = prov.codes;
-  let used = 184;
+  let used = base + 27;
   const relRows = prov.reliability ?? [];
   if (gen.length > 0 || prov.unknown || workerMismatchRows || relRows.length > 0 || prov.reliabilityUnknown) {
     const names: Record<string, [string, string]> = {
@@ -155,13 +178,13 @@ function drawReportChrome(
     if (curLine) wrapped.push(curLine);
     const boxH = 16 + wrapped.length * 21;
     ctx.fillStyle = '#fef2f2';
-    ctx.fillRect(0, 157, w, boxH);
+    ctx.fillRect(0, base, w, boxH);
     ctx.fillStyle = '#991b1b';
     ctx.font = `700 15px ${FONT_STACK}`;
     ctx.textAlign = isAr ? 'right' : 'left';
     ctx.textBaseline = 'alphabetic';
-    wrapped.forEach((ln, li) => ctx.fillText(ln, titleX, 157 + 20 + li * 21, maxLineW));
-    used = 157 + boxH + 27;
+    wrapped.forEach((ln, li) => ctx.fillText(ln, titleX, base + 20 + li * 21, maxLineW));
+    used = base + boxH + 27;
   }
 
   ctx.restore();
