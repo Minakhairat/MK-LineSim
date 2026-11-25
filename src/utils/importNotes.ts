@@ -86,6 +86,17 @@ type Wirable = {
   importNotes?: string[];
 };
 
+// A stage that needs operators but has none assigned. The engine would silently create workers for it at run time,
+// so the store runs and discloses that auto-wire first instead of leaving it undisclosed inside the engine.
+export function hasStageWithoutWorker(project: {
+  stages: Array<{ id: string; requiredWorkers: number }>;
+  workers: Array<{ assignedStageIds: string[] }>;
+}): boolean {
+  return project.stages.some(
+    (s) => s.requiredWorkers > 0 && !project.workers.some((w) => w.assignedStageIds.includes(s.id))
+  );
+}
+
 // Marks what a Run auto-wire created, on the entities themselves, so the record survives banner dismissal,
 // saving, reload and export. It is removed only when the generated item is deleted or replaced.
 export function markGeneratedInputs(draft: Wirable, before: Wirable): void {
