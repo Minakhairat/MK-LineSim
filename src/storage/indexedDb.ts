@@ -235,6 +235,20 @@ export function migrateProjectSchema(raw: unknown): ProjectData {
     throw new Error('Invalid factory dimensions.');
   }
 
+  // A simulationConfig that is present must carry its engineering inputs as finite numbers. These are not guessed:
+  // a missing planned-units value (0 means unlimited), shift duration or arrival interval would change results.
+  if (obj.simulationConfig && typeof obj.simulationConfig === 'object') {
+    const cfg = obj.simulationConfig as Record<string, unknown>;
+    const bad = ['durationSec', 'arrivalIntervalSec', 'maxPlannedUnits'].filter(
+      (k) => typeof cfg[k] !== 'number' || !Number.isFinite(cfg[k] as number)
+    );
+    if (bad.length > 0) {
+      throw new Error(
+        `Invalid project JSON: simulationConfig is missing or has a non-numeric value for ${bad.join(', ')}. Add the value(s) to the file and import again.`
+      );
+    }
+  }
+
   return {
     schemaVersion: String(obj.schemaVersion || '1.0.0'),
     id: String(obj.id),
