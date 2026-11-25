@@ -60,7 +60,22 @@ export async function saveProjectToDb(project: ProjectData): Promise<void> {
   });
 }
 
+export interface SkippedStoredProject {
+  id: string;
+  name: string;
+  reason: string;
+  /** The stored record exactly as read from IndexedDB. It is never rewritten or deleted by loading. */
+  raw: unknown;
+}
+
 export async function loadAllProjectsFromDb(): Promise<ProjectData[]> {
+  return (await loadAllProjectsWithSkippedFromDb()).projects;
+}
+
+export async function loadAllProjectsWithSkippedFromDb(): Promise<{
+  projects: ProjectData[];
+  skipped: SkippedStoredProject[];
+}> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE_PROJECTS, 'readonly');
@@ -69,18 +84,26 @@ export async function loadAllProjectsFromDb(): Promise<ProjectData[]> {
     req.onsuccess = () => {
       settled = true;
       const raw = (req.result || []) as unknown[];
+      const skipped: SkippedStoredProject[] = [];
       const migrated = raw
         .map((item) => {
           try {
             return migrateProjectSchema(item);
-          } catch {
+          } catch (err) {
+            const rec = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+            skipped.push({
+              id: String(rec.id ?? ''),
+              name: String(rec.name ?? rec.id ?? '(unnamed)'),
+              reason: err instanceof Error ? err.message : 'Could not be read',
+              raw: item,
+            });
             return null;
           }
         })
         .filter((p): p is ProjectData => p !== null);
       migrated.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       closeDbQuietly(db);
-      resolve(migrated);
+      resolve({ projects: migrated, skipped });
     };
     req.onerror = () => {
       settled = true;
