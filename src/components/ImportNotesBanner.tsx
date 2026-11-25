@@ -42,7 +42,7 @@ export function ImportNotesBanner() {
 // Not dismissable: a run that used generated inputs must always say so next to its results.
 // With `provenance` the notice comes from the result's own stamp, so it outlives deleting the generated items.
 // Without it (no result yet) it follows the project's current flags.
-export function GeneratedInputsStrip({ provenance }: { provenance?: ResultProvenance }) {
+export function GeneratedInputsStrip({ provenance, perRow }: { provenance?: ResultProvenance; perRow?: boolean }) {
   const project = useAppStore((s) => s.project);
   const language = useAppStore((s) => s.language);
   const codes = provenance ? provenance.codes : generatedInputCodes(project);
@@ -58,9 +58,13 @@ export function GeneratedInputsStrip({ provenance }: { provenance?: ResultProven
       {codes.length > 0 && (
         <>
           <div className="font-semibold">
-            {isAr
-              ? 'النتائج دي مبنية على مدخلات اتعملت تلقائياً مش من بياناتك'
-              : 'These results use inputs that were generated automatically, not entered by you'}
+            {perRow
+              ? isAr
+                ? 'الصفوف الموسومة بس هي المبنية على مدخلات اتعملت تلقائياً مش من بياناتك'
+                : 'Only the rows marked below use inputs that were generated automatically, not entered by you'
+              : isAr
+                ? 'النتائج دي مبنية على مدخلات اتعملت تلقائياً مش من بياناتك'
+                : 'These results use inputs that were generated automatically, not entered by you'}
           </div>
           <ul className="list-disc ps-4 mt-1">
             {codes.map((c) => (
@@ -74,7 +78,15 @@ export function GeneratedInputsStrip({ provenance }: { provenance?: ResultProven
           </div>
         </>
       )}
-      {unknown && <div className="font-semibold mt-1">{unknownProvenanceText(isAr)}</div>}
+      {unknown && (
+        <div className="font-semibold mt-1">
+          {perRow
+            ? isAr
+              ? 'الصفوف الموسومة "مصدر غير معروف" نتيجتها محفوظة قبل تسجيل المصدر. ماتفترضش إنها على مدخلاتك. شغّلها من جديد.'
+              : 'Rows marked "provenance unknown" were saved before provenance was recorded. Do not assume they used your own inputs. Re-run them.'
+            : unknownProvenanceText(isAr)}
+        </div>
+      )}
     </div>
   );
 }
