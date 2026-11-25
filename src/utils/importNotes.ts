@@ -1,3 +1,4 @@
+import { BETA_LIMITS_AR, BETA_LIMITS_EN } from './betaLimits';
 import type { LayoutObject } from '../types/project';
 import { reliabilityConflict } from '../engineering/validationEngine';
 
@@ -216,4 +217,50 @@ export function unknownProvenanceText(isAr: boolean): string {
   return isAr
     ? 'مصدر المدخلات لنتيجة محفوظة من قبل تسجيل المصدر غير معروف. ماتفترضش إنها اتشغلت على مدخلاتك. شغّل المحاكاة من جديد.'
     : 'These saved results were computed before input provenance was recorded, so it is unknown whether they used generated inputs. Do not assume they used your own inputs. Re-run the simulation.';
+}
+
+// Plain-text disclosure lines for data exports (CSV, JSON). Same facts the PDFs and screens show:
+// generated inputs, MTBF/MTTR-over-stated-availability, and "no stamp = unknown, not clean".
+export function exportDisclosureLines(prov: ResultProvenance, isAr: boolean): string[] {
+  const lines: string[] = [];
+  if (prov.unknown) lines.push(unknownProvenanceText(isAr));
+  if (prov.codes.length > 0) {
+    const names: Record<string, [string, string]> = {
+      autowired_product: ['product (Standard Product, PRD-100)', 'منتج (Standard Product, PRD-100)'],
+      autowired_stages: ['production stages', 'مراحل إنتاج'],
+      autowired_routes: ['product routes', 'مسارات المنتجات'],
+      autowired_workers: ['workers', 'عمال'],
+    };
+    const list = prov.codes.map((c) => (names[c] ? names[c][isAr ? 1 : 0] : c)).join(isAr ? '، ' : ', ');
+    lines.push(
+      isAr
+        ? `مدخلات اتعملت تلقائياً وليست من بيانات المستخدم: ${list}. النتائج مبنية عليها.`
+        : `Generated inputs, not user data: ${list}. These results are based on them.`
+    );
+  }
+  if ((prov.reliability ?? []).length > 0) lines.push(reliabilityConflictText(prov.reliability ?? [], isAr));
+  if (prov.reliabilityUnknown) lines.push(reliabilityUnknownText(isAr));
+  return lines;
+}
+
+type ResultLike = { generatedInputs?: string[]; reliabilityConflicts?: ReliabilityConflictRow[] };
+
+// Top-level notice written into a project JSON export. Covers every result the file carries.
+// Import ignores this key; the stamps inside each result are what persist.
+export function projectExportNotice(project: { lastSimulationResult?: ResultLike; scenarios?: { result?: ResultLike }[] }) {
+  const results: ResultLike[] = [];
+  if (project.lastSimulationResult) results.push(project.lastSimulationResult);
+  for (const sc of project.scenarios ?? []) if (sc.result) results.push(sc.result);
+  if (results.length === 0) {
+    return { status: 'no_results_in_file' as const, notes: [] as string[], notesAr: [] as string[] };
+  }
+  const prov = unionProvenance(results.map((r) => resultProvenance(r)));
+  const notes = exportDisclosureLines(prov, false);
+  const notesAr = exportDisclosureLines(prov, true);
+  const status = prov.unknown || prov.reliabilityUnknown ? 'unknown_for_some_results' : notes.length > 0 ? 'flags_present' : 'recorded_no_flags';
+  return { status, notes, notesAr };
+}
+
+export function projectJsonText(project: { lastSimulationResult?: ResultLike; scenarios?: { result?: ResultLike }[] }): string {
+  return JSON.stringify({ exportNotice: { limits: BETA_LIMITS_EN, limitsAr: BETA_LIMITS_AR, ...projectExportNotice(project) }, ...project }, null, 2);
 }

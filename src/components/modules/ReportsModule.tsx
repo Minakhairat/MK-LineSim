@@ -9,6 +9,8 @@ import {
 } from '../../utils/reportExporter';
 import { downloadDataUrl, sanitizeFilename } from '../../utils/mediaCapture';
 import { isEventLogTruncated } from '../../utils/units';
+import { betaLimitsText } from '../../utils/betaLimits';
+import { exportDisclosureLines, projectJsonText, resultProvenance } from '../../utils/importNotes';
 
 export const ReportsModule: React.FC = () => {
   const project = useAppStore((s) => s.project);
@@ -106,8 +108,12 @@ export const ReportsModule: React.FC = () => {
     const footer = truncated
       ? `\nTRUNCATED,,,,,,,"INCOMPLETE LOG: only the first ${events.length} of ${executed} executed events are recorded. Events after this point are missing. KPI totals are not affected."`
       : '';
+    const noticeLines = [betaLimitsText(isAr), ...exportDisclosureLines(resultProvenance(result), isAr)];
+    const noticeFooter = noticeLines
+      .map((l) => `\nNOTICE,,,,,,,"${l.replace(/"/g, '""')}"`)
+      .join('');
     // UTF-8 BOM ensures Microsoft Excel renders Arabic text without encoding corruption
-    const blob = new Blob(['\uFEFF' + header + rows + footer], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['\uFEFF' + header + rows + footer + noticeFooter], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -130,7 +136,7 @@ export const ReportsModule: React.FC = () => {
   };
 
   const exportJson = () => {
-    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+    const blob = new Blob([projectJsonText(project)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

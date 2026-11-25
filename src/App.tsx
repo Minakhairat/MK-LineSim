@@ -1,4 +1,6 @@
 import React, { useEffect, useRef } from 'react';
+import { betaLimitsText } from './utils/betaLimits';
+import { projectJsonText } from './utils/importNotes';
 import {
   Activity,
   BarChart3,
@@ -265,7 +267,7 @@ export default function App() {
   }, [simStatus, has3DMounted]);
 
   const handleQuickExportJson = () => {
-    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+    const blob = new Blob([projectJsonText(project)], { type: 'application/json' });
     downloadBlob(blob, `${sanitizeFilename(project.name)}_linesim.json`);
     setToast(isAr ? 'تم تصدير ملف المشروع JSON' : 'Exported Project JSON', 'success');
   };
@@ -524,6 +526,13 @@ export default function App() {
           </div>
         </header>
       )}
+      <div
+        role="note"
+        data-testid="beta-limits"
+        className="shrink-0 border-b border-amber-300 bg-amber-50 px-3 py-1 text-[11px] leading-snug text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100"
+      >
+        {betaLimitsText(isAr)}
+      </div>
 
       {/* Main Engineering Body */}
       <div className="relative flex flex-1 min-h-0 overflow-hidden">
