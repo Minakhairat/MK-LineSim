@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { detectAutoWireNotes } from '../utils/importNotes';
 import {
   AppLanguage,
   AppTheme,
@@ -1268,9 +1269,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           project.products[0].routeStageIds.length === 0)
       ) {
         const wired = autoWireProjectForSimulation(project).updated;
+        const wireNotes = detectAutoWireNotes(project, wired);
         commitProjectEdit((draft) => {
           Object.assign(draft, wired);
+          if (wireNotes.length > 0) {
+            draft.importNotes = Array.from(new Set([...(draft.importNotes ?? []), ...wireNotes]));
+          }
         });
+        if (wireNotes.length > 0) {
+          setToast(
+            language === 'ar'
+              ? 'التشغيل أنشأ مدخلات تلقائياً (منتج أو مراحل أو مسارات). شوف الملاحظة في التحليلات قبل ما تعتمد على النتائج.'
+              : 'Run generated missing inputs (product, stages, routes or workers). See the note in Analytics before relying on results.',
+            'info'
+          );
+        }
         project = get().project;
         validationIssues = get().validationIssues;
       }
@@ -1444,9 +1457,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           project.products[0].routeStageIds.length === 0)
       ) {
         const wired = autoWireProjectForSimulation(project).updated;
+        const wireNotes = detectAutoWireNotes(project, wired);
         commitProjectEdit((draft) => {
           Object.assign(draft, wired);
+          if (wireNotes.length > 0) {
+            draft.importNotes = Array.from(new Set([...(draft.importNotes ?? []), ...wireNotes]));
+          }
         });
+        if (wireNotes.length > 0) {
+          setToast(
+            language === 'ar'
+              ? 'التشغيل أنشأ مدخلات تلقائياً (منتج أو مراحل أو مسارات). شوف الملاحظة في التحليلات قبل ما تعتمد على النتائج.'
+              : 'Run generated missing inputs (product, stages, routes or workers). See the note in Analytics before relying on results.',
+            'info'
+          );
+        }
         project = get().project;
         validationIssues = get().validationIssues;
       }
