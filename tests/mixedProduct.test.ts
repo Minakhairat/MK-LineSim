@@ -410,3 +410,28 @@ test('Independent lines on different calendars: each line scheduled time is the 
   assert.equal(r.kpis.oeeMixedTimeWeighted, true);
   near(r.kpis.performancePct, (6020 / 41400) * 100); near(r.kpis.qualityPct, (5960 / 6020) * 100); near(r.kpis.oeePct, (5960 / 41400) * 100);
 });
+
+// (j) Batch size 6 with 2 products (A x1, B x2), arrival 60 s: the buffer rule k(b-1)+1 = 11. Buffer 10: nothing completes, the validator warns, a
+//     batch_starved stall is recorded; buffer 11: flows with A 137+11, B 132+11 and no stall. Manual routing for B gives the same counts.
+//     Hand P (buffer 11, auto, weighted): 60x148 + 120x143 = 26040 s over 27000 s = 96.44%. Manual (count-based): 90 s x 291 = 26190 s = 97.00%.
+//     One fixture; the manual route follows the shared graph.
+test('Batch size 6 with 2 products: buffer rule holds at 10 and 11, manual routing gives the same counts (one fixture)', () => {
+  const make = (manual: boolean, buf: number) => {
+    const p: any = createDesertAirCoolerProject();
+    for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 6; s.batchMode = 'collect_batch'; s.bufferCapacity = buf; }
+    const B = structuredClone(p.products[0]); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; B.cycleTimeMultiplier = 2;
+    if (manual) B.routingMode = 'manual';
+    p.products[0].mixWeight = 1; p.products.push(B); p.simulationConfig.arrivalIntervalSec = 60;
+    return { p, r: run(p) };
+  };
+  for (const manual of [false, true]) {
+    const low = make(manual, 10);
+    assert.deepEqual(low.r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[0, 0], [0, 0]]);
+    assert.equal(low.r.stallWarnings.length, 1);
+    assert.ok((validateProject(low.p) as any[]).some((i) => /batch/i.test(i.id) && i.severity === 'warning'));
+    const ok = make(manual, 11);
+    assert.deepEqual(ok.r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[137, 11], [132, 11]]);
+    assert.equal(ok.r.stallWarnings.length, 0);
+    near(ok.r.kpis.performancePct, ((manual ? 26190 : 26040) / 27000) * 100);
+  }
+});
