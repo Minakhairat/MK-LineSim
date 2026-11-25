@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { detectAutoWireNotes, markGeneratedInputs } from '../utils/importNotes';
+import { detectAutoWireNotes, markGeneratedInputs, stampGeneratedInputs } from '../utils/importNotes';
 import {
   AppLanguage,
   AppTheme,
@@ -1341,7 +1341,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { simEngine } = get();
     if (!simEngine) return;
     simEngine.status = 'completed';
-    const result = simEngine.buildResult();
+    const result = stampGeneratedInputs(simEngine.buildResult(), get().project);
     const snap = simEngine.getSnapshot();
     set((s) => ({
       simSnapshot: { ...snap, status: 'completed', result },
@@ -1401,7 +1401,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       simEngine.clockSec - (simSnapshot.result.kpis.calendarTimeSec || 0) >= Math.max(2, speed * 0.25);
     const snap = simEngine.getSnapshot(shouldRefreshResult);
     if (snap.status === 'completed') {
-      const result = snap.result ?? simEngine.buildResult();
+      const result = stampGeneratedInputs(snap.result ?? simEngine.buildResult(), get().project);
       set((s) => ({
         simSnapshot: { ...snap, result },
         simAllEvents: simEngine.getAllEvents(),
@@ -1500,7 +1500,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (get().simActiveRequestId !== requestId) {
         return null;
       }
-      const { result, snapshot, allEvents } = output;
+      const { snapshot, allEvents } = output;
+      const result = stampGeneratedInputs(output.result, get().project);
       set((s) => ({
         simWorkerBusy: false,
         simWorkerProgressPct: 100,
@@ -1564,7 +1565,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateScenarioResult: (scenId, result) =>
     get().commitProjectEdit((draft) => {
       const sc = draft.scenarios.find((s) => s.id === scenId);
-      if (sc) sc.result = result;
+      if (sc) sc.result = stampGeneratedInputs(result, draft);
     }, true),
 
   deleteScenario: (scenId) =>
