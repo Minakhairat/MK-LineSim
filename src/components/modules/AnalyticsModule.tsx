@@ -15,7 +15,7 @@ import {
 } from 'chart.js';
 import { Maximize2, Minimize2, Play } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
-import { GeneratedInputsStrip, ImportNotesBanner } from '../ImportNotesBanner';
+import { GeneratedInputsStrip, ImportNotesBanner, ReliabilityConflictStrip } from '../ImportNotesBanner';
 import { generatedInputCodes, resultProvenance } from '../../utils/importNotes';
 import { formatDuration } from '../../utils/units';
 import { oeeBasisUsesSkippedStage } from '../../utils/oeeBasis';
@@ -307,6 +307,7 @@ export const AnalyticsModule: React.FC = () => {
               ? { codes: generatedInputCodes(project), unknown: false } // live in-progress result of the current project
               : resultProvenance(result)
           } />
+        <ReliabilityConflictStrip rows={simSnapshot.result && !simSnapshot.result.generatedInputs ? undefined : (result?.reliabilityConflicts ?? [])} />
 
         {/* Structured KPI Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

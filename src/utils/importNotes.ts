@@ -1,3 +1,6 @@
+import type { LayoutObject } from '../types/project';
+import { reliabilityConflict } from '../engineering/validationEngine';
+
 // Assumptions made while importing an older or incomplete project file. Codes are stored on the project (importNotes)
 // so the user can see what was filled in instead of discovering it from the results.
 export type ImportNoteCode =
@@ -132,8 +135,33 @@ export function isGeneratedInputCode(code: string): boolean {
 export type ResultProvenance = { codes: ImportNoteCode[]; unknown: boolean };
 
 // Stamps a freshly computed result with the generated inputs that the project had at run time.
-export function stampGeneratedInputs<R extends { generatedInputs?: string[] }>(result: R, project: Wirable): R {
-  return { ...result, generatedInputs: generatedInputCodes(project) };
+export function stampGeneratedInputs<R extends { generatedInputs?: string[]; reliabilityConflicts?: ReliabilityConflictRow[] }>(
+  result: R,
+  project: Wirable & { layoutObjects?: LayoutObject[]; simulationConfig?: { enableBreakdowns?: boolean } }
+): R {
+  const stamped: R = { ...result, generatedInputs: generatedInputCodes(project) };
+  if (project.layoutObjects && project.simulationConfig) {
+    stamped.reliabilityConflicts = reliabilityConflictRows(project.layoutObjects, !!project.simulationConfig.enableBreakdowns);
+  }
+  return stamped;
+}
+
+export type ReliabilityConflictRow = { name: string; availabilityPct: number; derivedPct: number };
+
+export function reliabilityConflictRows(objects: LayoutObject[], enableBreakdowns: boolean): ReliabilityConflictRow[] {
+  const out: ReliabilityConflictRow[] = [];
+  for (const o of objects) {
+    const c = reliabilityConflict(o, enableBreakdowns);
+    if (c) out.push({ name: o.name, availabilityPct: c.availability * 100, derivedPct: c.inherentAvailability * 100 });
+  }
+  return out;
+}
+
+export function reliabilityConflictText(rows: ReliabilityConflictRow[], isAr: boolean): string {
+  const list = rows.map((r) => `${r.name} (${r.availabilityPct.toFixed(1)}% → ${r.derivedPct.toFixed(1)}%)`).join(isAr ? '، ' : ', ');
+  return isAr
+    ? `في المعدات دي نسبة التوفر المكتوبة بتختلف عن MTBF/(MTBF+MTTR)، والمحاكاة استخدمت القيمة المحسوبة من MTBF وMTTR مش النسبة المكتوبة: ${list}. وحّد القيمتين ثم شغّل من جديد.`
+    : `For these machines the stated availability differs from MTBF/(MTBF+MTTR), and the run used the value derived from MTBF and MTTR, not the stated availability: ${list}. Make the two consistent and run again.`;
 }
 
 // What a saved result says about its own inputs. No stamp means the result predates stamping: unknown, not clean.

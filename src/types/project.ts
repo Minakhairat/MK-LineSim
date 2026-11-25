@@ -728,6 +728,8 @@ export interface SimulationKPIs {
 export interface SimulationResult {
   /** Generated-input codes that were in the project when this result was computed. Absent on results from before stamping: provenance unknown, never assumed clean. */
   generatedInputs?: string[];
+  /** Machines whose stated availability disagreed with MTBF/(MTBF+MTTR) when this result was computed (the run used the derived value). Absent on older results: unknown. Empty array: checked, none. */
+  reliabilityConflicts?: Array<{ name: string; availabilityPct: number; derivedPct: number }>;
   completedAtWallTime: string;
   simTimeSec: number;
   kpis: SimulationKPIs;
