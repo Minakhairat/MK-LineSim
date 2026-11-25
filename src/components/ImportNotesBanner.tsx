@@ -7,6 +7,7 @@ import {
   isGeneratedInputCode,
   reliabilityConflictRows,
   reliabilityConflictText,
+  reliabilityUnknownText,
   unknownProvenanceText,
 } from '../utils/importNotes';
 
@@ -111,20 +112,31 @@ export function GeneratedInputsStrip({ provenance, perRow }: { provenance?: Resu
   );
 }
 
-// Shown next to a result whose run used MTBF/MTTR instead of a conflicting stated availability.
-// Comes from the result's own stamp; without a stamp it follows the project's current inputs (live in-progress result).
-export function ReliabilityConflictStrip({ rows }: { rows?: ReliabilityConflictRow[] }) {
+// Shown next to results whose run used MTBF/MTTR instead of a conflicting stated availability, or whose
+// saved result does not say (no stamp = unknown, not clean). Without `provenance` (live in-progress result)
+// it follows the project's current inputs.
+export function ReliabilityConflictStrip({ provenance, perRow }: { provenance?: ResultProvenance; perRow?: boolean }) {
   const project = useAppStore((s) => s.project);
   const language = useAppStore((s) => s.language);
-  const list = rows ?? reliabilityConflictRows(project.layoutObjects, !!project.simulationConfig.enableBreakdowns);
-  if (list.length === 0) return null;
+  const list = provenance
+    ? provenance.reliability ?? []
+    : reliabilityConflictRows(project.layoutObjects, !!project.simulationConfig.enableBreakdowns);
+  const unknown = provenance?.reliabilityUnknown ?? false;
+  if (list.length === 0 && !unknown) return null;
+  const isAr = language === 'ar';
   return (
     <div
       role="note"
       data-testid="reliability-conflict"
       className="w-full max-w-3xl text-start rounded border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900"
     >
-      {reliabilityConflictText(list, language === 'ar')}
+      {list.length > 0 && (
+        <div>
+          {perRow ? (isAr ? 'الصفوف الموسومة بس: ' : 'Marked rows only: ') : ''}
+          {reliabilityConflictText(list, isAr)}
+        </div>
+      )}
+      {unknown && <div className={list.length > 0 ? 'mt-1' : ''}>{reliabilityUnknownText(isAr)}</div>}
     </div>
   );
 }
