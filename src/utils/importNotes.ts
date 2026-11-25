@@ -72,8 +72,8 @@ export function importNoteText(code: string, isAr: boolean): string {
         : 'Some products had no stage route, so Run assigned routes automatically. Check each product route.';
     case 'autowired_workers':
       return isAr
-        ? 'المشروع ماكانش فيه عمال، فالتشغيل عمل عمال تلقائيين. راجع عدد العمال وتعيينهم.'
-        : 'The project had no workers, so Run generated workers. Check worker counts and assignments.';
+        ? 'فيه مراحل ماكانش ليها عمال معيّنين، فالتشغيل عمل عمال تلقائيين ليها. راجع عدد العمال وتعيينهم.'
+        : 'Run generated workers for stages that had none assigned. Check worker counts and assignments.';
     default:
       return code;
   }
