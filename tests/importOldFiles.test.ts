@@ -49,3 +49,22 @@ test('Import records what was assumed (importNotes) so the UI can show it', () =
   // notes survive a second migration (reload from storage) without duplicating
   assert.deepEqual((migrateProjectSchema(m) as any).importNotes, m.importNotes);
 });
+
+test('Import rejects a simulationConfig missing planned units, shift duration or arrival interval instead of loading a project that crashes the app', () => {
+  for (const key of ['maxPlannedUnits', 'durationSec', 'arrivalIntervalSec']) {
+    const bad = clone();
+    delete bad.simulationConfig[key];
+    assert.throws(() => migrateProjectSchema(bad), new RegExp(key));
+    const str = clone();
+    str.simulationConfig[key] = 'abc';
+    assert.throws(() => migrateProjectSchema(str), new RegExp(key));
+  }
+  // 0 is a valid explicit value (unlimited planned units) and still imports
+  const zero = clone();
+  zero.simulationConfig.maxPlannedUnits = 0;
+  assert.equal(migrateProjectSchema(zero).simulationConfig.maxPlannedUnits, 0);
+  // a file with no simulationConfig at all keeps its existing default-plus-note behaviour
+  const none = clone();
+  delete none.simulationConfig;
+  assert.doesNotThrow(() => migrateProjectSchema(none));
+});
