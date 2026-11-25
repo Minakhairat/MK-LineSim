@@ -1,3 +1,4 @@
+import { performanceDefinitionText } from './oeeBasis';
 import { BETA_LIMITS_AR, BETA_LIMITS_EN } from './betaLimits';
 import type { LayoutObject } from '../types/project';
 import { reliabilityConflict } from '../engineering/validationEngine';
@@ -261,10 +262,52 @@ export function projectExportNotice(project: { lastSimulationResult?: ResultLike
   return { status, notes, notesAr };
 }
 
-export function projectJsonText(project: { lastSimulationResult?: ResultLike; scenarios?: { result?: ResultLike }[] }): string {
-  return JSON.stringify({ exportNotice: { limits: BETA_LIMITS_EN, limitsAr: BETA_LIMITS_AR, ...projectExportNotice(project) }, ...project }, null, 2);
+type PerfResultLike = ResultLike & { kpis?: { oeeMixedTimeWeighted?: boolean; actualProduction?: number } };
+type PerfProjectLike = { lastSimulationResult?: PerfResultLike; scenarios?: { id?: string; name?: string; result?: PerfResultLike }[]; products?: unknown[] };
+
+// How to read performancePct for each result in the file. The definition differs by case; the manual/planned-mix wording
+// is used only where the app uses it (more than one product, not time-weighted).
+export function performanceBasisFor(result: PerfResultLike, productCount: number): 'single_product' | 'multi_product_planned_mix' | 'multi_product_time_weighted' | 'no_production' {
+  if (!(Number(result.kpis?.actualProduction) > 0)) return 'no_production';
+  if (productCount <= 1) return 'single_product';
+  return result.kpis?.oeeMixedTimeWeighted ? 'multi_product_time_weighted' : 'multi_product_planned_mix';
 }
 
+const TIME_WEIGHTED_EN =
+  "More than one product, auto-routed: Performance, Quality and OEE are weighted by each product's own ideal cycle (time-weighted), not by one slowest-stage cycle and not by a planned-mix average. See the app's Analytics note. It can exceed 100% and is then flagged.";
+const TIME_WEIGHTED_AR =
+  'أكتر من منتج بتوجيه تلقائي: الأداء والجودة وOEE موزونة بزمن الدورة المثالي لكل منتج (موزونة بالزمن)، مش بدورة أبطأ مرحلة واحدة ومش بمتوسط المزيج المخطط. راجع ملاحظة التحليلات في البرنامج. ممكن يعدي 100٪ ووقتها بيظهر تحذير.';
+
+export function performanceDefinitionMeta(project: PerfProjectLike) {
+  const n = (project.products ?? []).length;
+  const entries: { result: string; basis: string; definition?: string; definitionAr?: string }[] = [];
+  const add = (name: string, r?: PerfResultLike) => {
+    if (!r) return;
+    const basis = performanceBasisFor(r, n);
+    if (basis === 'no_production') entries.push({ result: name, basis });
+    else if (basis === 'multi_product_time_weighted') entries.push({ result: name, basis, definition: TIME_WEIGHTED_EN, definitionAr: TIME_WEIGHTED_AR });
+    else entries.push({ result: name, basis, definition: performanceDefinitionText(false, basis === 'multi_product_planned_mix'), definitionAr: performanceDefinitionText(true, basis === 'multi_product_planned_mix') });
+  };
+  add('lastSimulationResult', project.lastSimulationResult);
+  for (const sc of project.scenarios ?? []) add(`scenario:${sc.name ?? sc.id ?? ''}`, sc.result);
+  return entries;
+}
+
+export function projectJsonText(project: PerfProjectLike & { lastSimulationResult?: ResultLike; scenarios?: { result?: ResultLike }[] }): string {
+  return JSON.stringify(
+    {
+      exportNotice: {
+        limits: BETA_LIMITS_EN,
+        limitsAr: BETA_LIMITS_AR,
+        ...projectExportNotice(project),
+        performanceDefinitions: performanceDefinitionMeta(project),
+      },
+      ...project,
+    },
+    null,
+    2
+  );
+}
 // Companion text file for the event-log CSV: same notices as the CSV's end-of-file NOTICE rows, in both languages,
 // in a file a person opens first. The CSV itself stays a plain event table.
 export function eventsCsvNoticeText(prov: ResultProvenance, csvFileName: string): string {
