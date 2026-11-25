@@ -51,7 +51,7 @@ test('Import records what was assumed (importNotes) so the UI can show it', () =
 });
 
 test('Import rejects a simulationConfig missing planned units, shift duration or arrival interval instead of loading a project that crashes the app', () => {
-  for (const key of ['maxPlannedUnits', 'durationSec', 'arrivalIntervalSec']) {
+  for (const key of ['maxPlannedUnits', 'durationSec', 'arrivalIntervalSec', 'randomSeed']) {
     const bad = clone();
     delete bad.simulationConfig[key];
     assert.throws(() => migrateProjectSchema(bad), new RegExp(key));
