@@ -375,3 +375,16 @@ test('A hidden layout object that a stage uses is still checked for bad dimensio
     assert.equal(validateProject(q).filter((i: any) => i.severity === 'error').length, 0);
   }
 });
+
+import { isValidScenarioWorkerCount, scenarioWorkerCountUnreliable } from '../src/utils/units';
+
+test('Scenario worker count: only whole numbers of 1 or more are valid, and old invalid saved rows are flagged', () => {
+  for (const ok of [1, 2, 10, 120]) assert.equal(isValidScenarioWorkerCount(ok), true);
+  for (const bad of [0, -1, 2.5, 0.4, NaN, Infinity, '3', null, undefined]) assert.equal(isValidScenarioWorkerCount(bad), false);
+  const res = { kpis: {} };
+  assert.equal(scenarioWorkerCountUnreliable({ overrides: { workerCount: 0 }, result: res }), true);
+  assert.equal(scenarioWorkerCountUnreliable({ overrides: { workerCount: 2.5 }, result: res }), true);
+  assert.equal(scenarioWorkerCountUnreliable({ overrides: { workerCount: 3 }, result: res }), false);
+  assert.equal(scenarioWorkerCountUnreliable({ overrides: { workerCount: 0 } }), false); // no result yet, nothing to rely on
+  assert.equal(scenarioWorkerCountUnreliable({ isBaseline: true, overrides: { workerCount: 0 }, result: res }), false);
+});
