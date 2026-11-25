@@ -264,3 +264,20 @@ export function projectExportNotice(project: { lastSimulationResult?: ResultLike
 export function projectJsonText(project: { lastSimulationResult?: ResultLike; scenarios?: { result?: ResultLike }[] }): string {
   return JSON.stringify({ exportNotice: { limits: BETA_LIMITS_EN, limitsAr: BETA_LIMITS_AR, ...projectExportNotice(project) }, ...project }, null, 2);
 }
+
+// Companion text file for the event-log CSV: same notices as the CSV's end-of-file NOTICE rows, in both languages,
+// in a file a person opens first. The CSV itself stays a plain event table.
+export function eventsCsvNoticeText(prov: ResultProvenance, csvFileName: string): string {
+  const en = exportDisclosureLines(prov, false);
+  const ar = exportDisclosureLines(prov, true);
+  return [
+    `NOTICE for ${csvFileName}`,
+    '',
+    BETA_LIMITS_EN,
+    BETA_LIMITS_AR,
+    '',
+    ...(en.length > 0 ? ['Result notices (English):', ...en.map((l) => '- ' + l), '', 'ملاحظات النتيجة (عربي):', ...ar.map((l) => '- ' + l), ''] : []),
+    'The same notices are also written as NOTICE rows at the end of the CSV file.',
+    '',
+  ].join('\n');
+}
