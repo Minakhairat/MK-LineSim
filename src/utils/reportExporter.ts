@@ -1,6 +1,6 @@
 import { generatedInputCodes, ResultProvenance, resultProvenance, unionProvenance, unknownProvenanceText } from './importNotes';
 import { mostLoadedUtilText } from './bottleneckLabel';
-import { formatBeltSpeed, leadTimeText, scenarioWorkerCountUnreliable } from './units';
+import { formatBeltSpeed, leadTimeText, scenarioWorkerCountUnreliable, scenarioWorkerMismatchNotice } from './units';
 import { jsPDF } from 'jspdf';
 import { ProjectData, SimulationResult } from '../types/project';
 import { formatDuration } from './units';
@@ -138,11 +138,7 @@ function drawReportChrome(
         ? 'مصدر مدخلات النتائج المحفوظة غير معروف (قبل تسجيل المصدر). شغّل المحاكاة من جديد.'
         : 'Input provenance of these saved results is unknown (computed before it was recorded). Re-run the simulation.'
       : '';
-    const wkLine = workerMismatchRows
-      ? isAr
-        ? 'الصفوف الموسومة "عدد العمال مش زي المشغَّل" محفوظ فيها عدد عمال مش رقم صحيح ١ أو أكتر، والمحرك شغّل بعدد تاني غير الظاهر في عمود العمال. ما تعتمدش عليها وشغّلها من جديد.'
-        : 'Rows marked "workers not as run" have a saved worker count that is not a whole number of 1 or more, so the engine ran a different count than the Workers column shows. Do not rely on them; re-run.'
-      : '';
+    const wkLine = workerMismatchRows ? scenarioWorkerMismatchNotice(isAr) : '';
     const words = [genLine, unkLine, wkLine].filter(Boolean).join(' ').split(/\s+/);
     const wrapped: string[] = [];
     let curLine = '';
