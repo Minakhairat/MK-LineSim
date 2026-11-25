@@ -523,6 +523,33 @@ export function validateProject(project: ProjectData): ValidationIssue[] {
     }
   }
 
+  // 5a. Product targets versus mix weights: analytical capacity weights products by target quantity when any target is
+  // set, while weighted-mix dispatching releases by mixWeight until a quota is reached. A difference between the two
+  // makes the theoretical figures describe a different mix than the run.
+  if (products && products.length >= 2) {
+    const rule = project.simulationConfig.dispatchingRule ?? 'weighted_mix';
+    const targets = products.map((p) => (Number(p.targetQuantity) > 0 ? Number(p.targetQuantity) : 0));
+    const sumT = targets.reduce((a, b) => a + b, 0);
+    if (rule === 'weighted_mix' && sumT > 0) {
+      const mix = products.map((p) => Math.max(0.01, Number(p.mixWeight ?? 1)));
+      const sumM = mix.reduce((a, b) => a + b, 0);
+      const differs = products.some((_, i) => Math.abs(targets[i] / sumT - mix[i] / sumM) > 0.02);
+      if (differs) {
+        issues.push({
+          id: 'val_prod_target_vs_mix',
+          severity: 'warning',
+          code: 'PRODUCT_TARGET_MIX_MISMATCH',
+          message:
+            'Product target quantities and mix weights give different product shares. Theoretical capacity and ideal cycle use the target shares; the run releases products by mix weight until a target is reached. Align them, or read the theoretical figures as describing the target mix.',
+          messageAr:
+            'الكميات المستهدفة للمنتجات وأوزان المزيج تعطي نسبًا مختلفة. الطاقة النظرية وزمن الدورة المثالي بيستخدموا نسب الكميات المستهدفة، والتشغيل بيطلق المنتجات بحسب وزن المزيج لحد ما يوصل لكل هدف. وحّد القيمتين، أو اقرأ الأرقام النظرية على إنها للمزيج المستهدف.',
+          targetId: products[0].id,
+          targetType: 'product',
+        });
+      }
+    }
+  }
+
   // 5b. Workers validation
   for (const w of workers) {
     if (

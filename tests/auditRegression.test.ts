@@ -455,3 +455,20 @@ test('bottleneck ranking still finds the loaded stage when its times sit only on
   assert.equal(b.kpis.goodUnits, a.kpis.goodUnits); // the run itself is unchanged
   assert.equal(b.kpis.bottleneckStageName, a.kpis.bottleneckStageName);
 });
+
+// Product targets versus mix weights (RISK-04 follow-up): theoretical capacity weights by targets, the run by mixWeight.
+test('Validator warns when product target shares differ from mix weight shares', () => {
+  const mk = (w: [number, number], t: [number, number]) => {
+    const p: any = createDesertAirCoolerProject();
+    const B = structuredClone(p.products[0]);
+    B.id = 'pB'; B.name = 'B';
+    p.products[0].mixWeight = w[0]; p.products[0].targetQuantity = t[0];
+    B.mixWeight = w[1]; B.targetQuantity = t[1];
+    p.products.push(B);
+    return p;
+  };
+  assert.ok(validateProject(mk([3, 1], [600, 600])).some((i) => i.code === 'PRODUCT_TARGET_MIX_MISMATCH'));
+  assert.ok(!validateProject(mk([1, 1], [600, 600])).some((i) => i.code === 'PRODUCT_TARGET_MIX_MISMATCH'));
+  assert.ok(!validateProject(mk([3, 1], [0, 0])).some((i) => i.code === 'PRODUCT_TARGET_MIX_MISMATCH'));
+  assert.ok(!validateProject(createDesertAirCoolerProject()).some((i) => i.code === 'PRODUCT_TARGET_MIX_MISMATCH'));
+});
