@@ -225,3 +225,10 @@ export function scenarioWorkerCountUnreliable(sc: {
 }): boolean {
   return !sc.isBaseline && !!sc.result && !isValidScenarioWorkerCount(sc.overrides.workerCount);
 }
+
+/** Explanation shown on screen and in the scenarios PDF when saved rows have an invalid worker count. */
+export function scenarioWorkerMismatchNotice(isAr: boolean): string {
+  return isAr
+    ? 'الصفوف الموسومة "عدد العمال مش زي المشغَّل" محفوظ فيها عدد عمال مش رقم صحيح ١ أو أكتر، والمحرك شغّل بعدد تاني غير الظاهر في عمود العمال. ما تعتمدش عليها. ولإعادة التشغيل لازم تعدّل عدد العمال لرقم صحيح ١ أو أكتر (زر التعديل) وتشغّل السيناريو من جديد.'
+    : 'Rows marked "workers not as run" have a saved worker count that is not a whole number of 1 or more, so the engine ran a different count than the Workers column shows. Do not rely on them. To recalculate, edit the row (pencil), set the worker count to a whole number of 1 or more, and run it again.';
+}
