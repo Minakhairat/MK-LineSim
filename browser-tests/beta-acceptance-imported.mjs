@@ -1,7 +1,7 @@
 // Manual acceptance run against the deployed site for IMPORTED projects (not part of `npm test`).
 //   CHROME=/usr/bin/google-chrome node browser-tests/beta-acceptance-imported.mjs     (optional URL=...)
-// Imports two fixtures through the real file input: a project with an MTBF/MTTR conflict, and a two-product project whose
-// modeled run stalls. Checks limits strip, conflict notice, stall note, JSON export notice. Desktop English only.
+// Imports three fixtures through the real file input: a project with an MTBF/MTTR conflict, and a two-product project whose
+// modeled run stalls, and CONTROLLED INVALID LEGACY DATA (a hand-made saved scenario row with worker count 2.5; the app UI itself refuses to create such a row). Checks limits strip, conflict notice, stall note, JSON export notice. Desktop English only.
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -54,6 +54,18 @@ const jsonNotice = (dl) => { const f = fs.readdirSync(dl).find((x) => x.endsWith
   check('B: no Performance definition caption is shown for the stalled run', await s.pg.evaluate(() => !document.querySelector('[data-testid=performance-definition]')));
   await s.click('Reports'); await sleep(1500); await s.click('Export JSON'); await sleep(3500);
   check('B: JSON export carries an exportNotice', !!jsonNotice(s.dl));
+  await s.browser.close();
+}
+// C. controlled invalid legacy data, Arabic UI: saved scenario row with worker count 2.5
+{
+  const s = await session('legacy_invalid_scenario_workers.json');
+  await s.click('العربية'); await sleep(1200); await s.click('السيناريوهات'); await sleep(2000);
+  const row = await s.pg.evaluate(() => document.querySelector('[data-testid=row-workers-unreliable]')?.innerText || '');
+  const note = await s.pg.evaluate(() => document.querySelector('[data-testid=workers-not-as-run-note]')?.innerText || '');
+  check('C: Arabic row tag shown for the saved 2.5-worker scenario', row.includes('عدد العمال مش زي المشغَّل'), row);
+  check('C: Arabic explanatory note shown', note.includes('عدد عمال مش رقم صحيح'));
+  await s.click('التقارير'); await sleep(1500); await s.click('تصدير مقارنة السيناريوهات PDF'); await sleep(4000);
+  check('C: Arabic Scenarios PDF downloaded', fs.readdirSync(s.dl).some((f) => f.endsWith('_scenarios.pdf')));
   await s.browser.close();
 }
 console.log(failed ? `${failed} ASSERT(S) FAILED` : 'ALL ASSERTS PASSED');
