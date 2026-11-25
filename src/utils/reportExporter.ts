@@ -117,11 +117,8 @@ function drawReportChrome(
       autowired_workers: ['workers', 'عمال'],
     };
     const list = gen.map((c) => (names[c] ? names[c][isAr ? 1 : 0] : c)).join(', ');
-    ctx.fillStyle = '#fef2f2';
-    ctx.fillRect(0, 157, w, 40);
-    ctx.fillStyle = '#991b1b';
-    ctx.font = `700 16px ${FONT_STACK}`;
-    ctx.textAlign = isAr ? 'right' : 'left';
+    const maxLineW = w - 96;
+    ctx.font = `700 15px ${FONT_STACK}`;
     const genLine = gen.length > 0 && perRow
       ? isAr
         ? `الصفوف الموسومة فقط مبنية على مدخلات اتعملت تلقائياً: ${list}. الصفوف غير الموسومة لها نتيجة مسجّل إنها على مدخلاتك.`
@@ -140,8 +137,26 @@ function drawReportChrome(
         ? 'مصدر مدخلات النتائج المحفوظة غير معروف (قبل تسجيل المصدر). شغّل المحاكاة من جديد.'
         : 'Input provenance of these saved results is unknown (computed before it was recorded). Re-run the simulation.'
       : '';
-    ctx.fillText([genLine, unkLine].filter(Boolean).join(' '), titleX, 177, w - 96);
-    used = 184 + 40;
+    const words = [genLine, unkLine].filter(Boolean).join(' ').split(/\s+/);
+    const wrapped: string[] = [];
+    let curLine = '';
+    for (const wd of words) {
+      const t = curLine ? `${curLine} ${wd}` : wd;
+      if (curLine && ctx.measureText(t).width > maxLineW) {
+        wrapped.push(curLine);
+        curLine = wd;
+      } else curLine = t;
+    }
+    if (curLine) wrapped.push(curLine);
+    const boxH = 16 + wrapped.length * 21;
+    ctx.fillStyle = '#fef2f2';
+    ctx.fillRect(0, 157, w, boxH);
+    ctx.fillStyle = '#991b1b';
+    ctx.font = `700 15px ${FONT_STACK}`;
+    ctx.textAlign = isAr ? 'right' : 'left';
+    ctx.textBaseline = 'alphabetic';
+    wrapped.forEach((ln, li) => ctx.fillText(ln, titleX, 157 + 20 + li * 21, maxLineW));
+    used = 157 + boxH + 27;
   }
 
   ctx.restore();
