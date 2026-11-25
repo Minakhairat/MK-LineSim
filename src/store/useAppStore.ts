@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { detectAutoWireNotes, markGeneratedInputs, stampGeneratedInputs } from '../utils/importNotes';
+import { detectAutoWireNotes, hasStageWithoutWorker, markGeneratedInputs, stampGeneratedInputs } from '../utils/importNotes';
 import {
   AppLanguage,
   AppTheme,
@@ -1266,7 +1266,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         hasFloorEquip &&
         (project.stages.length === 0 ||
           project.products.length === 0 ||
-          project.products[0].routeStageIds.length === 0)
+          project.products[0].routeStageIds.length === 0 ||
+          hasStageWithoutWorker(project))
       ) {
         const wired = autoWireProjectForSimulation(project).updated;
         const wireNotes = detectAutoWireNotes(project, wired);
@@ -1274,7 +1275,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           Object.assign(draft, wired);
           markGeneratedInputs(draft, project);
         });
-        if (wireNotes.length > 0) {
+        if (wireNotes.length > 0 || wired.workers.length > project.workers.length) {
           setToast(
             language === 'ar'
               ? 'التشغيل أنشأ مدخلات تلقائياً (منتج أو مراحل أو مسارات). شوف الملاحظة في التحليلات قبل ما تعتمد على النتائج.'
@@ -1452,7 +1453,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         hasFloorEquip &&
         (project.stages.length === 0 ||
           project.products.length === 0 ||
-          project.products[0].routeStageIds.length === 0)
+          project.products[0].routeStageIds.length === 0 ||
+          hasStageWithoutWorker(project))
       ) {
         const wired = autoWireProjectForSimulation(project).updated;
         const wireNotes = detectAutoWireNotes(project, wired);
@@ -1460,7 +1462,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           Object.assign(draft, wired);
           markGeneratedInputs(draft, project);
         });
-        if (wireNotes.length > 0) {
+        if (wireNotes.length > 0 || wired.workers.length > project.workers.length) {
           setToast(
             language === 'ar'
               ? 'التشغيل أنشأ مدخلات تلقائياً (منتج أو مراحل أو مسارات). شوف الملاحظة في التحليلات قبل ما تعتمد على النتائج.'
