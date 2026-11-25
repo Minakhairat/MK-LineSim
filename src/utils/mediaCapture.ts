@@ -1,12 +1,81 @@
+import { BETA_LIMITS_AR, BETA_LIMITS_EN } from './betaLimits';
 import { ViewportMode } from '../types/project';
 
-export function downloadDataUrl(dataUrl: string, filename: string): void {
+function saveDataUrl(dataUrl: string, filename: string): void {
   const a = document.createElement('a');
   a.href = dataUrl;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxW: number): string[] {
+  const words = text.split(' ');
+  const out: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const next = cur ? cur + ' ' + w : w;
+    if (cur && ctx.measureText(next).width > maxW) {
+      out.push(cur);
+      cur = w;
+    } else cur = next;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/** Returns a PNG data URL with the experimental-version statement (EN and AR) in a strip BELOW the image.
+ * The original pixels are copied 1:1 (no crop, no scale, no overlay). */
+export function addLimitsCaptionToPng(img: CanvasImageSource & { width: number; height: number }): string {
+  const w = img.width;
+  const h = img.height;
+  const fontPx = Math.max(14, Math.round(w / 75));
+  const pad = Math.round(fontPx * 0.8);
+  const lineH = Math.round(fontPx * 1.45);
+  const measure = document.createElement('canvas').getContext('2d')!;
+  measure.font = `${fontPx}px sans-serif`;
+  const maxW = w - pad * 2;
+  const en = wrapLines(measure, BETA_LIMITS_EN, maxW);
+  const ar = wrapLines(measure, BETA_LIMITS_AR, maxW);
+  const stripH = pad * 3 + (en.length + ar.length) * lineH;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h + stripH;
+  const ctx = c.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+  ctx.fillStyle = '#fff7e0';
+  ctx.fillRect(0, h, w, stripH);
+  ctx.fillStyle = '#7a4a00';
+  ctx.font = `${fontPx}px sans-serif`;
+  ctx.textBaseline = 'top';
+  let y = h + pad;
+  ctx.direction = 'ltr';
+  ctx.textAlign = 'left';
+  for (const l of en) { ctx.fillText(l, pad, y); y += lineH; }
+  y += pad;
+  ctx.direction = 'rtl';
+  ctx.textAlign = 'right';
+  for (const l of ar) { ctx.fillText(l, w - pad, y); y += lineH; }
+  return c.toDataURL('image/png');
+}
+
+/** PNG downloads carry the statement. If the image cannot be decoded, the original is saved unchanged (unstamped). */
+export function downloadDataUrl(dataUrl: string, filename: string): void {
+  if (!/^data:image\/png/i.test(dataUrl)) {
+    saveDataUrl(dataUrl, filename);
+    return;
+  }
+  const img = new Image();
+  img.onload = () => {
+    try {
+      saveDataUrl(addLimitsCaptionToPng(img), filename);
+    } catch {
+      saveDataUrl(dataUrl, filename);
+    }
+  };
+  img.onerror = () => saveDataUrl(dataUrl, filename);
+  img.src = dataUrl;
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
