@@ -484,7 +484,7 @@ export function mixedProductTimeWeightedOee(
   project: ProjectData,
   productAnalytics: ReadonlyArray<{ productId: string; completedGoodQty: number; scrappedQty: number; reworkUnits?: number }> | undefined,
   totalUnits: number
-): { idealWorkSec: number; idealGoodWorkSec: number; parallelLines: number } | null {
+): { idealWorkSec: number; idealGoodWorkSec: number; parallelLines: number; lineStageIds?: string[][] } | null {
   const ps = project.products ?? [];
   if (ps.length < 2 || !productAnalytics || productAnalytics.length !== ps.length) return null;
   const allIds = project.stages.map((st) => st.id);
@@ -538,7 +538,7 @@ export function mixedProductTimeWeightedOee(
     idealGoodWorkSec += ideal * a.completedGoodQty;
   }
   if (Math.abs(counted - totalUnits) > 1e-6 || !(idealWorkSec > 0)) return null;
-  return { idealWorkSec, idealGoodWorkSec, parallelLines };
+  return { idealWorkSec, idealGoodWorkSec, parallelLines, ...(parallelLines > 1 ? { lineStageIds: sets.map((x) => [...x]) } : {}) };
 }
 
 export function auditProjectTiming(rawProject: ProjectData, simClockSec?: number): ProjectTimingAudit {
@@ -1075,7 +1075,22 @@ export function buildAuditedSimulationKPIs(params: {
   {
     const mw = mixedProductTimeWeightedOee(project, params.productAnalytics, actualProduction);
     if (mw && lineOee.operatingTimeSec > 1e-6 && lineOee.scheduledProductionTimeSec > 1e-6) {
-      const perf = (mw.idealWorkSec / (lineOee.operatingTimeSec * mw.parallelLines)) * 100;
+      // Independent lines: each line's own operating time is the divisor. With equal calendars this is operating time x lines.
+      // With different calendars (shifts on the objects of one line), the lines' scheduled times (mean of each line's stage
+      // scheduled times) are summed and scaled by the plant availability, so a short-shift line is not credited a full shift.
+      let lineFactor = mw.parallelLines;
+      if (mw.parallelLines > 1 && mw.lineStageIds && lineOee.scheduledProductionTimeSec > 1e-6) {
+        const perLine = mw.lineStageIds.map((ids) => {
+          const t = params.stageAnalytics
+            .filter((sa) => ids.includes(sa.stageId) && typeof sa.scheduledTimeSec === 'number' && Number.isFinite(sa.scheduledTimeSec))
+            .map((sa) => sa.scheduledTimeSec as number);
+          return t.length > 0 ? t.reduce((a, b) => a + b, 0) / t.length : NaN;
+        });
+        if (perLine.every((x) => Number.isFinite(x)) && Math.max(...perLine) - Math.min(...perLine) > 0.1) {
+          lineFactor = perLine.reduce((a, b) => a + b, 0) / lineOee.scheduledProductionTimeSec;
+        }
+      }
+      const perf = (mw.idealWorkSec / (lineOee.operatingTimeSec * lineFactor)) * 100;
       const qual = (mw.idealGoodWorkSec / mw.idealWorkSec) * 100;
       // Recompute the anomaly flag on the weighted figure; the old flag belonged to the mix-average basis.
       const { performanceAnomalyReason: _staleReason, ...lineOeeRest } = lineOee;
@@ -1086,7 +1101,7 @@ export function buildAuditedSimulationKPIs(params: {
         performancePct: perf,
         performanceAnomaly: perfAnomaly,
         ...(perfAnomaly
-          ? { performanceAnomalyReason: `Performance anomaly: time-weighted performance ${perf.toFixed(2)}% exceeds 100% (ideal work ${mw.idealWorkSec.toFixed(2)}s > operating time ${(lineOee.operatingTimeSec * mw.parallelLines).toFixed(2)}s).` }
+          ? { performanceAnomalyReason: `Performance anomaly: time-weighted performance ${perf.toFixed(2)}% exceeds 100% (ideal work ${mw.idealWorkSec.toFixed(2)}s > operating time ${(lineOee.operatingTimeSec * lineFactor).toFixed(2)}s).` }
           : {}),
         qualityPct: qual,
         oeePct: (lineOee.availabilityPct / 100) * (perf / 100) * (qual / 100) * 100,

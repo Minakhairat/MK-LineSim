@@ -387,3 +387,25 @@ test('Manual routing with a batch stage: same counts, count-based figure and no 
   assert.equal(auto.kpis.oeeMixedTimeWeighted, true); near(auto.kpis.performancePct, (19320 / 27000) * 100);
   assert.equal(manual.kpis.oeeMixedTimeWeighted, undefined); near(manual.kpis.performancePct, (19350 / 27000) * 100);
 });
+
+// (i) Independent lines on different calendars. Default project, Packing batch 1, arrival 120 s, A on stages 1-4, B on stages 5-8 (disjoint routes),
+//     B's line (equipment and operators) on a 14400 s shift with no break, A's line on the default 27000 s of scheduled time. Recorded good + scrap:
+//     A 60+1, B 59+0 (about 120 units in total, against 223 with equal calendars; why A's line also loses output was not traced).
+//     Ideal cycles A 60 s, B 40 s: ideal work 60x61 + 40x59 = 6020 s, good 60x60 + 40x59 = 5960 s. Line times 27000 + 14400 = 41400 s.
+//     P = 6020/41400 = 14.54%, Q = 99.00%, OEE = 5960/41400 = 14.40%. Before this change the figure used one operating time of 14400 s for both lines
+//     (P 20.90%, OEE 20.69%). One fixture; the divisor uses the mean scheduled time of each line's stages and the plant availability scale.
+test('Independent lines on different calendars: each line scheduled time is the divisor (one fixture)', () => {
+  const p: any = createDesertAirCoolerProject();
+  for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 1; s.batchMode = 'none'; }
+  const ids = p.stages.map((s: any) => s.id);
+  const A = p.products[0]; const B = structuredClone(A); B.id = 'pB'; B.name = 'B'; B.code = 'B'; B.mixWeight = 1; A.mixWeight = 1;
+  A.routeStageIds = ids.slice(0, 4); B.routeStageIds = ids.slice(4); p.products.push(B); p.simulationConfig.arrivalIntervalSec = 120;
+  p.simulationConfig.shifts.push({ id: 'shift_short', name: 'Short', startSec: 0, durationSec: 14400, breaks: [] });
+  const lineB = new Set(p.stages.slice(4).map((x: any) => x.id));
+  for (const st of p.stages.slice(4)) for (const oid of st.assignedObjectIds) { const o = p.layoutObjects.find((x: any) => x.id === oid); if (o) { o.operations = o.operations || {}; o.operations.shiftId = 'shift_short'; } }
+  for (const w of p.workers) if ((w.assignedStageIds || []).some((x: string) => lineB.has(x))) w.shiftId = 'shift_short';
+  const r = run(p);
+  assert.deepEqual(r.productAnalytics.map((x: any) => [x.completedGoodQty, x.scrappedQty]), [[60, 1], [59, 0]]);
+  assert.equal(r.kpis.oeeMixedTimeWeighted, true);
+  near(r.kpis.performancePct, (6020 / 41400) * 100); near(r.kpis.qualityPct, (5960 / 6020) * 100); near(r.kpis.oeePct, (5960 / 41400) * 100);
+});
