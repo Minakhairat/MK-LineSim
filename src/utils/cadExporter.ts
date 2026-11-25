@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { ProjectData, WallOpening } from '../types/project';
 import { buildEquipmentGroup } from '../three/proceduralModels';
 import { downloadBlob, sanitizeFilename } from './mediaCapture';
+import { BETA_LIMITS_AR, BETA_LIMITS_EN } from './betaLimits';
 
 function fmt(n: number, digits = 4): string {
   return Number.isFinite(n) ? n.toFixed(digits) : '0.0000';
@@ -155,6 +156,9 @@ export function generate2DFactoryDxf(project: ProjectData): string {
   const toCadAngle = (rotDeg: number) => (-rotDeg * Math.PI) / 180;
 
   const lines: string[] = [];
+
+  // DXF comment records (group code 999) must precede the first SECTION. ASCII English only: R12 DXF has no Unicode guarantee.
+  lines.push('999', 'MK LineSim EXPERIMENTAL EXPORT', '999', BETA_LIMITS_EN);
 
   // HEADER SECTION
   lines.push(
@@ -464,7 +468,7 @@ export function generate3DFactoryStl(project: ProjectData): ArrayBuffer {
     const byteLen = 84 + allTris.length * 50;
     const buffer = new ArrayBuffer(byteLen);
     const view = new DataView(buffer);
-    const headerStr = 'MK LineSim Binary STL (mm, Z-up) - Eng. Mina Khairat';
+    const headerStr = 'MK LineSim STL (mm) EXPERIMENTAL - see companion NOTICE.txt';
     for (let i = 0; i < 80; i++) {
       view.setUint8(i, i < headerStr.length ? headerStr.charCodeAt(i) : 32);
     }
@@ -509,6 +513,8 @@ export function generate3DFactoryObj(project: ProjectData): string {
       '# MK Tech — MK LineSim 3D CAD Assembly Export (Wavefront OBJ, Units: Meters, Z-up)',
       '# Copyright (c) 2026 Eng. Mina Khairat',
       `# Project: ${sanitizeCadName(project.name)}`,
+      `# ${BETA_LIMITS_EN}`,
+      `# ${BETA_LIMITS_AR}`,
       '',
     ];
 
@@ -727,7 +733,7 @@ export function generate3DFactoryStep(project: ProjectData): string {
     return [
       'ISO-10303-21;',
       'HEADER;',
-      "FILE_DESCRIPTION(('MK Tech MK LineSim 3D Factory CAD Assembly (Millimeters, Z-up)'),'2;1');",
+      `FILE_DESCRIPTION(('MK Tech MK LineSim 3D Factory CAD Assembly (Millimeters, Z-up)','${BETA_LIMITS_EN}'),'2;1');`,
       `FILE_NAME('${fileStem}','${isoTime}',('Eng. Mina Khairat'),('MK Tech'),'MK LineSim STEP AP214 Exporter','MK LineSim','');`,
       "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));",
       'ENDSEC;',
@@ -754,10 +760,18 @@ export function export3DFactoryStep(project: ProjectData): void {
   downloadBlob(blob, `${sanitizeFilename(project.name)}_3d_cad_mm.step`);
 }
 
+export function cadStlNoticeText(stlFileName: string): string {
+  return [`NOTICE for ${stlFileName}`, '', BETA_LIMITS_EN, BETA_LIMITS_AR, '', 'Binary STL has no room for this text beyond a short header marker, so it is in this file.', ''].join('\n');
+}
+
 export function export3DFactoryStl(project: ProjectData): void {
   const buf = generate3DFactoryStl(project);
   const blob = new Blob([buf], { type: 'model/stl' });
-  downloadBlob(blob, `${sanitizeFilename(project.name)}_3d_cad_mm.stl`);
+  const stem = `${sanitizeFilename(project.name)}_3d_cad_mm`;
+  downloadBlob(blob, `${stem}.stl`);
+  setTimeout(() => {
+    downloadBlob(new Blob([cadStlNoticeText(`${stem}.stl`)], { type: 'text/plain;charset=utf-8' }), `${stem}_stl_NOTICE.txt`);
+  }, 400);
 }
 
 export function export3DFactoryObj(project: ProjectData): void {
