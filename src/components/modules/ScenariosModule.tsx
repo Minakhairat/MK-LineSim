@@ -1,4 +1,6 @@
 import { formatBeltSpeed, leadTimeText, uniformBufferReplacesStages } from '../../utils/units';
+import { GeneratedInputsStrip } from '../ImportNotesBanner';
+import { resultProvenance, unionProvenance } from '../../utils/importNotes';
 import React, { useState } from 'react';
 import { Copy, Maximize2, Minimize2, Pencil, Play, Plus, Trash2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
@@ -330,6 +332,10 @@ export const ScenariosModule: React.FC = () => {
             </ul>
           </div>
         )}
+
+        <GeneratedInputsStrip
+          provenance={unionProvenance(project.scenarios.filter((sc) => sc.result).map((sc) => resultProvenance(sc.result)))}
+        />
 
         {/* Comparison Table */}
         <div className="rounded border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 overflow-x-auto">
