@@ -32,3 +32,17 @@ test('OBJ: comment lines carry EN and AR; STL: header marker, triangle count and
   assert.ok(head.includes('EXPERIMENTAL'));
   assert.ok(cadStlNoticeText('x.stl').includes(BETA_LIMITS_EN));
 });
+
+test('PNG: decode or stamp failure saves nothing and reports; success saves the stamped image only', async () => {
+  const { downloadStampedPng } = await import('../src/utils/mediaCapture');
+  const saved: string[] = []; const msgs: string[] = [];
+  const img = { width: 1, height: 1 } as any;
+  const okDeps = { loadImage: async () => img, stamp: () => 'STAMPED', save: (d: string) => { saved.push(d); }, fail: (m: string) => { msgs.push(m); } };
+  assert.equal(await downloadStampedPng('data:image/png;base64,AA', 'a.png', okDeps), true);
+  assert.deepEqual(saved, ['STAMPED']);
+  assert.equal(await downloadStampedPng('data:image/png;base64,AA', 'a.png', { ...okDeps, loadImage: async () => { throw new Error('x'); } }), false);
+  assert.equal(await downloadStampedPng('data:image/png;base64,AA', 'a.png', { ...okDeps, stamp: () => { throw new Error('x'); } }), false);
+  assert.deepEqual(saved, ['STAMPED']);
+  assert.equal(msgs.length, 2);
+  assert.ok(msgs[0].includes('NOT saved') && msgs[0].includes('لم يتم حفظ'));
+});
