@@ -418,7 +418,7 @@ test('reliability precedence is stamped on a result only for machines whose avai
   assert.equal((stampGeneratedInputs({}, { products: [], stages: [], workers: [] }) as any).reliabilityConflicts, undefined);
 });
 
-import { resultProvenance, unionProvenance } from '../src/utils/importNotes';
+import { resultProvenance, unionProvenance, reliabilityConflictText } from '../src/utils/importNotes';
 
 test('result provenance: missing reliability stamp is unknown, an empty stamp is clean, rows come from the result not current inputs', () => {
   const rows = [{ name: 'OP-10', availabilityPct: 0, derivedPct: 85.7 }];
@@ -471,4 +471,13 @@ test('Validator warns when product target shares differ from mix weight shares',
   assert.ok(!validateProject(mk([1, 1], [600, 600])).some((i) => i.code === 'PRODUCT_TARGET_MIX_MISMATCH'));
   assert.ok(!validateProject(mk([3, 1], [0, 0])).some((i) => i.code === 'PRODUCT_TARGET_MIX_MISMATCH'));
   assert.ok(!validateProject(createDesertAirCoolerProject()).some((i) => i.code === 'PRODUCT_TARGET_MIX_MISMATCH'));
+});
+
+test('reliability note lists stated and used values in words, no arrow, in both languages', () => {
+  const rows = [{ name: 'OP-10', availabilityPct: 0, derivedPct: 85.7 }];
+  const ar = reliabilityConflictText(rows, true);
+  const en = reliabilityConflictText(rows, false);
+  assert.ok(ar.includes('OP-10 (مكتوب 0.0%، مستخدم 85.7%)'));
+  assert.ok(en.includes('OP-10 (stated 0.0%, used 85.7%)'));
+  assert.ok(!ar.includes('→') && !en.includes('→'));
 });
