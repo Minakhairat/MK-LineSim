@@ -480,3 +480,31 @@ test('Manual routing, 3 products, batch 6 with a valid entry stage: validator pa
   near(manual.kpis.performancePct, (18540 / 27000) * 100); near(manual.kpis.qualityPct, (198 / 206) * 100);
   near(auto.kpis.performancePct, 68.8889, 0.01); near(auto.kpis.qualityPct, 95.8065, 0.01);
 });
+
+// (m) Binding quotas, 4 products (A x1, B x2, C x1.5, D x3), targets 20/20/40/20 = global max 100, saturated arrival 30 s, Packing batch 6 buffer 21, B, C and D manual with
+//     entry stage stg_1_base in the manual run. Hand reference from completed good+scrap per product and 60 s x multiplier: 20x60 + 20x120 + 40x90 + 20x180 = 10800 s
+//     of 27000 s -> P 40.00% in both runs (quota shares equal the realised mix here, so the planned and the realised reference agree). Recorded: 100 units, no stall.
+//     Quality differs by basis: auto (weighted) 94.17%, manual (count) 93.00%. One fixture; it does not cover a non-binding quota (see the planned-mix question).
+test('Binding quotas, 4 products: manual and auto Performance agree at 40.00%, Quality differs by basis (one fixture)', () => {
+  const make = (manual: boolean) => {
+    const p: any = createDesertAirCoolerProject();
+    for (const s of p.stages) if (s.id === 'stg_7_packing') { s.batchSize = 6; s.batchMode = 'collect_batch'; s.bufferCapacity = 21; }
+    const mk = (id: string, m: number, w: number) => { const B = structuredClone(p.products[0]); B.id = id; B.name = id; B.code = id; B.mixWeight = w; B.cycleTimeMultiplier = m;
+      if (manual) { B.routingMode = 'manual'; B.entryStageIds = ['stg_1_base']; } return B; };
+    p.products[0].mixWeight = 1; p.products.push(mk('B', 2, 1), mk('C', 1.5, 2), mk('D', 3, 1)); p.simulationConfig.arrivalIntervalSec = 30;
+    [20, 20, 40, 20].forEach((t, i) => { p.products[i].targetQuantity = t; }); p.simulationConfig.maxPlannedUnits = 100;
+    return p;
+  };
+  const pa = make(false), pm = make(true);
+  assert.equal(validateProject(pm).filter((i: any) => i.severity === 'error').length, 0);
+  const auto = run(pa), manual = run(pm);
+  const mult: any = { prod_desert_cooler: 1, B: 2, C: 1.5, D: 3 };
+  for (const r of [auto, manual]) {
+    assert.equal(r.kpis.actualProduction, 100); assert.equal((r.stallWarnings || []).length, 0);
+    assert.deepEqual(r.productAnalytics.map((x: any) => x.completedGoodQty + x.scrappedQty), [20, 20, 40, 20]);
+    near(r.productAnalytics.reduce((a: number, x: any) => a + 60 * mult[x.productId] * (x.completedGoodQty + x.scrappedQty), 0), 10800, 1e-6);
+    near(r.kpis.performancePct, (10800 / 27000) * 100);
+  }
+  assert.equal(auto.kpis.oeeMixedTimeWeighted, true); assert.equal(manual.kpis.oeeMixedTimeWeighted, undefined);
+  near(auto.kpis.qualityPct, 94.17, 0.01); near(manual.kpis.qualityPct, 93.0, 0.01);
+});
