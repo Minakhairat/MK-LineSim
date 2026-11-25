@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { projectJsonText } from '../../utils/importNotes';
 import { Check, Copy, Download, FolderOpen, Pencil, Plus, Save, Trash2, Upload, X } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { createDesertAirCoolerProject } from '../../data/sampleProject';
@@ -35,7 +36,7 @@ export const ProjectsModule: React.FC = () => {
   const [editProjFactory, setEditProjFactory] = useState('');
 
   const handleExportJson = () => {
-    const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+    const blob = new Blob([projectJsonText(project)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
