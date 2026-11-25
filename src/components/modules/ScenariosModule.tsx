@@ -41,6 +41,19 @@ export const ScenariosModule: React.FC = () => {
   const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
 
+  // The Workers field declares a minimum of 1 and the engine clamps lower values to 1, so a 0 or a fraction would
+  // run with a different worker count than the row shows. Refuse it instead of running with a changed input.
+  const rejectBadWorkerCount = (n: unknown): boolean => {
+    if (typeof n === 'number' && Number.isInteger(n) && n >= 1) return false;
+    setToast(
+      isAr
+        ? 'عدد العمال لازم يكون رقم صحيح ١ أو أكتر. السيناريو ما اتشغّلش.'
+        : 'Worker count must be a whole number of 1 or more. The scenario was not run.',
+      'error'
+    );
+    return true;
+  };
+
   const handleCreateOrSaveAndRun = async () => {
     const cleanName =
       name.trim() ||
@@ -54,6 +67,8 @@ export const ScenariosModule: React.FC = () => {
       enableBreakdowns,
       targetProduction: targetProd,
     };
+
+    if (rejectBadWorkerCount(workerCount)) return;
 
     if (editingScenarioId) {
       const existing = project.scenarios.find((s) => s.id === editingScenarioId);
@@ -88,6 +103,7 @@ export const ScenariosModule: React.FC = () => {
   };
 
   const handleRunScenario = async (scen: ScenarioRecord) => {
+    if (!scen.isBaseline && rejectBadWorkerCount(scen.overrides.workerCount)) return;
     setRunningId(scen.id);
     try {
       const modifiedProject = applyScenarioOverrides(project, scen.overrides);
